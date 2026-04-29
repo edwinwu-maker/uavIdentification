@@ -1,7 +1,9 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from .logger import logger
-def plot_iq_time_domain(sig_iq: np.ndarray, 
+from typing import Optional
+
+def plot_iq_time_domain(sig_iq: np.ndarray,
                         sample_start: int = 0, sample_limit: int = 1000000):
     '''
     输入：复数信号 sig_iq = I + 1j*Q
@@ -47,7 +49,7 @@ def plot_iq_frequency_domain(sig_iq: np.ndarray,
     输入：复数信号 sig_iq = I + 1j*Q
     输出： 1 张子图(FFT abs)
     '''
-    logger.debug("plot spectrum in frequency domain")
+    logger.info("plot spectrum in frequency domain")
     sample_end = sample_start + sample_limit
     sig = sig_iq.flatten()[sample_start:sample_end]
     N = len(sig)
@@ -67,3 +69,67 @@ def plot_iq_frequency_domain(sig_iq: np.ndarray,
     plt.grid(alpha=0.3)
     plt.tight_layout()
     plt.show()
+
+
+def plot_spectrogram(
+    freqs: np.ndarray,
+    times: np.ndarray,
+    time_freq_matrix_dB: np.ndarray,
+    vmin: Optional[float] = None,
+    vmax: Optional[float] = None,
+    save_path: Optional[str] = None,
+):
+    """
+    绘制时频矩阵（频谱图）。
+
+    Parameters
+    ----------
+    freqs : np.ndarray
+        频率数组（Hz），形状 (n_freqs,)。
+    times : np.ndarray
+        时间数组（s），形状 (n_times,)。
+    time_freq_matrix_dB : np.ndarray
+        时频矩阵（功率谱密度，dB），形状 (n_times, n_freqs)。
+    vmin, vmax : float or None
+        colorbar 的 dB 范围，None 时自动根据数据确定。
+    """
+    title = "Spectrogram (STFT)"
+    logger.info(
+        "Plot spectrogram: shape (%d, %d), freq [%.2f, %.2f] MHz, "
+        "time [%.2e, %.2e] s, title='%s'",
+        time_freq_matrix_dB.shape[0],
+        time_freq_matrix_dB.shape[1],
+        freqs[0] / 1e6,
+        freqs[-1] / 1e6,
+        times[0],
+        times[-1],
+        title,
+    )
+    logger.debug(
+        "Spectrogram dB range in data: [%.2f, %.2f], vmin=%s, vmax=%s",
+        time_freq_matrix_dB.min(),
+        time_freq_matrix_dB.max(),
+        vmin,
+        vmax,
+    )
+
+    plt.figure(figsize=(14, 6))
+    plt.pcolormesh(
+        freqs / 1e6,
+        times,
+        time_freq_matrix_dB,
+        shading="auto",
+        cmap="viridis",
+        vmin=vmin,
+        vmax=vmax,
+    )
+    plt.title(title, fontsize=14)
+    plt.xlabel("Frequency (MHz)", fontsize=12)
+    plt.ylabel("Time (s)", fontsize=12)
+    cbar = plt.colorbar()
+    cbar.set_label("Power/Frequency (dB/Hz)", fontsize=11)
+    plt.tight_layout()
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        logger.info("Saved spectrogram to '%s'", save_path)
+    plt.close()
