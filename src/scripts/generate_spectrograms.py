@@ -35,7 +35,7 @@ def process_single_chunk(sig_chunk, i, mat_name, root_save_dir):
 
         # 绘图保存
         plt.plot_spectrogram(freqs, times, stft_matrix_dB, save_path=save_path)
-        logger.info(f"✅ 完成: {save_path}")
+        logger.info(f"✅ successfully saved")
 
     except Exception as e:
         logger.error(f"❌ 第 {i} 块失败: {e}")
@@ -51,8 +51,6 @@ def process_one_mat_file(mat_file_path, save_root):
         iq_ch0 = iq_two_ch[0]
         total_samples = iq_ch0.shape[0]
         total_chunks = total_samples // TRUNK_SIZE
-
-        logger.info(f"数据长度: {total_samples}, 切块数: {total_chunks}")
 
         # 2. 【主进程提前切片】→ 直接把切片好的数据传给子进程
         tasks = []

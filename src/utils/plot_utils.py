@@ -94,25 +94,6 @@ def plot_spectrogram(
         colorbar 的 dB 范围，None 时自动根据数据确定。
     """
     title = "Spectrogram (STFT)"
-    logger.info(
-        "Plot spectrogram: shape (%d, %d), freq [%.2f, %.2f] MHz, "
-        "time [%.2e, %.2e] s, title='%s'",
-        time_freq_matrix_dB.shape[0],
-        time_freq_matrix_dB.shape[1],
-        freqs[0] / 1e6,
-        freqs[-1] / 1e6,
-        times[0],
-        times[-1],
-        title,
-    )
-    logger.debug(
-        "Spectrogram dB range in data: [%.2f, %.2f], vmin=%s, vmax=%s",
-        time_freq_matrix_dB.min(),
-        time_freq_matrix_dB.max(),
-        vmin,
-        vmax,
-    )
-
     plt.figure(figsize=(14, 6))
     plt.pcolormesh(
         freqs / 1e6,
