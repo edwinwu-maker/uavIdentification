@@ -4,6 +4,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import os
 import multiprocessing
+import tqdm
+
 from utils.logger import logger
 import utils.data_load as data_load
 import utils.signal_process as signal_process
@@ -93,9 +95,9 @@ if __name__ == "__main__":
         for f in os.listdir(DATA_DIR)
         if f.endswith(".mat")
     ]
-
+    logger.info(f"find {len(mat_files)} .mat file, going to process...")
     # 逐个处理（一次一个文件，内存最稳）
-    for mat_path in mat_files:
+    for mat_path in tqdm.tqdm(mat_files, desc="Processing .mat files"):
         process_one_mat_file(mat_path, SAVE_ROOT)
 
     logger.info("🎉 所有文件处理完成！")
