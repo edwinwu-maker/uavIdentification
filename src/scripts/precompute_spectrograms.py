@@ -43,35 +43,37 @@ def parse_label(filename: str) -> int:
     return LABEL_MAPPING[type_code]
 
 
-def gpu_stft_batch(iq_batch: torch.Tensor, device: torch.device) -> torch.Tensor:
-    """
-    iq_batch: (B, 2, SAMPLE_LENGTH) complex64 on CPU
-    returns: (B, 2, 1024, 1024) float32 spectrograms on CPU
-    """
-    B, C, L = iq_batch.shape
-    iq_batch = iq_batch.to(device)
-    window = torch.hann_window(WIN_LENGTH, device=device)
+class STFTModule(nn.Module):
+    """nn.Module wrapper for GPU STFT — required for nn.DataParallel."""
 
-    results = []
-    for ch in range(C):
-        sig = iq_batch[:, ch, :]  # (B, L)
-        Zxx = torch.stft(
-            sig, n_fft=N_FFT, hop_length=HOP_LENGTH, win_length=WIN_LENGTH,
-            window=window, return_onesided=False, center=True,
-        )  # (B, N_FFT, n_frames, 2=real+imag)
-        Zxx = torch.view_as_complex(Zxx)  # (B, N_FFT, n_frames)
-        Zxx = torch.fft.fftshift(Zxx, dim=1)  # shift zero-freq to center
-        Zxx = Zxx[:, :, :SPEC_TIME_BINS]  # (B, N_FFT, 1024)
-        eps = torch.finfo(torch.float32).eps
-        Zxx_db = 20.0 * torch.log10(Zxx.abs() + eps)  # (B, N_FFT, 1024)
-        # z-score normalize per sample
-        mean = Zxx_db.mean(dim=(1, 2), keepdim=True)
-        std = Zxx_db.std(dim=(1, 2), keepdim=True)
-        Zxx_norm = (Zxx_db - mean) / (std + 1e-8)
-        results.append(Zxx_norm)
+    def __init__(self):
+        super().__init__()
+        self.register_buffer("window", torch.hann_window(WIN_LENGTH))
 
-    specs = torch.stack(results, dim=1)  # (B, 2, 1024, 1024)
-    return specs.cpu()
+    def forward(self, iq_batch: torch.Tensor) -> torch.Tensor:
+        """
+        iq_batch: (B, 2, SAMPLE_LENGTH) complex64
+        returns: (B, 2, 1024, 1024) float32
+        B: batch size, 2: channels, SAMPLE_LENGTH: IQ points per sample
+        """
+        B, C, L = iq_batch.shape
+        results = []
+        for ch in range(C):
+            sig = iq_batch[:, ch, :]  # (B, L)
+            Zxx = torch.stft(
+                sig, n_fft=N_FFT, hop_length=HOP_LENGTH, win_length=WIN_LENGTH,
+                window=self.window, return_complex=True, center=True,
+            )  # (B, N_FFT, n_frames, 2=real+imag)
+            Zxx = torch.fft.fftshift(Zxx, dim=1)  # shift zero-freq to center
+            Zxx = Zxx[:, :, :SPEC_TIME_BINS]  # (B, N_FFT, 1024)
+            eps = torch.finfo(torch.float32).eps
+            Zxx_db = 20.0 * torch.log10(Zxx.abs() + eps)  # (B, N_FFT, 1024)
+            mean = Zxx_db.mean(dim=(1, 2), keepdim=True)
+            std = Zxx_db.std(dim=(1, 2), keepdim=True)
+            Zxx_norm = (Zxx_db - mean) / (std + 1e-8)
+            results.append(Zxx_norm)
+
+        return torch.stack(results, dim=1)  # (B, 2, 1024, 1024)
 
 
 def main():
@@ -90,6 +92,14 @@ def main():
     logger.info("Using device: %s", device)
     if torch.cuda.is_available():
         logger.info("GPU count: %d", torch.cuda.device_count())
+        for i in range(torch.cuda.device_count()):
+            logger.info("  GPU %d: %s", i, torch.cuda.get_device_name(i))
+
+    stft_module = STFTModule()
+    if torch.cuda.device_count() > 1:
+        stft_module = nn.DataParallel(stft_module)
+        logger.info("Using DataParallel across %d GPUs", torch.cuda.device_count())
+    stft_module = stft_module.to(device)
 
     if os.name == "nt":
         DATA_DIR = "E:/dataSet/DroneRFa"
@@ -104,9 +114,9 @@ def main():
     logger.info("Found %d .mat files", len(mat_files))
 
     total_samples = 0
-    for mat_name in tqdm(mat_files, desc="Pre-computing spectrograms"):
-        mat_path = os.path.join(DATA_DIR, mat_name)
-        label = parse_label(mat_name)
+    for mat_file in tqdm(mat_files, desc="Pre-computing spectrograms"):
+        mat_path = os.path.join(DATA_DIR, mat_file)
+        base_name = os.path.splitext(mat_file)[0]  # e.g. T0001_flight1
 
         try:
             with h5py.File(mat_path, "r") as f:
@@ -125,17 +135,19 @@ def main():
                         iq = np.stack([ch0, ch1], axis=0)  # (2, SAMPLE_LENGTH)
                         batch_chunks.append(iq)
 
-                    iq_batch = torch.from_numpy(np.stack(batch_chunks))  # (B, 2, L)
-                    specs = gpu_stft_batch(iq_batch, device)
+                    with torch.no_grad():
+                        iq_batch = torch.from_numpy(np.stack(batch_chunks))  # (B, 2, L)
+                        specs = stft_module(iq_batch).cpu()
 
                     for j, i in enumerate(range(sample_idx, batch_end)):
-                        save_name = f"{label:02d}_{total_samples + i:05d}.npy"
+                        offset = i * SAMPLE_LENGTH
+                        save_name = f"{base_name}_{offset:08d}.npy"
                         np.save(os.path.join(CACHE_DIR, save_name), specs[j].numpy())
 
                 total_samples += num_samples
 
         except Exception as e:
-            logger.error("Failed to process %s: %s", mat_name, e)
+            logger.error("Failed to process %s: %s", mat_file, e)
 
     logger.info("Done. %d total spectrograms saved to %s", total_samples, CACHE_DIR)
 
