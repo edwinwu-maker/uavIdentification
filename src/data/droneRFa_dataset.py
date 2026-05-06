@@ -23,9 +23,9 @@ def load_iq_signal(file_path: str) -> tuple[np.ndarray, np.ndarray]:
 
 
 class DroneRFaDataset(Dataset):
-    def __init__(self, mat_file_paths, transform=None):
+    def __init__(self, mat_file_paths, sample_length=None, transform=None):
         self.mat_file_paths = mat_file_paths
-        self.sample_length = SAMPLE_POINT_NUM
+        self.sample_length = sample_length if sample_length is not None else SAMPLE_POINT_NUM
         self.sample_idx_list = self._build_sample_index_list()
         self.transform = transform
 
@@ -100,7 +100,10 @@ class DroneRFaDataset(Dataset):
         iq_data = np.stack([complex_signal_ch0, complex_signal_ch1], axis=0)
         # 获取标签
         drone_label = self._parse_drone_label(file_path)
-        # 转张量
+
+        if self.transform is not None:
+            return self.transform(iq_data, drone_label)
+
         iq_data = torch.from_numpy(iq_data).double()
         label = torch.tensor(drone_label, dtype=torch.int64)
         return iq_data, label
