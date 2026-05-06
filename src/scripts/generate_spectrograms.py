@@ -7,7 +7,7 @@ import multiprocessing
 import tqdm
 
 from utils.logger import logger
-import utils.data_load as data_load
+from data.droneRFa_dataset import load_iq_signal
 import utils.signal_process as signal_process
 import utils.plot_utils as plt
 
@@ -49,7 +49,7 @@ def process_one_mat_file(mat_file_path, save_root):
         logger.info(f"===== 处理文件：{mat_name} =====")
 
         # 1. 加载文件
-        iq_two_ch = data_load.load_iq_signal(mat_file_path)
+        iq_two_ch = load_iq_signal(mat_file_path)
         iq_ch0 = iq_two_ch[0]
         total_samples = iq_ch0.shape[0]
         total_chunks = total_samples // TRUNK_SIZE
@@ -85,8 +85,8 @@ if __name__ == "__main__":
         SAVE_ROOT = "E:/dataSet/DroneRFa/picture"
     else:
         logger.info("run in linux")
-        DATA_DIR = "/mnt/data/DroneRFa"
-        SAVE_ROOT = "/mnt/data/DroneRFa/picture"
+        DATA_DIR = "/mnt/data/wurixin/DroneRFa"
+        SAVE_ROOT = "/mnt/data/wurixin/DroneRFa/picture"
     os.makedirs(SAVE_ROOT, exist_ok=True)
 
     # 获取所有 mat 文件
