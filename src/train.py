@@ -109,16 +109,22 @@ def train():
     for epoch in range(1, 200):
         model.train()
         train_loss = 0.0
-        for inputs, labels in train_loader:
+        for batch_idx, (inputs, labels) in enumerate(train_loader, 1):
             inputs, labels = inputs.to(device), labels.to(device)
             optimizer.zero_grad()
             outputs = model(inputs)
             loss = criterion(outputs, labels)
             loss.backward()
             optimizer.step()
-            train_loss += loss.item() * inputs.size(0)  # accumulate total loss for one batch
+            train_loss += loss.item() * inputs.size(0)
 
-        train_loss /= len(train_ds) # accumulate total loss for one epoch
+            if batch_idx % 50 == 0:
+                logger.info(
+                    "Epoch %3d | Batch %3d | batch_loss: %.4f",
+                    epoch, batch_idx, loss.item(),
+                )
+
+        train_loss /= len(train_ds)
         # Evaluate on validation set
         val_loss, val_acc, _, _ = evaluate(model, val_loader, criterion, device)
 
