@@ -5,7 +5,7 @@ import torch
 from torch.utils.data import Dataset
 from utils.logger import logger
 
-SAMPLE_POINT_NUM = 10e6
+SAMPLE_POINT_NUM = 10_000_000
 
 def load_iq_signal(file_path: str) -> tuple[np.ndarray, np.ndarray]:
     logger.info(f"read file {file_path}...")
@@ -66,9 +66,10 @@ class DroneRFaDataset(Dataset):
             try:
                 with h5py.File(mat_file_path, "r") as f:
                     total_points = int(f["RF0_I"].shape[1])
-                    num_samples = total_points // int(self.sample_length)
+                    sample_len = int(self.sample_length)
+                    num_samples = total_points // sample_len
                     for i in range(num_samples):
-                        offset = i * self.sample_length
+                        offset = i * sample_len
                         sample_index.append((mat_file_path, offset))
             except Exception as e:
                 logger.error(f"Warning: 跳过损坏文件 {mat_file_path}, {str(e)}")
@@ -87,12 +88,14 @@ class DroneRFaDataset(Dataset):
         # 定位数据
         file_path, offset = self.sample_idx_list[idx]
 
-        # 读取IQ数据（语义化变量名）
+        # 读取IQ数据
+        end = int(offset + self.sample_length)
+        offset = int(offset)
         with h5py.File(file_path, "r") as mat_file:
-            i_channel_0 = mat_file["RF0_I"][offset : offset + self.sample_length]
-            q_channel_0 = mat_file["RF0_Q"][offset : offset + self.sample_length]
-            i_channel_1 = mat_file["RF1_I"][offset : offset + self.sample_length]
-            q_channel_1 = mat_file["RF1_Q"][offset : offset + self.sample_length]
+            i_channel_0 = mat_file["RF0_I"][0, offset:end]
+            q_channel_0 = mat_file["RF0_Q"][0, offset:end]
+            i_channel_1 = mat_file["RF1_I"][0, offset:end]
+            q_channel_1 = mat_file["RF1_Q"][0, offset:end]
 
         # 构造复信号
         complex_signal_ch0 = i_channel_0 + 1j * q_channel_0
