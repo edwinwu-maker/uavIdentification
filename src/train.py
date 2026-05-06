@@ -1,3 +1,4 @@
+import argparse
 import glob
 import os
 import sys
@@ -55,7 +56,20 @@ def compute_metrics(preds, labels):
     }
 
 
-def train():
+def parse_args():
+    parser = argparse.ArgumentParser(description="Train DroneRFaResNet18")
+    parser.add_argument("--gpus", type=str, default=None,
+                        help="Comma-separated GPU IDs, e.g. '0,1,2'. "
+                             "Default: all available GPUs.")
+    return parser.parse_args()
+
+
+def train(gpus=None):
+    # ── GPU selection (must happen before any CUDA call) ──
+    if gpus is not None:
+        os.environ["CUDA_VISIBLE_DEVICES"] = gpus
+        logger.info("CUDA_VISIBLE_DEVICES set to: %s", gpus)
+
     # ── Data paths ──
     if os.name == "nt":
         DATA_DIR = "E:/dataSet/DroneRFa"
@@ -176,4 +190,5 @@ def train():
 
 
 if __name__ == "__main__":
-    train()
+    args = parse_args()
+    train(gpus=args.gpus)
