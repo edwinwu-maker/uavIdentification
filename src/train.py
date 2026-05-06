@@ -83,7 +83,7 @@ def train():
     )
     logger.info("Split — train: %d, val: %d, test: %d", train_size, val_size, test_size)
 
-    num_workers = min(8, os.cpu_count() or 1)
+    num_workers = min(2, os.cpu_count() or 1)
     train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True,
                               num_workers=num_workers, pin_memory=True)
     val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False,
@@ -94,8 +94,16 @@ def train():
     # ── Model, optimizer, loss ──
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info("Using device: %s", device)
+    if torch.cuda.is_available():
+        logger.info("GPU count: %d", torch.cuda.device_count())
+        for i in range(torch.cuda.device_count()):
+            logger.info("  GPU %d: %s", i, torch.cuda.get_device_name(i))
 
-    model = DroneRFaResNet18(num_classes=NUM_CLASSES).to(device)
+    model = DroneRFaResNet18(num_classes=NUM_CLASSES)
+    if torch.cuda.device_count() > 1:
+        model = nn.DataParallel(model)
+        logger.info("Using DataParallel across %d GPUs", torch.cuda.device_count())
+    model = model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
     criterion = nn.CrossEntropyLoss()
 
@@ -118,7 +126,7 @@ def train():
             optimizer.step()
             train_loss += loss.item() * inputs.size(0)
 
-            if batch_idx % 50 == 0:
+            if batch_idx % 1 == 0:
                 logger.info(
                     "Epoch %3d | Batch %3d | batch_loss: %.4f",
                     epoch, batch_idx, loss.item(),
