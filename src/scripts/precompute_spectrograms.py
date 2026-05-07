@@ -16,6 +16,7 @@ import h5py
 import numpy as np
 import torch
 import torch.nn as nn
+import tqdm
 
 from utils.logger import logger
 
@@ -103,7 +104,7 @@ def worker(gpu_id, mat_file_list, data_dir, cache_dir, batch_size, result_queue)
     gpu_name = torch.cuda.get_device_name(0)
     count = 0
 
-    for mat_file in mat_file_list:
+    for mat_file in tqdm(mat_file_list, desc=f"GPU {gpu_id}", position=gpu_id):
         try:
             count += process_mat_file(mat_file, data_dir, cache_dir, stft_module, batch_size)
         except Exception as e:
