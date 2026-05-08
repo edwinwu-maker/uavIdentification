@@ -14,6 +14,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, random_split
+import tqdm
 
 from data.spectrogram_dataset import SpectrogramDataset
 from models.resnet import DroneRFaResNet18
@@ -21,7 +22,7 @@ from utils.logger import logger
 
 # ── Paper hyperparameters (Section 4.3) ──
 NUM_CLASSES = 25
-BATCH_SIZE = 32
+BATCH_SIZE = 64
 LEARNING_RATE = 0.001
 TRAIN_RATIO = 0.6
 VAL_RATIO = 0.2
@@ -34,14 +35,17 @@ def evaluate(model, dataloader, criterion, device):
     total_loss = 0.0
     all_preds, all_labels = [], []
     with torch.no_grad():
-        for inputs, labels in dataloader:
+        for inputs, labels in tqdm(dataloader, desc="Evaluating", leave=False, unit="batch"):
             inputs = inputs.to(device)
             labels = labels.to(device)
+
             outputs = model(inputs)
             loss = criterion(outputs, labels)
+
             total_loss += loss.item() * inputs.size(0)
             all_preds.append(outputs.argmax(dim=1).cpu().numpy())
             all_labels.append(labels.cpu().numpy())
+
     avg_loss = total_loss / len(dataloader.dataset)
     preds = np.concatenate(all_preds)
     labels = np.concatenate(all_labels)
@@ -64,6 +68,7 @@ def parse_args():
     parser.add_argument("--gpus", type=str, default=None,
                         help="Comma-separated GPU IDs, e.g. '0,1,2'")
     parser.add_argument("--cache", type=str, required=True,
+                        default="/mnt/data/wurixin/DroneRFa/spectrogram_cache",
                         help="Path to spectrogram cache directory (.npy files)")
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
     parser.add_argument("--lr", type=float, default=LEARNING_RATE)
@@ -81,10 +86,10 @@ def train(args):
     dataset = SpectrogramDataset(args.cache)
     logger.info("Loaded %d pre-computed spectrograms from %s", len(dataset), args.cache)
 
-    total = len(dataset)
-    train_size = int(total * TRAIN_RATIO)
-    val_size = int(total * VAL_RATIO)
-    test_size = total - train_size - val_size
+    total_size = len(dataset)
+    train_size = int(total_size * TRAIN_RATIO)
+    val_size = int(total_size * VAL_RATIO)
+    test_size = total_size - train_size - val_size
     train_ds, val_ds, test_ds = random_split(
         dataset, [train_size, val_size, test_size],
         generator=torch.Generator().manual_seed(42),
@@ -123,7 +128,9 @@ def train(args):
     best_val_acc = 0.0
     patience_counter = 0
 
-    for epoch in range(1, 200):
+    max_epochs = 200
+    epoch_bar = tqdm(total=max_epochs, desc="Training Epochs", unit="epoch")
+    for epoch in range(1, max_epochs + 1):
         model.train()
         train_loss = 0.0
         for batch_idx, (inputs, labels) in enumerate(train_loader, 1):
@@ -140,6 +147,8 @@ def train(args):
                     "Epoch %3d | Batch %3d | batch_loss: %.4f",
                     epoch, batch_idx, loss.item(),
                 )
+
+        epoch_bar.update(1)
 
         train_loss /= len(train_ds)
         val_loss, val_acc, _, _ = evaluate(model, val_loader, criterion, device)
@@ -159,7 +168,8 @@ def train(args):
             if patience_counter >= PATIENCE:
                 logger.info("Early stopping at epoch %d", epoch)
                 break
-
+    
+    epoch_bar.close()
     # ── Test ──
     logger.info("Loading best model for test evaluation...")
     model.load_state_dict(torch.load(os.path.join(checkpoint_dir, "best_model.pth")))
