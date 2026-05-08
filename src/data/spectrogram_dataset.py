@@ -38,3 +38,10 @@ class SpectrogramDataset(Dataset):
         path, label = self.samples[idx]
         spec = np.load(path)  # (2, 1024, 1024) float32
         return torch.from_numpy(spec), torch.tensor(label, dtype=torch.int64)
+    
+if __name__ == "__main__":
+    # Test loading
+    dataset = SpectrogramDataset("/mnt/data/wurixin/DroneRFa/spectrogram_cache")
+    print(f"Loaded {len(dataset)} samples.")
+    spec, label = dataset[0]
+    print(f"Sample shape: {spec.shape}, Label: {label.item()}")
