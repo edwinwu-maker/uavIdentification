@@ -36,7 +36,7 @@ class SpectrogramDataset(Dataset):
 
     def __getitem__(self, idx):
         path, label = self.samples[idx]
-        spec = np.load(path)  # (2, 1024, 1024) float32
+        spec = np.load(path).astype(np.float32)  # (2, 1024, 1024) float32
         return torch.from_numpy(spec), torch.tensor(label, dtype=torch.int64)
     
 if __name__ == "__main__":
@@ -45,3 +45,4 @@ if __name__ == "__main__":
     print(f"Loaded {len(dataset)} samples.")
     spec, label = dataset[0]
     print(f"Sample shape: {spec.shape}, Label: {label.item()}")
+    print(f"Sample dtype: {spec.dtype}, Label dtype: {label.dtype}")

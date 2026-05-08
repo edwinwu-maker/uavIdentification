@@ -14,7 +14,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, random_split
-import tqdm
+from tqdm import tqdm
 
 from data.spectrogram_dataset import SpectrogramDataset
 from models.resnet import DroneRFaResNet18
@@ -22,7 +22,7 @@ from utils.logger import logger
 
 # ── Paper hyperparameters (Section 4.3) ──
 NUM_CLASSES = 25
-BATCH_SIZE = 64
+BATCH_SIZE = 32
 LEARNING_RATE = 0.001
 TRAIN_RATIO = 0.6
 VAL_RATIO = 0.2
@@ -67,7 +67,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Train on pre-computed spectrograms")
     parser.add_argument("--gpus", type=str, default=None,
                         help="Comma-separated GPU IDs, e.g. '0,1,2'")
-    parser.add_argument("--cache", type=str, required=True,
+    parser.add_argument("--cache", type=str, 
                         default="/mnt/data/wurixin/DroneRFa/spectrogram_cache",
                         help="Path to spectrogram cache directory (.npy files)")
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
@@ -133,7 +133,16 @@ def train(args):
     for epoch in range(1, max_epochs + 1):
         model.train()
         train_loss = 0.0
-        for batch_idx, (inputs, labels) in enumerate(train_loader, 1):
+
+        batch_bar = tqdm(
+            train_loader,
+            total=len(train_loader),
+            desc=f"Epoch {epoch}",
+            leave=False,  # 轮次结束后自动消失，不刷屏
+            unit="batch"
+        )
+
+        for inputs, labels in batch_bar:
             inputs, labels = inputs.to(device), labels.to(device)
             optimizer.zero_grad()
             outputs = model(inputs)
@@ -142,12 +151,12 @@ def train(args):
             optimizer.step()
             train_loss += loss.item() * inputs.size(0)
 
-            if batch_idx % 50 == 0:
-                logger.info(
-                    "Epoch %3d | Batch %3d | batch_loss: %.4f",
-                    epoch, batch_idx, loss.item(),
-                )
+            batch_bar.set_postfix({
+                "batch_loss": f"{loss.item():.4f}",
+                "lr": f"{optimizer.param_groups[0]['lr']:.6f}"
+            })
 
+        batch_bar.close()
         epoch_bar.update(1)
 
         train_loss /= len(train_ds)
