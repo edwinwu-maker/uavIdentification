@@ -1,8 +1,8 @@
 """
 Convert .mat IQ files → one .h5 per file with pre-computed spectrograms.
 
-CPU-only, multi-process. Each .mat is converted independently to a same-named
-.h5 in the output directory.
+Multi-process with GPU-accelerated STFT. Each .mat is converted independently
+to a same-named .h5 in the output directory.
 
 Output HDF5 structure (per file):
   /stft  (N, 2, 1024, 1024) float32
@@ -11,6 +11,7 @@ Output HDF5 structure (per file):
 Usage:
   python src/scripts/precompute_h5.py --data-dir /mnt/data/wurixin/DroneRFa
   python src/scripts/precompute_h5.py --data-dir ... --output-dir ... --num-workers 8
+  python src/scripts/precompute_h5.py --data-dir ... --device cuda:0 cuda:1 cuda:2 cuda:3
 """
 
 import argparse
@@ -46,28 +47,29 @@ LABEL_MAPPING = {
 }
 
 _WINDOW: torch.Tensor | None = None
+_WINDOW_DEVICE: str | None = None
 
 
-def _get_window() -> torch.Tensor:
-    global _WINDOW
-    if _WINDOW is None:
-        _WINDOW = torch.hann_window(WIN_LENGTH)
+def _get_window(device: str = "cpu") -> torch.Tensor:
+    global _WINDOW, _WINDOW_DEVICE
+    if _WINDOW is None or _WINDOW_DEVICE != device:
+        _WINDOW = torch.hann_window(WIN_LENGTH, device=device)
+        _WINDOW_DEVICE = device
     return _WINDOW
 
 
-def compute_stft(iq_batch: np.ndarray) -> np.ndarray:
+def compute_stft(iq_batch: np.ndarray, device: str = "cpu") -> np.ndarray:
     """
     iq_batch: (B, 2, SAMPLE_LENGTH) complex64
-    returns:  (B, 2, 1024, 1024) float32, z-score normalized per channel
-    B: batch size
-    torch.stft 支持一次性处理一整个 batch 的信号
+    device:  torch device string, e.g. "cuda:0", "cpu"
+    returns: (B, 2, 1024, 1024) float32, z-score normalized per channel
     """
     B, C, _L = iq_batch.shape
-    window = _get_window()
+    window = _get_window(device)
     results = []
     with torch.no_grad():
         for ch in range(C):
-            sig = torch.from_numpy(iq_batch[:, ch, :])
+            sig = torch.from_numpy(iq_batch[:, ch, :]).to(device)
             Zxx = torch.stft(
                 sig, n_fft=N_FFT, hop_length=HOP_LENGTH, win_length=WIN_LENGTH,
                 window=window, return_complex=True, center=True,
@@ -79,17 +81,17 @@ def compute_stft(iq_batch: np.ndarray) -> np.ndarray:
             mean = Zxx_db.mean(dim=(1, 2), keepdim=True)
             std = Zxx_db.std(dim=(1, 2), keepdim=True)
             Zxx_norm = (Zxx_db - mean) / (std + 1e-8)
-            results.append(Zxx_norm)
+            results.append(Zxx_norm.cpu())
     return torch.stack(results, dim=1).numpy().astype(np.float32)
 
 
 def _convert_one_file(args):
     """
     Module-level worker for ProcessPoolExecutor.
-    args: (mat_file, data_dir, output_dir, batch_size)
+    args: (mat_file, data_dir, output_dir, batch_size, device)
     Returns: (mat_file, segment_count)
     """
-    mat_file, data_dir, output_dir, batch_size = args
+    mat_file, data_dir, output_dir, batch_size, device = args
     mat_path = os.path.join(data_dir, mat_file)
     out_path = os.path.join(output_dir, mat_file.replace(".mat", ".h5"))
     drone_code = mat_file.split("_")[0]
@@ -105,7 +107,7 @@ def _convert_one_file(args):
             chunks=(64, 2, 1024, 1024), dtype="f4",
         )
         h5f.create_dataset(
-            "labels", shape=(num_samples,), chunks=(4096,), dtype="i8",
+            "labels", shape=(num_samples,), chunks=None, dtype="i8",
         )
 
         with h5py.File(mat_path, "r") as src:
@@ -122,7 +124,7 @@ def _convert_one_file(args):
                     chunk_iq[k, 0] = ch0
                     chunk_iq[k, 1] = ch1
 
-                batch_stft = compute_stft(chunk_iq)
+                batch_stft = compute_stft(chunk_iq, device)
                 h5f["stft"][sample_idx:sample_idx + actual_batch_size] = batch_stft
                 h5f["labels"][sample_idx:sample_idx + actual_batch_size] = [label] * actual_batch_size
 
@@ -139,11 +141,21 @@ def parse_args():
                         help="STFT batch size")
     parser.add_argument("--num-workers", type=int, default=None,
                         help="Number of worker processes (default: CPU count)")
+    parser.add_argument("--device", type=str, nargs="+", default=["cuda:0"],
+                        help="Torch device(s) for STFT, round-robin across workers (e.g. cuda:0 cuda:1)")
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
+
+    devices = args.device
+    if not torch.cuda.is_available():
+        logger.warning("CUDA not available, falling back to CPU")
+        devices = ["cpu"]
+    else:
+        devices = [d if d.startswith("cuda") or d == "cpu" else f"cuda:{d}" for d in devices]
+    logger.info("Using devices: %s", devices)
 
     torch.set_num_threads(1)
 
@@ -153,7 +165,7 @@ def main():
     if args.output_dir is None:
         args.output_dir = args.data_dir
     if args.num_workers is None:
-        args.num_workers = os.cpu_count() or 4
+        args.num_workers = len(devices) * 2 if devices[0] != "cpu" else os.cpu_count() or 4
 
     os.makedirs(args.output_dir, exist_ok=True)
 
@@ -162,12 +174,11 @@ def main():
     logger.info("Output directory: %s", args.output_dir)
 
     num_workers = min(args.num_workers, len(mat_files))
-    logger.info("Using %d workers", num_workers)
+    logger.info("Using %d workers across %d GPU(s)", num_workers, len(devices))
 
-    # 把所有 .mat 文件，打包成「多进程并行处理」的参数列表
     file_args = [
-        (mf, args.data_dir, args.output_dir, args.batch_size)
-        for mf in mat_files
+        (mf, args.data_dir, args.output_dir, args.batch_size, devices[i % len(devices)])
+        for i, mf in enumerate(mat_files)
     ]
 
     total_segments = 0
