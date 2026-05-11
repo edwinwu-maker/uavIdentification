@@ -2,25 +2,30 @@
 Train ResNet on pre-computed spectrograms (fast, no CPU STFT bottleneck).
 
 Usage:
-  python src/train_spec.py --cache E:/dataSet/DroneRFa/spectrogram_cache --gpus 0,1,2,3,4
+  torchrun --nproc_per_node=3 src/train_spec.py --cache /path/to/cache --gpus 0,1,2
 """
+
 import argparse
 import os
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent))
 
 import numpy as np
 import torch
+import torch.distributed as dist
 import torch.nn as nn
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, random_split
+from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 
 from data.spectrogram_dataset import SpectrogramDataset
 from models.resnet import DroneRFaResNet18
 from utils.logger import logger
 
-# ── Paper hyperparameters (Section 4.3) ──
+# --- Paper hyperparameters (Section 4.3) ---
 NUM_CLASSES = 25
 BATCH_SIZE = 32
 LEARNING_RATE = 0.001
@@ -30,31 +35,65 @@ TEST_RATIO = 0.2
 PATIENCE = 10
 
 
-def evaluate(model, dataloader, criterion, device):
+def evaluate(model, dataloader, criterion, device, rank, world_size):
+    """Evaluate on all ranks, gather predictions to rank 0 for correct metrics."""
     model.eval()
-    total_loss = 0.0
-    all_preds, all_labels = [], []
+    loss_sum = torch.tensor(0.0, device=device)
+    count = torch.tensor(0, device=device)
+    local_preds = []
+    local_labels = []
+
     with torch.no_grad():
-        for inputs, labels in tqdm(dataloader, desc="Evaluating", leave=False, unit="batch"):
+        for inputs, labels in tqdm(
+            dataloader, desc="Evaluating", leave=False, unit="batch",
+            disable=rank != 0,
+        ):
             inputs = inputs.to(device)
             labels = labels.to(device)
-
             outputs = model(inputs)
             loss = criterion(outputs, labels)
 
-            total_loss += loss.item() * inputs.size(0)
-            all_preds.append(outputs.argmax(dim=1).cpu().numpy())
-            all_labels.append(labels.cpu().numpy())
+            loss_sum += loss * inputs.size(0)
+            count += inputs.size(0)
+            local_preds.append(outputs.argmax(dim=1))
+            local_labels.append(labels)
 
-    avg_loss = total_loss / len(dataloader.dataset)
-    preds = np.concatenate(all_preds)
-    labels = np.concatenate(all_labels)
-    acc = (preds == labels).mean()
-    return avg_loss, acc, preds, labels
+    dist.all_reduce(loss_sum, op=dist.ReduceOp.SUM)
+    dist.all_reduce(count, op=dist.ReduceOp.SUM)
+    avg_loss = (loss_sum / count).item()
+
+    # Gather variable-length predictions to rank 0
+    lp = torch.cat(local_preds) if local_preds else torch.empty(0, dtype=torch.long, device=device)
+    ll = torch.cat(local_labels) if local_labels else torch.empty(0, dtype=torch.long, device=device)
+    local_size = torch.tensor([lp.size(0)], device=device)
+
+    # Collect sizes from all ranks (small — just one int each)
+    size_list = [torch.zeros(1, dtype=torch.long, device=device) for _ in range(world_size)]
+    dist.all_gather(size_list, local_size)
+    max_sz = max(s.item() for s in size_list)
+
+    def pad_gather(t):
+        padded = torch.full((max_sz,), -1, dtype=t.dtype, device=device)
+        padded[:t.size(0)] = t
+        dst_list = [torch.zeros(max_sz, dtype=t.dtype, device=device) for _ in range(world_size)] if rank == 0 else None
+        dist.gather(padded, gather_list=dst_list, dst=0)
+        return dst_list
+
+    gathered_preds = pad_gather(lp)
+    gathered_labels = pad_gather(ll)
+
+    if rank == 0:
+        all_preds = np.concatenate([gathered_preds[i][:size_list[i].item()].cpu().numpy() for i in range(world_size)])
+        all_labels = np.concatenate([gathered_labels[i][:size_list[i].item()].cpu().numpy() for i in range(world_size)])
+        acc = (all_preds == all_labels).mean()
+        return avg_loss, acc, all_preds, all_labels
+    else:
+        return avg_loss, None, None, None
 
 
 def compute_metrics(preds, labels):
     from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+
     return {
         "accuracy": accuracy_score(labels, preds),
         "precision": precision_score(labels, preds, average="macro", zero_division=0),
@@ -64,27 +103,44 @@ def compute_metrics(preds, labels):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Train on pre-computed spectrograms")
-    parser.add_argument("--gpus", type=str, default=None,
-                        help="Comma-separated GPU IDs, e.g. '0,1,2'")
-    parser.add_argument("--cache", type=str, 
+    parser = argparse.ArgumentParser(description="Train on pre-computed spectrograms (DDP)")
+    parser.add_argument("--cache", type=str,
                         default="/mnt/data/wurixin/DroneRFa/spectrogram_cache",
                         help="Path to spectrogram cache directory (.npy files)")
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
     parser.add_argument("--lr", type=float, default=LEARNING_RATE)
     parser.add_argument("--num-workers", type=int, default=None,
                         help="DataLoader workers (default: min(8, cpu_count))")
+    parser.add_argument("--epochs", type=int, default=200)
+    parser.add_argument("--patience", type=int, default=PATIENCE)
+    parser.add_argument("--gpus", type=str, default=None,
+                        help="Comma-separated GPU IDs visible to this run, e.g. '0,1,2'")
     return parser.parse_args()
 
 
 def train(args):
     if args.gpus is not None:
         os.environ["CUDA_VISIBLE_DEVICES"] = args.gpus
-        logger.info("CUDA_VISIBLE_DEVICES set to: %s", args.gpus)
 
-    # ── Dataset (no transform needed — spectrograms are pre-computed) ──
+    # ── DDP init ──
+    dist.init_process_group(backend="nccl")
+    rank = dist.get_rank()              # 当前进程在这个总数中的序号
+    world_size = dist.get_world_size()  # 总进程数（通常等于GPU数量）
+    local_rank = int(os.environ["LOCAL_RANK"])  # 当前进程在本节点（机器）内的本地编号
+    torch.cuda.set_device(local_rank)
+    device = torch.device(f"cuda:{local_rank}")
+
+    # 只让全局主进程（rank 0）执行日志输出，避免其他进程重复打印同一信息。
+    if rank == 0:
+        logger.info("DDP initialized — world_size: %d", world_size)
+        logger.info("Using device: %s", device)
+        for i in range(torch.cuda.device_count()):
+            logger.info("  GPU %d: %s", i, torch.cuda.get_device_name(i))
+
+    # ── Dataset ──
     dataset = SpectrogramDataset(args.cache)
-    logger.info("Loaded %d pre-computed spectrograms from %s", len(dataset), args.cache)
+    if rank == 0:
+        logger.info("Loaded %d pre-computed spectrograms from %s", len(dataset), args.cache)
 
     total_size = len(dataset)
     train_size = int(total_size * TRAIN_RATIO)
@@ -94,110 +150,149 @@ def train(args):
         dataset, [train_size, val_size, test_size],
         generator=torch.Generator().manual_seed(42),
     )
-    logger.info("Split — train: %d, val: %d, test: %d", train_size, val_size, test_size)
+    if rank == 0:
+        logger.info("Split — train: %d, val: %d, test: %d", train_size, val_size, test_size)
 
     num_workers = args.num_workers if args.num_workers is not None else min(8, os.cpu_count() or 1)
-    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True,
-                              num_workers=num_workers, pin_memory=True)
-    val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False,
-                            num_workers=num_workers, pin_memory=True)
-    test_loader = DataLoader(test_ds, batch_size=args.batch_size, shuffle=False,
-                             num_workers=num_workers, pin_memory=True)
+
+    train_sampler = DistributedSampler(train_ds, num_replicas=world_size, rank=rank, shuffle=True)
+    val_sampler = DistributedSampler(val_ds, num_replicas=world_size, rank=rank, shuffle=False)
+    test_sampler = DistributedSampler(test_ds, num_replicas=world_size, rank=rank, shuffle=False)
+
+    train_loader = DataLoader(
+        train_ds, batch_size=args.batch_size, sampler=train_sampler,
+        num_workers=num_workers, pin_memory=True,
+        prefetch_factor=4, persistent_workers=True,
+    )
+    val_loader = DataLoader(
+        val_ds, batch_size=args.batch_size, sampler=val_sampler,
+        num_workers=num_workers, pin_memory=True,
+        prefetch_factor=4, persistent_workers=True,
+    )
+    test_loader = DataLoader(
+        test_ds, batch_size=args.batch_size, sampler=test_sampler,
+        num_workers=num_workers, pin_memory=True,
+        prefetch_factor=4, persistent_workers=True,
+    )
 
     # ── Model ──
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logger.info("Using device: %s", device)
-    if torch.cuda.is_available():
-        logger.info("GPU count: %d", torch.cuda.device_count())
-        for i in range(torch.cuda.device_count()):
-            logger.info("  GPU %d: %s", i, torch.cuda.get_device_name(i))
-
     model = DroneRFaResNet18(num_classes=NUM_CLASSES)
-    if torch.cuda.device_count() > 1:
-        model = nn.DataParallel(model)
-        logger.info("Using DataParallel across %d GPUs", torch.cuda.device_count())
     model = model.to(device)
+    model = DDP(model, device_ids=[local_rank], output_device=local_rank)
+    if rank == 0:
+        logger.info("Using DDP across %d GPUs", world_size)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     criterion = nn.CrossEntropyLoss()
 
-    # ── Training ──
+    # ── Checkpoint dir ──
     checkpoint_dir = os.path.join(str(Path(__file__).parent.parent), "checkpoints")
     os.makedirs(checkpoint_dir, exist_ok=True)
 
     best_val_acc = 0.0
     patience_counter = 0
 
-    max_epochs = 200
-    epoch_bar = tqdm(total=max_epochs, desc="Training Epochs", unit="epoch")
-    for epoch in range(1, max_epochs + 1):
+    epoch_bar = tqdm(
+        total=args.epochs, desc="Training Epochs", unit="epoch",
+        disable=rank != 0,
+    )
+
+    for epoch in range(1, args.epochs + 1):
+        train_sampler.set_epoch(epoch)
+
         model.train()
-        train_loss = 0.0
+        train_loss_sum = torch.tensor(0.0, device=device)
+        train_count = torch.tensor(0, device=device)
 
         batch_bar = tqdm(
             train_loader,
             total=len(train_loader),
             desc=f"Epoch {epoch}",
-            leave=False,  # 轮次结束后自动消失，不刷屏
-            unit="batch"
+            leave=False,
+            unit="batch",
+            disable=rank != 0,
         )
 
         for inputs, labels in batch_bar:
-            inputs, labels = inputs.to(device), labels.to(device)
+            inputs = inputs.to(device)
+            labels = labels.to(device)
+
             optimizer.zero_grad()
             outputs = model(inputs)
             loss = criterion(outputs, labels)
             loss.backward()
             optimizer.step()
-            train_loss += loss.item() * inputs.size(0)
 
-            batch_bar.set_postfix({
-                "batch_loss": f"{loss.item():.4f}",
-                "lr": f"{optimizer.param_groups[0]['lr']:.6f}"
-            })
+            train_loss_sum += loss.detach() * inputs.size(0)
+            train_count += inputs.size(0)
+
+            if rank == 0:
+                batch_bar.set_postfix({
+                    "batch_loss": f"{loss.item():.4f}",
+                    "lr": f"{optimizer.param_groups[0]['lr']:.6f}",
+                })
 
         batch_bar.close()
-        epoch_bar.update(1)
 
-        train_loss /= len(train_ds)
-        val_loss, val_acc, _, _ = evaluate(model, val_loader, criterion, device)
+        dist.all_reduce(train_loss_sum, op=dist.ReduceOp.SUM)
+        dist.all_reduce(train_count, op=dist.ReduceOp.SUM)
+        train_loss = (train_loss_sum / train_count).item()
 
-        logger.info(
-            "Epoch %3d | train_loss: %.4f | val_loss: %.4f | val_acc: %.4f",
-            epoch, train_loss, val_loss, val_acc,
-        )
+        val_loss, val_acc, _, _ = evaluate(model, val_loader, criterion, device, rank, world_size)
 
-        if val_acc > best_val_acc:
-            best_val_acc = val_acc
-            patience_counter = 0
-            torch.save(model.state_dict(), os.path.join(checkpoint_dir, "best_model.pth"))
-            logger.info("  -> saved best model (val_acc=%.4f)", val_acc)
-        else:
-            patience_counter += 1
-            if patience_counter >= PATIENCE:
+        if rank == 0:
+            epoch_bar.update(1)
+            logger.info(
+                "Epoch %3d | train_loss: %.4f | val_loss: %.4f | val_acc: %.4f",
+                epoch, train_loss, val_loss, val_acc,
+            )
+
+            if val_acc is not None and val_acc > best_val_acc:
+                best_val_acc = val_acc
+                patience_counter = 0
+                torch.save(model.module.state_dict(), os.path.join(checkpoint_dir, "best_model.pth"))
+                logger.info("  -> saved best model (val_acc=%.4f)", val_acc)
+            else:
+                patience_counter += 1
+
+        # Broadcast early-stop decision to all ranks
+        stop_tensor = torch.tensor(1 if patience_counter >= args.patience else 0, device=device)
+        dist.broadcast(stop_tensor, src=0)
+        if stop_tensor.item():
+            if rank == 0:
                 logger.info("Early stopping at epoch %d", epoch)
-                break
-    
+            break
+
     epoch_bar.close()
+    dist.barrier()
+
     # ── Test ──
-    logger.info("Loading best model for test evaluation...")
-    model.load_state_dict(torch.load(os.path.join(checkpoint_dir, "best_model.pth")))
-    test_loss, test_acc, preds, labels = evaluate(model, test_loader, criterion, device)
-    metrics = compute_metrics(preds, labels)
+    if rank == 0:
+        logger.info("Loading best model for test evaluation...")
+    ckpt_path = os.path.join(checkpoint_dir, "best_model.pth")
+    state_dict = torch.load(ckpt_path, map_location=device)
+    model.module.load_state_dict(state_dict)
 
-    logger.info("=" * 55)
-    logger.info("Test Results:")
-    logger.info("  Accuracy:  %.4f", metrics["accuracy"])
-    logger.info("  Precision: %.4f", metrics["precision"])
-    logger.info("  Recall:    %.4f", metrics["recall"])
-    logger.info("  F1-Score:  %.4f", metrics["f1"])
-    logger.info("  Test Loss: %.4f", test_loss)
-    logger.info("=" * 55)
+    test_loss, test_acc, preds, labels = evaluate(model, test_loader, criterion, device, rank, world_size)
 
-    from sklearn.metrics import confusion_matrix
-    cm = confusion_matrix(labels, preds)
-    np.save(os.path.join(checkpoint_dir, "confusion_matrix.npy"), cm)
-    logger.info("Confusion matrix saved to checkpoints/confusion_matrix.npy")
+    if rank == 0:
+        metrics = compute_metrics(preds, labels)
+        logger.info("=" * 55)
+        logger.info("Test Results:")
+        logger.info("  Accuracy:  %.4f", metrics["accuracy"])
+        logger.info("  Precision: %.4f", metrics["precision"])
+        logger.info("  Recall:    %.4f", metrics["recall"])
+        logger.info("  F1-Score:  %.4f", metrics["f1"])
+        logger.info("  Test Loss: %.4f", test_loss)
+        logger.info("=" * 55)
+
+        from sklearn.metrics import confusion_matrix
+
+        cm = confusion_matrix(labels, preds)
+        np.save(os.path.join(checkpoint_dir, "confusion_matrix.npy"), cm)
+        logger.info("Confusion matrix saved to checkpoints/confusion_matrix.npy")
+
+    dist.destroy_process_group()
 
 
 if __name__ == "__main__":
