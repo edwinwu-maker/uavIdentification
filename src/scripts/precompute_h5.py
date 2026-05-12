@@ -20,6 +20,7 @@ import os
 import sys
 from collections import defaultdict
 from pathlib import Path
+import signal
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 import multiprocessing
@@ -51,6 +52,13 @@ LABEL_MAPPING = {
 _WINDOW: torch.Tensor | None = None
 _WINDOW_DEVICE: str | None = None
 
+def cleanup_executors(executors):
+    for ex in executors:
+        # 取消所有未完成的任务，不等待它们完成
+        ex.shutdown(wait=False, cancel_futures=True)
+    children = multiprocessing.active_children()
+    for child in children:
+        child.terminate()
 
 def _get_window(device: str = "cpu") -> torch.Tensor:
     global _WINDOW, _WINDOW_DEVICE
@@ -189,32 +197,38 @@ def main():
     all_futures: list[tuple[concurrent.futures.Future, concurrent.futures.ProcessPoolExecutor]] = []
     # 存储所有创建出来的进程池（每张GPU对应一个独立进程池）
     executors: list[concurrent.futures.ProcessPoolExecutor] = []
-    # 遍历每一张 GPU（cuda:0, cuda:1...）
-    for device in devices:
-        files = gpu_files.get(device, [])   # 拿到分配给这张GPU的所有.mat文件
-        if not files:
-            continue
-        nw = min(workers_per_gpu, len(files))
-        ex = concurrent.futures.ProcessPoolExecutor(max_workers=nw)
-        executors.append(ex)
-        logger.info("  GPU %s: %d files, %d workers", device, len(files), nw)
-        for mf in files:
-            fa = (mf, args.data_dir, args.output_dir, args.batch_size, device)
-            fut = ex.submit(_convert_one_file, fa)
-            all_futures.append((fut, ex))
+    try:
+        # 遍历每一张 GPU（cuda:0, cuda:1...）
+        for device in devices:
+            files = gpu_files.get(device, [])   # 拿到分配给这张GPU的所有.mat文件
+            if not files:
+                continue
+            nw = min(workers_per_gpu, len(files))
+            ex = concurrent.futures.ProcessPoolExecutor(max_workers=nw)
+            executors.append(ex)
+            logger.info("  GPU %s: %d files, %d workers", device, len(files), nw)
+            for mf in files:
+                fa = (mf, args.data_dir, args.output_dir, args.batch_size, device)
+                fut = ex.submit(_convert_one_file, fa)
+                all_futures.append((fut, ex))
 
-    total_segments = 0
-    for fut in tqdm(
-        concurrent.futures.as_completed([f for f, _ in all_futures]),   # 监听所有任务，谁先做完就先处理谁
-        total=len(all_futures), desc="Converting",
-    ):
-        mf, n = fut.result()
-        total_segments += n
+        total_segments = 0
+        for fut in tqdm(
+            concurrent.futures.as_completed([f for f, _ in all_futures]),   # 监听所有任务，谁先做完就先处理谁
+            total=len(all_futures), desc="Converting",
+        ):
+            mf, n = fut.result()
+            total_segments += n
 
-    for ex in executors:
-        ex.shutdown()
+        for ex in executors:
+            ex.shutdown()
 
-    logger.info("Done. %d files → %d spectrograms", len(mat_files), total_segments)
+        logger.info("Done. %d files → %d spectrograms", len(mat_files), total_segments)
+    except KeyboardInterrupt:
+        logger.warning("Interrupted by user, shutting down workers...")
+        cleanup_executors(executors)
+        logger.info("All workers terminated. Exiting.")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
