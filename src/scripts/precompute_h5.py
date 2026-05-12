@@ -204,7 +204,7 @@ def main():
             all_futures.append((fut, ex))
 
     total_segments = 0
-    for fut, _ in tqdm(
+    for fut in tqdm(
         concurrent.futures.as_completed([f for f, _ in all_futures]),   # 监听所有任务，谁先做完就先处理谁
         total=len(all_futures), desc="Converting",
     ):
