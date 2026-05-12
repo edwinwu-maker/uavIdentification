@@ -18,10 +18,12 @@ import argparse
 import concurrent.futures
 import os
 import sys
+from collections import defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-
+import multiprocessing
+multiprocessing.set_start_method("spawn", force=True)
 import h5py
 import numpy as np
 import torch
@@ -92,6 +94,8 @@ def _convert_one_file(args):
     Returns: (mat_file, segment_count)
     """
     mat_file, data_dir, output_dir, batch_size, device = args
+    if device.startswith("cuda"):
+        torch.cuda.set_device(device)
     mat_path = os.path.join(data_dir, mat_file)
     out_path = os.path.join(output_dir, mat_file.replace(".mat", ".h5"))
     drone_code = mat_file.split("_")[0]
@@ -173,24 +177,42 @@ def main():
     logger.info("Found %d .mat files in %s", len(mat_files), args.data_dir)
     logger.info("Output directory: %s", args.output_dir)
 
-    num_workers = min(args.num_workers, len(mat_files))
-    logger.info("Using %d workers across %d GPU(s)", num_workers, len(devices))
+    # round-robin: group files by assigned GPU
+    gpu_files: dict[str, list[str]] = defaultdict(list)
+    for i, mf in enumerate(mat_files):
+        gpu_files[devices[i % len(devices)]].append(mf)
 
-    file_args = [
-        (mf, args.data_dir, args.output_dir, args.batch_size, devices[i % len(devices)])
-        for i, mf in enumerate(mat_files)
-    ]
+    workers_per_gpu = max(1, args.num_workers // len(devices))
+    logger.info("Using %d workers across %d GPUs (%d per GPU)", args.num_workers, len(devices), workers_per_gpu)
+
+    # 存储所有【未来任务(future) + 它所属的进程池】
+    all_futures: list[tuple[concurrent.futures.Future, concurrent.futures.ProcessPoolExecutor]] = []
+    # 存储所有创建出来的进程池（每张GPU对应一个独立进程池）
+    executors: list[concurrent.futures.ProcessPoolExecutor] = []
+    # 遍历每一张 GPU（cuda:0, cuda:1...）
+    for device in devices:
+        files = gpu_files.get(device, [])   # 拿到分配给这张GPU的所有.mat文件
+        if not files:
+            continue
+        nw = min(workers_per_gpu, len(files))
+        ex = concurrent.futures.ProcessPoolExecutor(max_workers=nw)
+        executors.append(ex)
+        logger.info("  GPU %s: %d files, %d workers", device, len(files), nw)
+        for mf in files:
+            fa = (mf, args.data_dir, args.output_dir, args.batch_size, device)
+            fut = ex.submit(_convert_one_file, fa)
+            all_futures.append((fut, ex))
 
     total_segments = 0
-    # 创建多进程池，同时开启 num_workers 个 CPU 核心干活。
-    with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
-        futures = [executor.submit(_convert_one_file, fa) for fa in file_args]
-        for future in tqdm(
-            concurrent.futures.as_completed(futures),
-            total=len(futures), desc="Converting",
-        ):
-            mf, n = future.result()
-            total_segments += n
+    for fut, _ in tqdm(
+        concurrent.futures.as_completed([f for f, _ in all_futures]),   # 监听所有任务，谁先做完就先处理谁
+        total=len(all_futures), desc="Converting",
+    ):
+        mf, n = fut.result()
+        total_segments += n
+
+    for ex in executors:
+        ex.shutdown()
 
     logger.info("Done. %d files → %d spectrograms", len(mat_files), total_segments)
 
