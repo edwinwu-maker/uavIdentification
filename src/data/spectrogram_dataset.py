@@ -42,6 +42,11 @@ class SpectrogramDataset(Dataset):
     def __len__(self):
         return len(self.index)
 
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state["files"] = {}
+        return state
+
     def __getitem__(self, idx):
         path, row_idx, label = self.index[idx]
         f = self._get_file(path)
