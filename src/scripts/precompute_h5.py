@@ -116,7 +116,7 @@ def _convert_one_file(args):
     with h5py.File(out_path, "w") as h5f:
         h5f.create_dataset(
             "stft", shape=(num_samples, 2, 1024, 1024),
-            chunks=(64, 2, 1024, 1024), dtype="f4",
+            chunks=(1, 2, 1024, 1024), dtype="f4",
         )
         h5f.create_dataset(
             "labels", shape=(num_samples,), chunks=None, dtype="i8",

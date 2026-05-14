@@ -51,8 +51,8 @@ def evaluate(model, dataloader, criterion, device, rank, world_size):
             dataloader, desc="Evaluating", leave=False, unit="batch",
             disable=rank != 0,
         ):
-            inputs = inputs.to(device)
-            labels = labels.to(device)
+            inputs = inputs.to(device, non_blocking=True)
+            labels = labels.to(device, non_blocking=True)
             outputs = model(inputs)
             loss = criterion(outputs, labels)
 
@@ -211,8 +211,8 @@ def train(args):
         )
 
         for inputs, labels in batch_bar:
-            inputs = inputs.to(device)
-            labels = labels.to(device)
+            inputs = inputs.to(device, non_blocking=True)
+            labels = labels.to(device, non_blocking=True)
 
             optimizer.zero_grad()
             outputs = model(inputs)

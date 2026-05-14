@@ -10,9 +10,6 @@ from torch.utils.data import Dataset
 
 from utils.logger import logger
 
-
-# TODO:现在的代码使用DataLoader时只能用 num_workers=0
-# TODO:修改为可以用任意 num_workers（8/16/32 都行）
 class SpectrogramDataset(Dataset):
     """Load pre-computed spectrograms from .h5 files.
 
@@ -39,7 +36,7 @@ class SpectrogramDataset(Dataset):
 
     def _get_file(self, path: str) -> h5py.File:
         if path not in self.files:
-            self.files[path] = h5py.File(path, "r")
+            self.files[path] = h5py.File(path, "r", rdcc_nbytes=64 * 1024 * 1024)
         return self.files[path]
 
     def __len__(self):
@@ -49,7 +46,7 @@ class SpectrogramDataset(Dataset):
         path, row_idx, label = self.index[idx]
         f = self._get_file(path)
         spec = f["stft"][row_idx]  # (2, 1024, 1024) float32
-        return torch.from_numpy(spec.astype(np.float32)), torch.tensor(label, dtype=torch.int64)
+        return torch.from_numpy(spec), torch.tensor(label, dtype=torch.int64)
 
     def close(self):
         for f in self.files.values():
