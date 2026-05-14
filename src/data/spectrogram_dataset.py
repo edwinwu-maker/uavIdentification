@@ -10,6 +10,9 @@ from torch.utils.data import Dataset
 
 from utils.logger import logger
 
+
+# TODO:现在的代码使用DataLoader时只能用 num_workers=0
+# TODO:修改为可以用任意 num_workers（8/16/32 都行）
 class SpectrogramDataset(Dataset):
     """Load pre-computed spectrograms from .h5 files.
 

@@ -1,8 +1,12 @@
 """
-Train ResNet on pre-computed spectrograms (fast, no CPU STFT bottleneck).
+Train ResNet on pre-computed .h5 spectrograms (no CPU STFT bottleneck).
+
+Each .h5 file contains:
+  /stft   (N, 2, 1024, 1024) float32
+  /labels (N,) int64
 
 Usage:
-  torchrun --nproc_per_node=3 src/train_spec.py --cache /path/to/cache --gpus 0,1,2
+  torchrun --nproc_per_node=3 src/train_spec.py --data-dir /path/to/h5_dir --gpus 0,1,2
 """
 
 import argparse
@@ -25,9 +29,9 @@ from data.spectrogram_dataset import SpectrogramDataset
 from models.resnet import DroneRFaResNet18
 from utils.logger import logger
 
-# --- Paper hyperparameters (Section 4.3) ---
+# ── Paper hyperparameters (Section 4.3) ──
 NUM_CLASSES = 25
-BATCH_SIZE = 32
+BATCH_SIZE = 64
 LEARNING_RATE = 0.001
 TRAIN_RATIO = 0.6
 VAL_RATIO = 0.2
@@ -36,7 +40,6 @@ PATIENCE = 10
 
 
 def evaluate(model, dataloader, criterion, device, rank, world_size):
-    """Evaluate on all ranks, gather predictions to rank 0 for correct metrics."""
     model.eval()
     loss_sum = torch.tensor(0.0, device=device)
     count = torch.tensor(0, device=device)
@@ -62,12 +65,10 @@ def evaluate(model, dataloader, criterion, device, rank, world_size):
     dist.all_reduce(count, op=dist.ReduceOp.SUM)
     avg_loss = (loss_sum / count).item()
 
-    # Gather variable-length predictions to rank 0
     lp = torch.cat(local_preds) if local_preds else torch.empty(0, dtype=torch.long, device=device)
     ll = torch.cat(local_labels) if local_labels else torch.empty(0, dtype=torch.long, device=device)
     local_size = torch.tensor([lp.size(0)], device=device)
 
-    # Collect sizes from all ranks (small — just one int each)
     size_list = [torch.zeros(1, dtype=torch.long, device=device) for _ in range(world_size)]
     dist.all_gather(size_list, local_size)
     max_sz = max(s.item() for s in size_list)
@@ -103,18 +104,17 @@ def compute_metrics(preds, labels):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Train on pre-computed spectrograms (DDP)")
-    parser.add_argument("--cache", type=str,
-                        default="/mnt/data/wurixin/DroneRFa/spectrogram_cache",
-                        help="Path to spectrogram cache directory (.npy files)")
+    parser = argparse.ArgumentParser(description="Train on pre-computed .h5 spectrograms (DDP)")
+    parser.add_argument("--data-dir", type=str, default=None,
+                        help="Directory containing .h5 spectrogram files")
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
     parser.add_argument("--lr", type=float, default=LEARNING_RATE)
-    parser.add_argument("--num-workers", type=int, default=None,
-                        help="DataLoader workers (default: min(8, cpu_count))")
+    parser.add_argument("--num-workers", type=int, default=0,
+                        help="DataLoader workers (0 = main process only, avoids h5py multiprocessing issues)")
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--patience", type=int, default=PATIENCE)
     parser.add_argument("--gpus", type=str, default=None,
-                        help="Comma-separated GPU IDs visible to this run, e.g. '0,1,2'")
+                        help="Comma-separated GPU IDs, e.g. '0,1,2'")
     return parser.parse_args()
 
 
@@ -124,23 +124,30 @@ def train(args):
 
     # ── DDP init ──
     dist.init_process_group(backend="nccl")
-    rank = dist.get_rank()              # 当前进程在这个总数中的序号
-    world_size = dist.get_world_size()  # 总进程数（通常等于GPU数量）
-    local_rank = int(os.environ["LOCAL_RANK"])  # 当前进程在本节点（机器）内的本地编号
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+    local_rank = int(os.environ["LOCAL_RANK"])
     torch.cuda.set_device(local_rank)
     device = torch.device(f"cuda:{local_rank}")
 
-    # 只让全局主进程（rank 0）执行日志输出，避免其他进程重复打印同一信息。
     if rank == 0:
         logger.info("DDP initialized — world_size: %d", world_size)
         logger.info("Using device: %s", device)
         for i in range(torch.cuda.device_count()):
             logger.info("  GPU %d: %s", i, torch.cuda.get_device_name(i))
 
+    # ── Data dir ──
+    if args.data_dir is None:
+        if os.name == "nt":
+            args.data_dir = "E:/dataSet/DroneRFa"
+        else:
+            args.data_dir = "/mnt/data/wurixin/DroneRFa"
+
     # ── Dataset ──
-    dataset = SpectrogramDataset(args.cache)
+    dataset = SpectrogramDataset(args.data_dir)
     if rank == 0:
-        logger.info("Loaded %d pre-computed spectrograms from %s", len(dataset), args.cache)
+        logger.info("Loaded %d spectrograms from %d .h5 files in %s",
+                     len(dataset), len(set(s[0] for s in dataset.index)), args.data_dir)
 
     total_size = len(dataset)
     train_size = int(total_size * TRAIN_RATIO)
@@ -153,27 +160,20 @@ def train(args):
     if rank == 0:
         logger.info("Split — train: %d, val: %d, test: %d", train_size, val_size, test_size)
 
-    num_workers = args.num_workers if args.num_workers is not None else min(8, os.cpu_count() or 1)
-
     train_sampler = DistributedSampler(train_ds, num_replicas=world_size, rank=rank, shuffle=True)
     val_sampler = DistributedSampler(val_ds, num_replicas=world_size, rank=rank, shuffle=False)
     test_sampler = DistributedSampler(test_ds, num_replicas=world_size, rank=rank, shuffle=False)
 
-    train_loader = DataLoader(
-        train_ds, batch_size=args.batch_size, sampler=train_sampler,
-        num_workers=num_workers, pin_memory=True,
-        prefetch_factor=4, persistent_workers=True,
+    loader_kwargs = dict(
+        batch_size=args.batch_size, num_workers=args.num_workers, pin_memory=True,
     )
-    val_loader = DataLoader(
-        val_ds, batch_size=args.batch_size, sampler=val_sampler,
-        num_workers=num_workers, pin_memory=True,
-        prefetch_factor=4, persistent_workers=True,
-    )
-    test_loader = DataLoader(
-        test_ds, batch_size=args.batch_size, sampler=test_sampler,
-        num_workers=num_workers, pin_memory=True,
-        prefetch_factor=4, persistent_workers=True,
-    )
+    if args.num_workers > 0:
+        loader_kwargs["prefetch_factor"] = 4
+        loader_kwargs["persistent_workers"] = True
+
+    train_loader = DataLoader(train_ds, sampler=train_sampler, **loader_kwargs)
+    val_loader = DataLoader(val_ds, sampler=val_sampler, **loader_kwargs)
+    test_loader = DataLoader(test_ds, sampler=test_sampler, **loader_kwargs)
 
     # ── Model ──
     model = DroneRFaResNet18(num_classes=NUM_CLASSES)
@@ -205,11 +205,8 @@ def train(args):
         train_count = torch.tensor(0, device=device)
 
         batch_bar = tqdm(
-            train_loader,
-            total=len(train_loader),
-            desc=f"Epoch {epoch}",
-            leave=False,
-            unit="batch",
+            train_loader, total=len(train_loader),
+            desc=f"Epoch {epoch}", leave=False, unit="batch",
             disable=rank != 0,
         )
 
@@ -255,7 +252,6 @@ def train(args):
             else:
                 patience_counter += 1
 
-        # Broadcast early-stop decision to all ranks
         stop_tensor = torch.tensor(1 if patience_counter >= args.patience else 0, device=device)
         dist.broadcast(stop_tensor, src=0)
         if stop_tensor.item():
@@ -292,6 +288,7 @@ def train(args):
         np.save(os.path.join(checkpoint_dir, "confusion_matrix.npy"), cm)
         logger.info("Confusion matrix saved to checkpoints/confusion_matrix.npy")
 
+    dataset.close()
     dist.destroy_process_group()
 
 
