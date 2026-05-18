@@ -18,6 +18,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, random_split
+from tqdm import tqdm
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
 
 from data.spectrogram_dataset import SpectrogramDataset
@@ -77,7 +78,9 @@ def evaluate(model, dataloader, criterion, device):
     all_labels = []
 
     with torch.no_grad():
-        for inputs, labels in dataloader:
+        for inputs, labels in tqdm(
+            dataloader, desc="Testing", leave=False, unit="batch",
+        ):
             inputs = inputs.to(device, non_blocking=True)
             labels = labels.to(device, non_blocking=True)
             outputs = model(inputs)
