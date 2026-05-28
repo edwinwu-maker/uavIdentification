@@ -1,213 +1,248 @@
 from __future__ import annotations
 
-from typing import Literal, Optional, Tuple
+from dataclasses import dataclass
+from typing import Iterable, Optional
 
 import numpy as np
 
 
-WindowType = Literal["hann", "hamming", "rect"]
-NormalizeType = Literal["none", "zscore", "minmax"]
+@dataclass
+class FAMResult:
+    """FAM 输出点估计。
+
+    f:
+        spectral frequency 坐标。默认 normalized frequency，单位 cycles/sample。
+    alpha:
+        cycle frequency 坐标。默认 normalized frequency，单位 cycles/sample。
+    value:
+        对应的 complex SCF 估计值。
+    """
+
+    f: np.ndarray
+    alpha: np.ndarray
+    value: np.ndarray
 
 
-def _validate_1d_iq(sig_iq: np.ndarray) -> np.ndarray:
-    sig = np.asarray(sig_iq)
-    if sig.ndim != 1:
-        sig = sig.reshape(-1)
-    if sig.size == 0:
-        raise ValueError("sig_iq must contain at least one sample")
-    if not np.iscomplexobj(sig):
-        sig = sig.astype(np.float32) + 0j
-    return sig.astype(np.complex64, copy=False)
-
-
-def _make_window(window: WindowType, frame_len: int) -> np.ndarray:
-    if window == "hann":
-        return np.hanning(frame_len).astype(np.float32)
-    if window == "hamming":
-        return np.hamming(frame_len).astype(np.float32)
-    if window == "rect":
-        return np.ones(frame_len, dtype=np.float32)
-    raise ValueError(f"Unsupported window type: {window}")
-
-
-def _frame_signal(sig: np.ndarray, frame_len: int, hop_len: int) -> np.ndarray:
-    if frame_len <= 0:
-        raise ValueError("frame_len must be positive")
-    if hop_len <= 0:
-        raise ValueError("hop_len must be positive")
-    if sig.size < frame_len:
-        raise ValueError(
-            f"sig_iq is too short: got {sig.size} samples, need at least {frame_len}"
-        )
-
-    num_frames = 1 + (sig.size - frame_len) // hop_len
-    shape = (num_frames, frame_len)
-    strides = (sig.strides[0] * hop_len, sig.strides[0])
-    return np.lib.stride_tricks.as_strided(sig, shape=shape, strides=strides)
-
-
-def _select_evenly(values: np.ndarray, count: Optional[int]) -> np.ndarray:
-    if count is None or count >= values.size:
-        return values
-    if count <= 0:
-        raise ValueError("freq_bins must be positive when provided")
-    indices = np.linspace(0, values.size - 1, count).round().astype(np.int64)
-    return values[indices]
-
-
-def _normalize_spectrum(
-    spectrum: np.ndarray,
-    mode: NormalizeType,
-    eps: float,
+def _make_blocks(
+    x: np.ndarray,
+    nfft: int,
+    hop: int,
+    *,
+    n_blocks: Optional[int] = None,
+    pad: bool = True,
 ) -> np.ndarray:
-    if mode == "none":
-        return spectrum
-    if mode == "zscore":
-        return (spectrum - spectrum.mean()) / (spectrum.std() + eps)
-    if mode == "minmax":
-        min_val = spectrum.min()
-        max_val = spectrum.max()
-        return (spectrum - min_val) / (max_val - min_val + eps)
-    raise ValueError(f"Unsupported normalize mode: {mode}")
+    """Step 1: 将一维 IQ 信号切成 data blocks。
+
+    pad:
+        当输入信号长度不够凑齐最后一个 block 时，是否在末尾补零。
+
+    返回 shape = (P, nfft) 的矩阵，每一行是一个 block。
+    """
+
+    x = np.asarray(x, dtype=np.complex128)
+    if x.ndim != 1:
+        raise ValueError("x must be a one-dimensional complex IQ sequence")
+    if nfft <= 0:
+        raise ValueError("nfft must be positive")
+    if hop <= 0:
+        raise ValueError("hop must be positive")
+
+    if n_blocks is None:
+        if len(x) <= nfft:
+            n_blocks = 1
+        else:
+            n_blocks = int(np.ceil((len(x) - nfft) / hop)) + 1
+
+    total_needed = (n_blocks - 1) * hop + nfft
+    if len(x) < total_needed:
+        if not pad:
+            raise ValueError("input is too short for requested n_blocks without padding")
+        x = np.pad(x, (0, total_needed - len(x)))
+
+    starts = np.arange(n_blocks) * hop
+    # 通过广播生成每个 block 的采样索引，shape = (P, nfft)。
+    sample_index = starts[:, None] + np.arange(nfft)[None, :]
+    return x[sample_index]
 
 
-def estimate_fam_cyclic_spectrum(
-    sig_iq: np.ndarray,
-    sample_rate: float = 1.0,
-    frame_len: int = 1024,
-    overlap: float = 0.5,
-    fft_len: Optional[int] = None,
-    alpha_bins: int = 128,
-    freq_bins: Optional[int] = 256,
-    alpha_max: Optional[float] = None,
-    include_alpha_zero: bool = False,
-    window: WindowType = "hann",
-    remove_dc: bool = True,
-    power_normalize: bool = True,
-    log_scale: bool = True,
-    normalize: NormalizeType = "zscore",
-    eps: float = 1e-8,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Estimate a second-order cyclic spectrum with an FAM-style approximation.
+def _window(name: str, nfft: int) -> np.ndarray:
+    """Step 2: 生成 channelizer data-tapering window。"""
+
+    name = name.lower()
+    if name in {"hamming", "hamm"}:
+        return np.hamming(nfft)
+    if name in {"hann", "hanning"}:
+        return np.hanning(nfft)
+    if name in {"rect", "boxcar", "rectangle"}:
+        return np.ones(nfft)
+    raise ValueError(f"unsupported window: {name}")
+
+
+def _channelize(
+    x: np.ndarray,
+    *,
+    nfft: int,
+    hop: int,
+    window: str = "hamming",
+    n_blocks: Optional[int] = None,
+    fftshift: bool = True,
+) -> tuple[np.ndarray, np.ndarray, float]:
+    """Step 1-3: 分块、加窗、FFT、phase-shift。
+
+    返回：
+        X_tilde:
+            shape = (P, nfft)，每一列对应一个频率通道。
+        freqs:
+            第一阶段 FFT 的 normalized frequency，单位 cycles/sample。
+        window_energy:
+            sum(abs(w)**2)，用于谱幅值归一化。
+    """
+
+    blocks = _make_blocks(x, nfft, hop, n_blocks=n_blocks, pad=True)
+    p_count = blocks.shape[0]
+
+    # Step 2: 对每个 block 乘以 tapering window。
+    w = _window(window, nfft).astype(float)
+    window_energy = float(np.sum(np.abs(w) ** 2))
+    blocks_w = blocks * w[None, :]
+
+    # Step 3: 对每个 block 做 FFT。
+    spectrum = np.fft.fft(blocks_w, axis=1)
+    freqs = np.fft.fftfreq(nfft, d=1.0)
+
+    if fftshift:
+        spectrum = np.fft.fftshift(spectrum, axes=1)
+        freqs = np.fft.fftshift(freqs)
+
+    # Step 3: phase-shift，恢复不同 blocks 之间的全局时间相位关系。
+    # phase[p, k] = exp(-j 2pi f_k pL)
+    p = np.arange(p_count)
+    phase = np.exp(-1j * 2.0 * np.pi * p[:, None] * hop * freqs[None, :])
+    x_tilde = spectrum * phase
+
+    return x_tilde, freqs, window_energy
+
+
+def _principal_domain_mask(f: np.ndarray, alpha: np.ndarray) -> np.ndarray:
+    """non-conjugate SCF 常用 principal domain。
+
+    normalized frequency 下：
+        |f| + |alpha|/2 <= 1/2
+    """
+
+    return np.abs(f) + 0.5 * np.abs(alpha) <= 0.5
+
+
+def fam_scf_points(
+    x: np.ndarray,
+    *,
+    nfft: int = 256,
+    hop: int = 64,
+    n_blocks: Optional[int] = None,
+    window: str = "hamming",
+    keep_principal_domain: bool = True,
+    pair_indices: Optional[Iterable[tuple[int, int]]] = None,
+    fftshift: bool = True,
+    normalize: bool = True,
+) -> FAMResult:
+    """按 FAM Step 1-5 估计 SCF 点。
 
     Parameters
     ----------
-    sig_iq:
-        One-dimensional complex IQ signal.
-    sample_rate:
-        Sampling rate in Hz. Use 1.0 for normalized frequency axes.
-    frame_len:
-        Number of IQ samples per short-time FFT frame.
-    overlap:
-        Frame overlap ratio in [0, 1).
-    fft_len:
-        FFT length. Defaults to ``frame_len``.
-    alpha_bins:
-        Number of cyclic-frequency bins requested. The actual count can be
-        lower if the integer FFT-bin grid cannot provide enough unique shifts.
-    freq_bins:
-        Number of frequency bins returned. ``None`` returns all valid bins.
-    alpha_max:
-        Maximum cyclic frequency in Hz. Defaults to ``sample_rate / 2``.
-    include_alpha_zero:
-        Whether to include alpha = 0, which corresponds to ordinary PSD-like
-        spectral correlation.
+    x:
+        输入 complex IQ 序列。
+    nfft:
+        N prime，channelizer 短时 FFT 点数。
+    hop:
+        L，data block hop size。
+    n_blocks:
+        P，使用的 data block 数。若为 None，则由输入长度自动决定。
     window:
-        Short-time analysis window.
-    remove_dc:
-        Remove the IQ mean before framing.
-    power_normalize:
-        Normalize IQ average power to 1 before FAM estimation.
-    log_scale:
-        Apply ``log1p(abs(.))`` to the spectral correlation magnitude.
+        channelizer tapering window，支持 "hamming"、"hann"、"rect"。
+    keep_principal_domain:
+        是否丢弃 non-conjugate SCF principal domain 之外的点。
+    pair_indices:
+        可选的 (k, l) 通道对列表。若为 None，则 exhaustive 计算所有通道对。
+        注意这里的 k,l 是 fftshift 后频率数组中的索引。
+    fftshift:
+        是否对第一阶段和第二阶段 FFT 使用中心化频率顺序。
     normalize:
-        Output normalization mode: ``none``, ``zscore``, or ``minmax``.
-    eps:
-        Small positive constant for numerical stability.
+        若为 True，谱值除以 P * window_energy。函数始终使用 normalized
+        frequency；如果需要 Hz 坐标，由调用者在函数外部乘以采样率 fs。
 
     Returns
     -------
-    spectrum:
-        Float32 array with shape ``(N_alpha, N_freq)``.
-    alpha_axis:
-        Cyclic-frequency axis in Hz, shape ``(N_alpha,)``.
-    freq_axis:
-        Frequency axis in Hz, shape ``(N_freq,)``.
-
-    Notes
-    -----
-    This implementation uses integer FFT-bin shifts:
-
-    ``S_alpha(f) = mean_t X_t(f + alpha / 2) * conj(X_t(f - alpha / 2))``
-
-    Therefore alpha values are quantized to ``2 * delta_bin * Fs / fft_len``.
-    It is intended as a clear CPU baseline for offline feature precomputation.
+    FAMResult:
+        一组三元点估计 (f, alpha, value)。
     """
-    if sample_rate <= 0:
-        raise ValueError("sample_rate must be positive")
-    if not 0 <= overlap < 1:
-        raise ValueError("overlap must be in [0, 1)")
-    if alpha_bins <= 0:
-        raise ValueError("alpha_bins must be positive")
 
-    sig = _validate_1d_iq(sig_iq)
-    if remove_dc:
-        sig = sig - sig.mean()
-    if power_normalize:
-        sig = sig / np.sqrt(np.mean(np.abs(sig) ** 2) + eps)
+    x_tilde, freqs, window_energy = _channelize(
+        x,
+        nfft=nfft,
+        hop=hop,
+        window=window,
+        n_blocks=n_blocks,
+        fftshift=fftshift,
+    )
+    p_count = x_tilde.shape[0]
 
-    if fft_len is None:
-        fft_len = frame_len
-    if fft_len < frame_len:
-        raise ValueError("fft_len must be greater than or equal to frame_len")
+    # 第二阶段 FFT 的 cycle-frequency 细分量 beta，单位 cycles/sample。
+    beta = np.fft.fftfreq(p_count, d=hop)
+    if fftshift:
+        beta = np.fft.fftshift(beta)
 
-    hop_len = max(1, int(round(frame_len * (1.0 - overlap))))
-    frames = _frame_signal(sig, frame_len=frame_len, hop_len=hop_len)
-    frames = frames * _make_window(window, frame_len)[None, :]
+    if pair_indices is None:
+        pair_indices = ((k, l) for k in range(nfft) for l in range(nfft))
 
-    stft = np.fft.fft(frames, n=fft_len, axis=1)
-    stft = np.fft.fftshift(stft, axes=1)
+    f_chunks: list[np.ndarray] = []
+    alpha_chunks: list[np.ndarray] = []
+    value_chunks: list[np.ndarray] = []
 
-    if alpha_max is None:
-        alpha_max = sample_rate / 2.0
-    if alpha_max <= 0:
-        raise ValueError("alpha_max must be positive")
+    scale = 1.0
+    if normalize:
+        scale = p_count * window_energy
 
-    max_delta = int(np.floor(alpha_max * fft_len / (2.0 * sample_rate)))
-    max_delta = min(max_delta, (fft_len - 1) // 2)
-    min_delta = 0 if include_alpha_zero else 1
-    if max_delta < min_delta:
-        raise ValueError("alpha_max is too small for the requested FFT grid")
+    for k, l in pair_indices:
+        fk = freqs[k]
+        fl = freqs[l]
 
-    requested = min(alpha_bins, max_delta - min_delta + 1)
-    deltas = np.linspace(min_delta, max_delta, requested).round().astype(np.int64)
-    deltas = np.unique(deltas)
+        # Step 4: 构造长度 P 的 channelizer product vector。
+        product = x_tilde[:, k] * np.conj(x_tilde[:, l])
 
-    full_freq_axis = np.fft.fftshift(np.fft.fftfreq(fft_len, d=1.0 / sample_rate))
-    valid_freq_indices = np.arange(max_delta, fft_len - max_delta, dtype=np.int64)
-    freq_indices = _select_evenly(valid_freq_indices, freq_bins)
+        # Step 4: 沿窗口序号做第二次 FFT。
+        z = np.fft.fft(product)
+        if fftshift:
+            z = np.fft.fftshift(z)
 
-    spectrum = np.empty((deltas.size, freq_indices.size), dtype=np.float32)
-    for row, delta in enumerate(deltas):
-        upper = stft[:, freq_indices + delta]
-        lower = stft[:, freq_indices - delta]
-        corr = np.mean(upper * np.conj(lower), axis=0)
-        mag = np.abs(corr)
-        if log_scale:
-            mag = np.log1p(mag)
-        spectrum[row] = mag.astype(np.float32, copy=False)
+        if normalize:
+            z = z / scale
 
-    spectrum = _normalize_spectrum(spectrum, normalize, eps).astype(np.float32, copy=False)
-    alpha_axis = (2.0 * deltas * sample_rate / fft_len).astype(np.float32)
-    freq_axis = full_freq_axis[freq_indices].astype(np.float32)
+        # Step 5: 映射到 (f, alpha)。
+        f_value = 0.5 * (fk + fl)
+        alpha = (fk - fl) + beta
+        f = np.full_like(alpha, f_value, dtype=float)
 
-    return spectrum, alpha_axis, freq_axis
+        if keep_principal_domain:
+            mask = _principal_domain_mask(f, alpha)
+            if not np.any(mask):
+                continue
+            f = f[mask]
+            alpha = alpha[mask]
+            z = z[mask]
 
+        f_chunks.append(f)
+        alpha_chunks.append(alpha)
+        value_chunks.append(z)
 
-def estimate_fam_image(
-    sig_iq: np.ndarray,
-    **kwargs,
-) -> np.ndarray:
-    """Return only the cyclic-spectrum image for dataset precomputation."""
-    spectrum, _alpha_axis, _freq_axis = estimate_fam_cyclic_spectrum(sig_iq, **kwargs)
-    return spectrum
+    if not f_chunks:
+        return FAMResult(
+            f=np.empty(0, dtype=float),
+            alpha=np.empty(0, dtype=float),
+            value=np.empty(0, dtype=np.complex128),
+        )
+
+    return FAMResult(
+        f=np.concatenate(f_chunks),
+        alpha=np.concatenate(alpha_chunks),
+        value=np.concatenate(value_chunks),
+    )
