@@ -3,5 +3,4 @@ __pycache__/
 logs/
 checkpoints/
 *.out
-docs/
 CLAUDE.md

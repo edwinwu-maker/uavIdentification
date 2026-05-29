@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Optional
+from typing import Optional
 
 import numpy as np
 
@@ -85,7 +85,6 @@ def _channelize(
     hop: int,
     window: str = "hamming",
     n_blocks: Optional[int] = None,
-    fftshift: bool = True,
 ) -> tuple[np.ndarray, np.ndarray, float]:
     """Step 1-3: 分块、加窗、FFT、phase-shift。
 
@@ -109,10 +108,8 @@ def _channelize(
     # Step 3: 对每个 block 做 FFT。
     spectrum = np.fft.fft(blocks_w, axis=1)
     freqs = np.fft.fftfreq(nfft, d=1.0)
-
-    if fftshift:
-        spectrum = np.fft.fftshift(spectrum, axes=1)
-        freqs = np.fft.fftshift(freqs)
+    spectrum = np.fft.fftshift(spectrum, axes=1)
+    freqs = np.fft.fftshift(freqs)
 
     # Step 3: phase-shift，恢复不同 blocks 之间的全局时间相位关系。
     # phase[p, k] = exp(-j 2pi f_k pL)
@@ -141,8 +138,6 @@ def fam_scf_points(
     n_blocks: Optional[int] = None,
     window: str = "hamming",
     keep_principal_domain: bool = True,
-    pair_indices: Optional[Iterable[tuple[int, int]]] = None,
-    fftshift: bool = True,
     normalize: bool = True,
 ) -> FAMResult:
     """按 FAM Step 1-5 估计 SCF 点。
@@ -161,11 +156,6 @@ def fam_scf_points(
         channelizer tapering window，支持 "hamming"、"hann"、"rect"。
     keep_principal_domain:
         是否丢弃 non-conjugate SCF principal domain 之外的点。
-    pair_indices:
-        可选的 (k, l) 通道对列表。若为 None，则 exhaustive 计算所有通道对。
-        注意这里的 k,l 是 fftshift 后频率数组中的索引。
-    fftshift:
-        是否对第一阶段和第二阶段 FFT 使用中心化频率顺序。
     normalize:
         若为 True，谱值除以 P * window_energy。函数始终使用 normalized
         frequency；如果需要 Hz 坐标，由调用者在函数外部乘以采样率 fs。
@@ -182,17 +172,14 @@ def fam_scf_points(
         hop=hop,
         window=window,
         n_blocks=n_blocks,
-        fftshift=fftshift,
     )
     p_count = x_tilde.shape[0]
 
     # 第二阶段 FFT 的 cycle-frequency 细分量 beta，单位 cycles/sample。
     beta = np.fft.fftfreq(p_count, d=hop)
-    if fftshift:
-        beta = np.fft.fftshift(beta)
+    beta = np.fft.fftshift(beta)
 
-    if pair_indices is None:
-        pair_indices = ((k, l) for k in range(nfft) for l in range(nfft))
+    channel_pairs = ((k, l) for k in range(nfft) for l in range(nfft))
 
     f_chunks: list[np.ndarray] = []
     alpha_chunks: list[np.ndarray] = []
@@ -202,7 +189,7 @@ def fam_scf_points(
     if normalize:
         scale = p_count * window_energy
 
-    for k, l in pair_indices:
+    for k, l in channel_pairs:
         fk = freqs[k]
         fl = freqs[l]
 
@@ -211,8 +198,7 @@ def fam_scf_points(
 
         # Step 4: 沿窗口序号做第二次 FFT。
         z = np.fft.fft(product)
-        if fftshift:
-            z = np.fft.fftshift(z)
+        z = np.fft.fftshift(z)
 
         if normalize:
             z = z / scale
@@ -222,6 +208,8 @@ def fam_scf_points(
         alpha = (fk - fl) + beta
         f = np.full_like(alpha, f_value, dtype=float)
 
+        # 同一组 (k, l) 的 spectral frequency 固定，cycle frequency 随 beta 变化。
+        # principal-domain 过滤必须同时作用于 f、alpha 和对应的谱值 z。
         if keep_principal_domain:
             mask = _principal_domain_mask(f, alpha)
             if not np.any(mask):
