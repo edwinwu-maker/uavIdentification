@@ -100,7 +100,7 @@ def plot_spectrogram(
         times,
         time_freq_matrix_dB,
         shading="auto",
-        cmap="viridis",
+        cmap="jet",
         vmin=vmin,
         vmax=vmax,
     )

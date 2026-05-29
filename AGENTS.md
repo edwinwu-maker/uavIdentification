@@ -1,0 +1,45 @@
+# AGENTS.md
+
+Project guidance for coding agents working in this repository.
+
+## Runtime Environment
+
+- Use the conda environment `droneRFa` for project commands.
+- Before running Python scripts, tests, or dependency checks, activate it:
+  ```powershell
+  conda activate droneRFa
+  ```
+- Prefer commands that run from the repository root: `E:\code\python\droneRFa`.
+
+## Working Style
+
+- Think before coding. State assumptions when a request is ambiguous.
+- Ask before implementing if multiple interpretations could change the result.
+- Prefer the simplest change that fully satisfies the request.
+- Do not add speculative features, abstractions, configuration, or broad error handling.
+
+## Editing Rules
+
+- Make surgical changes. Touch only files and lines needed for the task.
+- Match the existing style and structure of the project.
+- Do not refactor, reformat, or clean up unrelated code.
+- Remove only unused imports, variables, or files introduced by your own change.
+- If unrelated dead code or suspicious behavior is found, mention it instead of editing it.
+
+## Verification
+
+- Define success criteria before non-trivial changes.
+- For bug fixes, reproduce the issue when practical, then verify the fix.
+- For new behavior, add or run focused tests when the repository supports it.
+- Run verification inside the `droneRFa` conda environment.
+- If verification cannot be run, explain exactly why.
+
+## Planning
+
+For multi-step work, use a brief plan:
+
+1. Describe the change and its success check.
+2. Implement the smallest necessary edit.
+3. Run the relevant verification.
+
+These rules are intended to keep diffs small, behavior clear, and project state easy to review.

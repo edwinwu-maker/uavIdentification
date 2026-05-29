@@ -38,7 +38,7 @@ def plot_dual_channel(stft_sample, save_path, sample_idx, label=None):
     for ax, ch, ch_name in [(ax0, 0, "Channel 0"), (ax1, 1, "Channel 1")]:
         im = ax.pcolormesh(
             freqs / 1e6, times * 1e3, stft_sample[ch].T,
-            shading="auto", cmap="viridis",
+            shading="auto", cmap="jet",
         )
         title = f"{ch_name} — Sample {sample_idx}"
         if label is not None:
