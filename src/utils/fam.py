@@ -124,10 +124,10 @@ def _principal_domain_mask(f: np.ndarray, alpha: np.ndarray) -> np.ndarray:
     """non-conjugate SCF 常用 principal domain。
 
     normalized frequency 下：
-        |f| + |alpha|/2 <= 1/2
+        |f| + |alpha|/2 < 1/2
     """
 
-    return np.abs(f) + 0.5 * np.abs(alpha) <= 0.5
+    return np.abs(f) + 0.5 * np.abs(alpha) < 0.5
 
 
 def fam_scf_points(
@@ -158,7 +158,7 @@ def fam_scf_points(
         是否丢弃 non-conjugate SCF principal domain 之外的点。
     normalize:
         若为 True，谱值除以 P * window_energy。函数始终使用 normalized
-        frequency；如果需要 Hz 坐标，由调用者在函数外部乘以采样率 fs。
+        frequency；
 
     Returns
     -------
@@ -192,6 +192,12 @@ def fam_scf_points(
     for k, l in channel_pairs:
         fk = freqs[k]
         fl = freqs[l]
+
+        # Drop the one-sided Nyquist bin from even-length FFTs. np.fft.fftfreq
+        # represents Nyquist as -0.5, with no matching +0.5 bin, which can
+        # create asymmetric edge artifacts near the principal-domain boundary.
+        if np.isclose(fk, -0.5) or np.isclose(fl, -0.5):
+            continue
 
         # Step 4: 构造长度 P 的 channelizer product vector。
         product = x_tilde[:, k] * np.conj(x_tilde[:, l])
