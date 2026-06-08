@@ -5,6 +5,8 @@ Usage:
   python src/scripts/plot_fam_demo.py --signal bpsk_noise --snr-db 5 --no-show
   python src/scripts/plot_fam_demo.py --segment-samples 131072 --fam-merge max --no-show
   python src/scripts/plot_fam_demo.py --full-fam --num-symbols 2000 --no-show
+  python src/scripts/plot_fam_demo.py --device cuda --no-show
+  python src/scripts/plot_fam_demo.py --device cuda:1 --gpu-pair-chunk-size 4096 --no-show
 """
 
 from __future__ import annotations
@@ -99,6 +101,18 @@ def parse_args() -> argparse.Namespace:
         help="How to merge segmented FAM grids: mean or max.",
     )
     parser.add_argument(
+        "--device",
+        type=str,
+        default="cpu",
+        help='FAM compute device: "cpu", "cuda", or an explicit device such as "cuda:1".',
+    )
+    parser.add_argument(
+        "--gpu-pair-chunk-size",
+        type=int,
+        default=8192,
+        help="Number of (k, l) channel pairs per batch for CUDA FAM computation.",
+    )
+    parser.add_argument(
         "--no-show",
         action="store_true",
         help="Save images without opening plot windows.",
@@ -115,13 +129,19 @@ def main() -> None:
         snr_db=args.snr_db,
     )
     if args.full_fam:
-        image, f_axis, alpha_axis = compute_fam_grid(x)
+        image, f_axis, alpha_axis = compute_fam_grid(
+            x,
+            device=args.device,
+            pair_chunk_size=args.gpu_pair_chunk_size,
+        )
     else:
         image, f_axis, alpha_axis = compute_fam_grid_segmented(
             x,
             segment_samples=args.segment_samples,
             segment_hop_samples=args.segment_hop_samples,
             merge=args.fam_merge,
+            device=args.device,
+            pair_chunk_size=args.gpu_pair_chunk_size,
         )
 
     time_path, frequency_path = plot_signal_time_frequency(

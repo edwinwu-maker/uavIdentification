@@ -7,6 +7,7 @@ from collections.abc import Iterator
 import numpy as np
 
 from src.utils.fam import fam_scf_points
+from src.utils.fam_gpu import fam_scf_points_gpu
 
 SUPPORTED_FAM_MERGE_MODES = ("mean", "max")
 FAM_NFFT = 64
@@ -68,16 +69,31 @@ def compute_fam_grid(
     f_range: tuple[float, float] = (-0.5, 0.5),
     alpha_range: tuple[float, float] = (-1.0, 1.0),
     normalize: bool = True,
+    device: str = "cpu",
+    pair_chunk_size: int = 8192,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Compute FAM points and aggregate them into a normalized |SCF| grid."""
 
-    result = fam_scf_points(
-        x,
-        nfft=FAM_NFFT,
-        hop=FAM_HOP,
-        window="hann",
-        keep_principal_domain=True,
-    )
+    if device.lower().startswith("cpu"):
+        result = fam_scf_points(
+            x,
+            nfft=FAM_NFFT,
+            hop=FAM_HOP,
+            window="hann",
+            keep_principal_domain=True,
+        )
+    else:
+        # Non-CPU devices use the PyTorch implementation so callers can pass
+        # explicit devices such as "cuda" or "cuda:1".
+        result = fam_scf_points_gpu(
+            x,
+            nfft=FAM_NFFT,
+            hop=FAM_HOP,
+            window="hann",
+            keep_principal_domain=True,
+            device=device,
+            pair_chunk_size=pair_chunk_size,
+        )
     return points_to_grid(
         result.f,
         result.alpha,
@@ -117,6 +133,8 @@ def compute_fam_grid_segmented(
     alpha_bins: int = 513,
     f_range: tuple[float, float] = (-0.5, 0.5),
     alpha_range: tuple[float, float] = (-1.0, 1.0),
+    device: str = "cpu",
+    pair_chunk_size: int = 8192,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Compute segmented FAM grids and merge them into one |SCF| grid."""
 
@@ -148,6 +166,8 @@ def compute_fam_grid_segmented(
             f_range=f_range,
             alpha_range=alpha_range,
             normalize=False,
+            device=device,
+            pair_chunk_size=pair_chunk_size,
         )
 
         if merge == "max":

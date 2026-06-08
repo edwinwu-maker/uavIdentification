@@ -28,6 +28,8 @@ Project guidance for coding agents working in this repository.
 
 - Make surgical changes. Touch only files and lines needed for the task.
 - Match the existing style and structure of the project.
+- Add necessary comments for non-obvious code, especially complex logic, important assumptions, GPU/parallel computation details, or behavior that is easy to misuse.
+- Keep comments concise and useful. Do not add comments that merely repeat what the code already says.
 - Do not refactor, reformat, or clean up unrelated code.
 - Remove only unused imports, variables, or files introduced by your own change.
 - If unrelated dead code or suspicious behavior is found, mention it instead of editing it.

@@ -5,6 +5,8 @@ from typing import Optional
 
 import numpy as np
 
+# 声明模块的公开接口
+__all__ = ["FAMResult", "fam_scf_points"]
 
 @dataclass
 class FAMResult:
