@@ -1,3 +1,12 @@
+"""Generate time-domain, frequency-domain, and FAM plots for synthetic signals.
+
+Usage:
+  python src/test/test_fam.py --no-show
+  python src/test/test_fam.py --signal bpsk_noise --snr-db 5 --no-show
+  python src/test/test_fam.py --segment-samples 131072 --fam-merge max --no-show
+  python src/test/test_fam.py --full-fam --num-symbols 2000 --no-show
+"""
+
 import argparse
 import sys
 from pathlib import Path
@@ -11,7 +20,7 @@ sys.path.insert(0, str(REPO_ROOT))
 from src.utils.fam import fam_scf_points
 
 SUPPORTED_SIGNAL_TYPES = ("bpsk", "bpsk_noise", "noise")
-SUPPORTED_FAM_MERGE_MODES = ("mean", "max", "sum")
+SUPPORTED_FAM_MERGE_MODES = ("mean", "max")
 FAM_NFFT = 64
 FAM_HOP = 64
 
@@ -158,12 +167,12 @@ def points_to_grid(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """将 FAM 点估计聚合成二维 |SCF| 网格。"""
 
-    # Step 1: 将每个 FAM 点的 f 坐标映射到二维网格的列索引。
+    # Step 1: 将每个 FAM 点的 f 坐标映射到二维网格的列索引{0,1,...,f_bins-1}。
     f_idx = np.floor(
         (f - f_range[0]) / (f_range[1] - f_range[0]) * (f_bins - 1)
     ).astype(int)
 
-    # Step 1: 将每个 FAM 点的 alpha 坐标映射到二维网格的行索引。
+    # Step 1: 将每个 FAM 点的 alpha 坐标映射到二维网格的行索引{0,1,...,alpha_bins-1}。
     a_idx = np.floor(
         (alpha - alpha_range[0])
         / (alpha_range[1] - alpha_range[0])
@@ -262,7 +271,7 @@ def compute_fam_grid_segmented(
     f_range: tuple[float, float] = (-0.5, 0.5),
     alpha_range: tuple[float, float] = (-1.0, 1.0),
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """对长 IQ 序列做分段 FAM，并在二维 |SCF| 网格上融合。"""
+    """对长 IQ 序列做分段 FAM，尾段补零后在二维 |SCF| 网格上融合。"""
 
     if segment_samples <= 0:
         raise ValueError("segment_samples must be positive")
@@ -280,17 +289,15 @@ def compute_fam_grid_segmented(
     merged = np.zeros((alpha_bins, f_bins), dtype=float)
     segment_count = 0
 
-    if len(x) <= segment_samples:
-        segment_starts = [0]
-    else:
-        last_full_start = len(x) - segment_samples
-        segment_starts = range(0, last_full_start + 1, segment_hop_samples)
+    segment_starts = range(0, len(x), segment_hop_samples)
 
-    # Step 1: 按固定长度和步长遍历 IQ；跳过不足完整长度的尾段，避免补零尾段引入边界泄漏。
+    # Step 1: 按固定长度和步长遍历 IQ；不足完整长度的尾段补零到固定片段长度。
     for start in segment_starts:
         segment = x[start : start + segment_samples]
         if len(segment) == 0:
             continue
+        if len(segment) < segment_samples:
+            segment = np.pad(segment, (0, segment_samples - len(segment)))
 
         # Step 2: 每个片段独立做 FAM 点估计，控制单次第二阶段 FFT 的长度。
         result = fam_scf_points(
@@ -324,7 +331,7 @@ def compute_fam_grid_segmented(
     if segment_count == 0:
         raise ValueError("input signal is empty")
 
-    # Step 5: mean 模式需要除以片段数；sum/max 模式直接使用融合结果。
+    # Step 5: mean 模式需要除以片段数；max 模式直接使用融合结果。
     if merge == "mean":
         merged = merged / segment_count
 
@@ -508,15 +515,15 @@ def parse_args():
         help="Number of generated symbols. With 10x oversampling, 1000000 symbols produce 10000000 IQ samples.",
     )
     parser.add_argument(
-        "--segmented-fam",
+        "--full-fam",
         action="store_true",
-        help="Compute FAM by segmenting the IQ sequence and merging |SCF| grids.",
+        help="Compute FAM on the full IQ sequence instead of segmented FAM.",
     )
     parser.add_argument(
         "--segment-samples",
         type=int,
         default=DEFAULT_SEGMENT_SAMPLES,
-        help="Number of IQ samples per FAM segment when --segmented-fam is used.",
+        help="Number of IQ samples per FAM segment.",
     )
     parser.add_argument(
         "--segment-hop-samples",
@@ -528,7 +535,7 @@ def parse_args():
         "--fam-merge",
         choices=SUPPORTED_FAM_MERGE_MODES,
         default="mean",
-        help="How to merge segmented FAM grids: mean, max, or sum.",
+        help="How to merge segmented FAM grids: mean or max.",
     )
     parser.add_argument(
         "--no-show",
@@ -547,15 +554,15 @@ if __name__ == "__main__":
         samples_per_symbol=samples_per_symbol,
         snr_db=args.snr_db,
     )
-    if args.segmented_fam:
+    if args.full_fam:
+        image, f_axis, alpha_axis = compute_fam_grid(x)
+    else:
         image, f_axis, alpha_axis = compute_fam_grid_segmented(
             x,
             segment_samples=args.segment_samples,
             segment_hop_samples=args.segment_hop_samples,
             merge=args.fam_merge,
         )
-    else:
-        image, f_axis, alpha_axis = compute_fam_grid(x)
 
     time_path, frequency_path = plot_signal_time_frequency(x, show=not args.no_show)
     grid_path = plot_fam_cpp(image, f_axis, alpha_axis, show=not args.no_show)

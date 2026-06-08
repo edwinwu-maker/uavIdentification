@@ -4,12 +4,18 @@ Project guidance for coding agents working in this repository.
 
 ## Runtime Environment
 
-- Use the conda environment `droneRFa` for project commands.
-- Before running Python scripts, tests, or dependency checks, activate it:
+- On Windows, use the conda environment `droneRFa` for project commands.
+- Before running Python scripts, tests, or dependency checks on Windows, activate it:
   ```powershell
   conda activate droneRFa
   ```
-- Prefer commands that run from the repository root: `E:\code\python\droneRFa`.
+- On macOS, use the local virtual environment at `~/Desktop/venv`:
+  ```bash
+  ~/Desktop/venv/bin/python <script-or-command>
+  ```
+- Prefer commands that run from the repository root:
+  - Windows: `E:\code\python\droneRFa`
+  - macOS: `~/Desktop/code/uavIdentification`
 
 ## Working Style
 
@@ -32,6 +38,7 @@ Project guidance for coding agents working in this repository.
 - For bug fixes, reproduce the issue when practical, then verify the fix.
 - For new behavior, add or run focused tests when the repository supports it.
 - Run verification inside the `droneRFa` conda environment.
+- On macOS, run verification with `~/Desktop/venv`.
 - If verification cannot be run, explain exactly why.
 
 ## Planning
