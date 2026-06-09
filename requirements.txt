@@ -1,0 +1,24 @@
+# Core numeric and scientific stack
+numpy
+scipy
+h5py
+
+# PyTorch
+# Install torch/torchvision separately from the official selector:
+# https://pytorch.org/get-started/locally/
+#
+# Example CUDA install from the official PyTorch index:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+#
+# Pick the CUDA/CPU/MPS command that matches your machine before installing
+# the remaining project dependencies with this requirements file.
+
+# Training, metrics, and progress display
+scikit-learn
+tqdm
+
+# Visualization
+matplotlib
+
+# Test runner used by the project environment
+pytest
