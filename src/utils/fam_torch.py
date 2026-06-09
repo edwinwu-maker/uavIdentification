@@ -1,14 +1,14 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Optional
 
 import numpy as np
 import torch
 
-from src.utils.fam import FAMResult
 
 # 声明模块的公开接口，IDE 和静态检查工具依此识别公开 API。
-__all__ = ["fam_scf_points_torch"]
+__all__ = ["fam_scf_grid_torch"]
 
 
 def _resolve_device(device: str | torch.device) -> torch.device:
@@ -28,7 +28,13 @@ def _real_dtype(dtype: torch.dtype) -> torch.dtype:
     raise ValueError("dtype must be torch.complex64 or torch.complex128")
 
 
-def _window(name: str, nfft: int, *, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+def _window(
+    name: str,
+    nfft: int,
+    *,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> torch.Tensor:
     name = name.lower()
     if name in {"hamming", "hamm"}:
         # Match NumPy's np.hamming/np.hanning definitions used by the CPU FAM path.
@@ -102,28 +108,19 @@ def _channelize(
     return x_tilde, freqs, window_energy
 
 
-def fam_scf_points_torch(
+def _iter_fam_point_batches_torch(
     x: np.ndarray,
     *,
-    nfft: int = 256,
-    hop: int = 64,
-    n_blocks: Optional[int] = None,
-    window: str = "hamming",
-    keep_principal_domain: bool = True,
-    normalize: bool = True,
-    device: str | torch.device = "cuda",
-    dtype: torch.dtype = torch.complex64,
-    pair_chunk_size: int = 8192,
-) -> FAMResult:
-    """Estimate sparse FAM SCF points with batched PyTorch FFTs.
-
-    Arguments:
-        pair_chunk_size: Number of (k, l) channel pairs to process in each batch. Adjust based on available accelerator memory.
-
-    The public result mirrors ``fam_scf_points``: NumPy arrays are returned so
-    existing plotting and gridding code can consume the PyTorch implementation.
-    """
-
+    nfft: int,
+    hop: int,
+    n_blocks: Optional[int],
+    window: str,
+    keep_principal_domain: bool,
+    normalize: bool,
+    device: str | torch.device,
+    dtype: torch.dtype,
+    pair_chunk_size: int,
+) -> Iterator[tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
     if pair_chunk_size <= 0:
         raise ValueError("pair_chunk_size must be positive")
 
@@ -158,19 +155,17 @@ def fam_scf_points_torch(
     k_all = k_all.reshape(-1)
     l_all = l_all.reshape(-1)
 
-    # Keep the same Nyquist-bin convention as fam_scf_points to avoid asymmetric
+    # Keep the same Nyquist-bin convention as the CPU FAM path to avoid asymmetric
     # edge artifacts near the principal-domain boundary.
     # 舍去频率为-0.5的点，避免不对称。
     nyquist = torch.tensor(-0.5, device=resolved_device, dtype=real_dtype)
-    valid = (~torch.isclose(freqs[k_all], nyquist)) & (~torch.isclose(freqs[l_all], nyquist))
+    valid = (~torch.isclose(freqs[k_all], nyquist)) & (
+        ~torch.isclose(freqs[l_all], nyquist)
+    )
     k_all = k_all[valid]
     l_all = l_all[valid]
 
     scale = p_count * window_energy if normalize else 1.0
-    f_chunks: list[torch.Tensor] = []
-    alpha_chunks: list[torch.Tensor] = []
-    value_chunks: list[torch.Tensor] = []
-
     for start in range(0, k_all.numel(), pair_chunk_size):
         k = k_all[start : start + pair_chunk_size]
         l = l_all[start : start + pair_chunk_size]
@@ -187,28 +182,82 @@ def fam_scf_points_torch(
         alpha = (fk - fl)[:, None] + beta[None, :]
         f = f_value[:, None].expand_as(alpha)
 
+        # f and alpha have shape [current_pair_count, p_count]: 当前通道对批次的
+        # z has shape [current_pair_count, p_count]: 同一网格上的复数 SCF 估计值。
+        # current_pair_count <= pair_chunk_size。
+        # f[mask], alpha[mask], and z[mask] have shape [kept_point_count]:
+        # principal domain 内保留下来的展平 FAM 点。
         if keep_principal_domain:
             mask = torch.abs(f) + 0.5 * torch.abs(alpha) < 0.5
             if not torch.any(mask):
                 continue
-            f_chunks.append(f[mask])
-            alpha_chunks.append(alpha[mask])
-            value_chunks.append(z[mask])
+            yield f[mask], alpha[mask], z[mask]
         else:
-            f_chunks.append(f.reshape(-1))
-            alpha_chunks.append(alpha.reshape(-1))
-            value_chunks.append(z.reshape(-1))
+            yield f.reshape(-1), alpha.reshape(-1), z.reshape(-1)
 
-    if not f_chunks:
-        value_dtype = np.complex128 if dtype == torch.complex128 else np.complex64
-        return FAMResult(
-            f=np.empty(0, dtype=float),
-            alpha=np.empty(0, dtype=float),
-            value=np.empty(0, dtype=value_dtype),
+
+def fam_scf_grid_torch(
+    x: np.ndarray,
+    *,
+    nfft: int = 256,
+    hop: int = 64,
+    n_blocks: Optional[int] = None,
+    window: str = "hamming",
+    keep_principal_domain: bool = True,
+    normalize: bool = True,
+    device: str | torch.device = "cuda",
+    dtype: torch.dtype = torch.complex64,
+    pair_chunk_size: int = 8192,
+    f_bins: int = 257,
+    alpha_bins: int = 513,
+    f_range: tuple[float, float] = (-0.5, 0.5),
+    alpha_range: tuple[float, float] = (-1.0, 1.0),
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Estimate FAM and aggregate |SCF| directly into a grid on the torch device."""
+
+    resolved_device = _resolve_device(device)
+    real_dtype = _real_dtype(dtype)
+    grid_size = alpha_bins * f_bins
+    image_sum = torch.zeros(grid_size, device=resolved_device, dtype=real_dtype)
+    image_count = torch.zeros(grid_size, device=resolved_device, dtype=real_dtype)
+    f_min, f_max = f_range
+    alpha_min, alpha_max = alpha_range
+
+    for f, alpha, value in _iter_fam_point_batches_torch(
+        x,
+        nfft=nfft,
+        hop=hop,
+        n_blocks=n_blocks,
+        window=window,
+        keep_principal_domain=keep_principal_domain,
+        normalize=True,
+        device=resolved_device,
+        dtype=dtype,
+        pair_chunk_size=pair_chunk_size,
+    ):
+        f_idx = torch.floor((f - f_min) / (f_max - f_min) * (f_bins - 1)).to(
+            torch.long
         )
+        a_idx = torch.floor(
+            (alpha - alpha_min) / (alpha_max - alpha_min) * (alpha_bins - 1)
+        ).to(torch.long)
+        mask = (f_idx >= 0) & (f_idx < f_bins) & (a_idx >= 0) & (a_idx < alpha_bins)
+        if not torch.any(mask):
+            continue
 
-    return FAMResult(
-        f=torch.cat(f_chunks).detach().cpu().numpy(),
-        alpha=torch.cat(alpha_chunks).detach().cpu().numpy(),
-        value=torch.cat(value_chunks).detach().cpu().numpy(),
-    )
+        flat_idx = (a_idx[mask] * f_bins + f_idx[mask]).reshape(-1)
+        mag = torch.abs(value[mask]).to(real_dtype).reshape(-1)
+        image_sum.scatter_add_(0, flat_idx, mag)
+        image_count.scatter_add_(0, flat_idx, torch.ones_like(mag))
+
+    image = torch.zeros_like(image_sum)
+    count_mask = image_count > 0
+    image[count_mask] = image_sum[count_mask] / image_count[count_mask]
+    image = image.reshape(alpha_bins, f_bins)
+
+    if normalize and torch.max(image) > 0:
+        image = image / torch.max(image)
+
+    f_axis = np.linspace(f_range[0], f_range[1], f_bins)
+    alpha_axis = np.linspace(alpha_range[0], alpha_range[1], alpha_bins)
+    return image.detach().cpu().numpy(), f_axis, alpha_axis

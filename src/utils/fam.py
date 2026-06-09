@@ -1,28 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Iterator
 from typing import Optional
 
 import numpy as np
 
 # 声明模块的公开接口
-__all__ = ["FAMResult", "fam_scf_points"]
-
-@dataclass
-class FAMResult:
-    """FAM 输出点估计。
-
-    f:
-        spectral frequency 坐标。默认 normalized frequency，单位 cycles/sample。
-    alpha:
-        cycle frequency 坐标。默认 normalized frequency，单位 cycles/sample。
-    value:
-        对应的 complex SCF 估计值。
-    """
-
-    f: np.ndarray
-    alpha: np.ndarray
-    value: np.ndarray
+__all__ = ["fam_scf_grid"]
 
 
 def _make_blocks(
@@ -132,42 +116,16 @@ def _principal_domain_mask(f: np.ndarray, alpha: np.ndarray) -> np.ndarray:
     return np.abs(f) + 0.5 * np.abs(alpha) < 0.5
 
 
-def fam_scf_points(
+def _iter_fam_point_batches(
     x: np.ndarray,
     *,
-    nfft: int = 256,
-    hop: int = 64,
-    n_blocks: Optional[int] = None,
-    window: str = "hamming",
-    keep_principal_domain: bool = True,
-    normalize: bool = True,
-) -> FAMResult:
-    """按 FAM Step 1-5 估计 SCF 点。
-
-    Parameters
-    ----------
-    x:
-        输入 complex IQ 序列。
-    nfft:
-        N prime，channelizer 短时 FFT 点数。
-    hop:
-        L，data block hop size。
-    n_blocks:
-        P，使用的 data block 数。若为 None，则由输入长度自动决定。
-    window:
-        channelizer tapering window，支持 "hamming"、"hann"、"rect"。
-    keep_principal_domain:
-        是否丢弃 non-conjugate SCF principal domain 之外的点。
-    normalize:
-        若为 True，谱值除以 P * window_energy。函数始终使用 normalized
-        frequency；
-
-    Returns
-    -------
-    FAMResult:
-        一组三元点估计 (f, alpha, value)。
-    """
-
+    nfft: int,
+    hop: int,
+    n_blocks: Optional[int],
+    window: str,
+    keep_principal_domain: bool,
+    normalize: bool,
+) -> Iterator[tuple[np.ndarray, np.ndarray, np.ndarray]]:
     x_tilde, freqs, window_energy = _channelize(
         x,
         nfft=nfft,
@@ -182,10 +140,6 @@ def fam_scf_points(
     beta = np.fft.fftshift(beta)
 
     channel_pairs = ((k, l) for k in range(nfft) for l in range(nfft))
-
-    f_chunks: list[np.ndarray] = []
-    alpha_chunks: list[np.ndarray] = []
-    value_chunks: list[np.ndarray] = []
 
     scale = 1.0
     if normalize:
@@ -226,19 +180,59 @@ def fam_scf_points(
             alpha = alpha[mask]
             z = z[mask]
 
-        f_chunks.append(f)
-        alpha_chunks.append(alpha)
-        value_chunks.append(z)
+        yield f, alpha, z
 
-    if not f_chunks:
-        return FAMResult(
-            f=np.empty(0, dtype=float),
-            alpha=np.empty(0, dtype=float),
-            value=np.empty(0, dtype=np.complex128),
+
+def fam_scf_grid(
+    x: np.ndarray,
+    *,
+    nfft: int = 256,
+    hop: int = 64,
+    n_blocks: Optional[int] = None,
+    window: str = "hamming",
+    keep_principal_domain: bool = True,
+    normalize: bool = True,
+    f_bins: int = 257,
+    alpha_bins: int = 513,
+    f_range: tuple[float, float] = (-0.5, 0.5),
+    alpha_range: tuple[float, float] = (-1.0, 1.0),
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Estimate FAM and aggregate |SCF| directly into a grid."""
+
+    image_sum = np.zeros((alpha_bins, f_bins), dtype=float)
+    image_count = np.zeros((alpha_bins, f_bins), dtype=int)
+    f_min, f_max = f_range
+    alpha_min, alpha_max = alpha_range
+
+    for f, alpha, value in _iter_fam_point_batches(
+        x,
+        nfft=nfft,
+        hop=hop,
+        n_blocks=n_blocks,
+        window=window,
+        keep_principal_domain=keep_principal_domain,
+        normalize=True,
+    ):
+        f_idx = np.floor((f - f_min) / (f_max - f_min) * (f_bins - 1)).astype(int)
+        a_idx = np.floor(
+            (alpha - alpha_min) / (alpha_max - alpha_min) * (alpha_bins - 1)
+        ).astype(int)
+        valid = (
+            (f_idx >= 0)
+            & (f_idx < f_bins)
+            & (a_idx >= 0)
+            & (a_idx < alpha_bins)
         )
+        mag = np.abs(value)
+        np.add.at(image_sum, (a_idx[valid], f_idx[valid]), mag[valid])
+        np.add.at(image_count, (a_idx[valid], f_idx[valid]), 1)
 
-    return FAMResult(
-        f=np.concatenate(f_chunks),
-        alpha=np.concatenate(alpha_chunks),
-        value=np.concatenate(value_chunks),
-    )
+    image = np.zeros((alpha_bins, f_bins), dtype=float)
+    np.divide(image_sum, image_count, out=image, where=image_count > 0)
+
+    if normalize and image.max() > 0:
+        image = image / image.max()
+
+    f_axis = np.linspace(f_range[0], f_range[1], f_bins)
+    alpha_axis = np.linspace(alpha_range[0], alpha_range[1], alpha_bins)
+    return image, f_axis, alpha_axis

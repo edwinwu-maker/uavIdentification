@@ -6,59 +6,13 @@ from collections.abc import Iterator
 
 import numpy as np
 
-from src.utils.fam import fam_scf_points
-from src.utils.fam_torch import fam_scf_points_torch
+from src.utils.fam import fam_scf_grid
+from src.utils.fam_torch import fam_scf_grid_torch
 
 SUPPORTED_FAM_MERGE_MODES = ("mean", "max")
 FAM_NFFT = 64
 FAM_HOP = 64
 DEFAULT_SEGMENT_SAMPLES = 262144
-
-
-def points_to_grid(
-    f: np.ndarray,
-    alpha: np.ndarray,
-    value: np.ndarray,
-    *,
-    f_bins: int = 257,
-    alpha_bins: int = 513,
-    f_range: tuple[float, float] = (-0.5, 0.5),
-    alpha_range: tuple[float, float] = (-1.0, 1.0),
-    normalize: bool = True,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Aggregate sparse FAM points into a drawable 2D |SCF| grid."""
-
-    f_idx = np.floor(
-        (f - f_range[0]) / (f_range[1] - f_range[0]) * (f_bins - 1)
-    ).astype(int)
-    a_idx = np.floor(
-        (alpha - alpha_range[0])
-        / (alpha_range[1] - alpha_range[0])
-        * (alpha_bins - 1)
-    ).astype(int)
-
-    valid = (
-        (f_idx >= 0)
-        & (f_idx < f_bins)
-        & (a_idx >= 0)
-        & (a_idx < alpha_bins)
-    )
-    mag = np.abs(value)
-    image_sum = np.zeros((alpha_bins, f_bins), dtype=float)
-    image_count = np.zeros((alpha_bins, f_bins), dtype=int)
-
-    np.add.at(image_sum, (a_idx[valid], f_idx[valid]), mag[valid])
-    np.add.at(image_count, (a_idx[valid], f_idx[valid]), 1)
-
-    image = np.zeros((alpha_bins, f_bins), dtype=float)
-    np.divide(image_sum, image_count, out=image, where=image_count > 0)
-
-    if normalize and image.max() > 0:
-        image = image / image.max()
-
-    f_axis = np.linspace(f_range[0], f_range[1], f_bins)
-    alpha_axis = np.linspace(alpha_range[0], alpha_range[1], alpha_bins)
-    return image, f_axis, alpha_axis
 
 
 def compute_fam_grid(
@@ -74,18 +28,10 @@ def compute_fam_grid(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Compute FAM points and aggregate them into a normalized |SCF| grid."""
 
-    if device.lower().startswith("cpu"):
-        result = fam_scf_points(
-            x,
-            nfft=FAM_NFFT,
-            hop=FAM_HOP,
-            window="hann",
-            keep_principal_domain=True,
-        )
-    else:
-        # Non-CPU devices use the PyTorch implementation so callers can pass
-        # explicit devices such as "cuda", "cuda:1", or "mps".
-        result = fam_scf_points_torch(
+    if not device.lower().startswith("cpu"):
+        # GPU/MPS paths aggregate on the torch device to avoid materializing and
+        # copying all sparse FAM points before gridding.
+        return fam_scf_grid_torch(
             x,
             nfft=FAM_NFFT,
             hop=FAM_HOP,
@@ -93,11 +39,19 @@ def compute_fam_grid(
             keep_principal_domain=True,
             device=device,
             pair_chunk_size=pair_chunk_size,
+            f_bins=f_bins,
+            alpha_bins=alpha_bins,
+            f_range=f_range,
+            alpha_range=alpha_range,
+            normalize=normalize,
         )
-    return points_to_grid(
-        result.f,
-        result.alpha,
-        result.value,
+
+    return fam_scf_grid(
+        x,
+        nfft=FAM_NFFT,
+        hop=FAM_HOP,
+        window="hann",
+        keep_principal_domain=True,
         f_bins=f_bins,
         alpha_bins=alpha_bins,
         f_range=f_range,
