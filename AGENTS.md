@@ -13,6 +13,7 @@ Project guidance for coding agents working in this repository.
   ```bash
   ~/Desktop/venv/bin/python <script-or-command>
   ```
+- On macOS, GPU/MPS availability checks may return false inside the Codex default sandbox even when the same `~/Desktop/venv` environment reports MPS as available in the user's terminal. For MPS/Metal validation, prefer the user's terminal result or run the check outside the sandbox when approval is available.
 - Prefer commands that run from the repository root:
   - Windows: `E:\code\python\droneRFa`
   - macOS: `~/Desktop/code/uavIdentification`

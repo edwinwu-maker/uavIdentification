@@ -8,12 +8,15 @@ import torch
 from src.utils.fam import FAMResult
 
 # 声明模块的公开接口，IDE 和静态检查工具依此识别公开 API。
-__all__ = ["fam_scf_points_gpu"]
+__all__ = ["fam_scf_points_torch"]
+
 
 def _resolve_device(device: str | torch.device) -> torch.device:
     resolved = torch.device(device)
     if resolved.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA is not available")
+    if resolved.type == "mps" and not torch.backends.mps.is_available():
+        raise RuntimeError("MPS is not available")
     return resolved
 
 
@@ -99,7 +102,7 @@ def _channelize(
     return x_tilde, freqs, window_energy
 
 
-def fam_scf_points_gpu(
+def fam_scf_points_torch(
     x: np.ndarray,
     *,
     nfft: int = 256,
@@ -115,10 +118,10 @@ def fam_scf_points_gpu(
     """Estimate sparse FAM SCF points with batched PyTorch FFTs.
 
     Arguments:
-        pair_chunk_size: Number of (k, l) channel pairs to process in each batch. Adjust based on available GPU memory;
+        pair_chunk_size: Number of (k, l) channel pairs to process in each batch. Adjust based on available accelerator memory.
 
     The public result mirrors ``fam_scf_points``: NumPy arrays are returned so
-    existing plotting and gridding code can consume the GPU implementation.
+    existing plotting and gridding code can consume the PyTorch implementation.
     """
 
     if pair_chunk_size <= 0:
@@ -141,19 +144,17 @@ def fam_scf_points_gpu(
     beta = torch.fft.fftfreq(p_count, d=hop, device=resolved_device, dtype=real_dtype)
     beta = torch.fft.fftshift(beta)
 
-    channel = torch.arange(nfft, device=resolved_device)    # tensor([0, 1,..., nfft-1], device='cuda:0')
+    channel = torch.arange(nfft, device=resolved_device)
     """
         k_all =                             l_all =
-    tensor([                            tensor([                                                    
+    tensor([                            tensor([
         [0, 0,..., 0],                      [0, 1,..., nfft-1],
-        [1, 1,..., 1],                      [0, 1,..., nfft-1], 
-        ...,                                ...,    
+        [1, 1,..., 1],                      [0, 1,..., nfft-1],
+        ...,                                ...,
         [nfft-1, nfft-1,..., nfft-1]        [0, 1,..., nfft-1],
     ])                                  ])
     """
     k_all, l_all = torch.meshgrid(channel, channel, indexing="ij")
-    # k_all = tensor([0, 0,..., 0, 1, 1,..., 1,..., nfft-1, nfft-1,..., nfft-1], device='cuda:0')
-    # l_all = tensor([0, 1,..., nfft-1, 0, 1,..., nfft-1,..., 0, 1,..., nfft-1], device='cuda:0')
     k_all = k_all.reshape(-1)
     l_all = l_all.reshape(-1)
 
@@ -170,38 +171,26 @@ def fam_scf_points_gpu(
     alpha_chunks: list[torch.Tensor] = []
     value_chunks: list[torch.Tensor] = []
 
-    # start = [0, pair_chunk_size, 2*pair_chunk_size,...]
     for start in range(0, k_all.numel(), pair_chunk_size):
-        # k 和 l 是长度为 B（≤ pair_chunk_size）的 1 维整数张量，值在 [0, nfft-1] 之间
         k = k_all[start : start + pair_chunk_size]
         l = l_all[start : start + pair_chunk_size]
-        # fk 和 fl 是长度为 B（≤ pair_chunk_size）的 1 维整数张量， 值在 (-0.5, 0.5) 之间
         fk = freqs[k]
         fl = freqs[l]
 
-        # x_tilde[:, k]->形状 [P, B], x_tilde[:, l]->形状 [P, B], product->形状[P, B], *—>逐元素相乘
         product = x_tilde[:, k] * torch.conj(x_tilde[:, l])
-        # transforms of length P.
         z = torch.fft.fft(product.T, dim=1)
         z = torch.fft.fftshift(z, dim=1)
         if normalize:
             z = z / scale
 
-        # f_value 是 [B] 形状的浮点张量，值域 (-0.5, 0.5)
-        f_value = 0.5 * (fk + fl)   
-        # alpha 是 [B, P] 形状的浮点张量，dtype 为 real_dtype，值域 (-1.5, 1.5)
-        # 由 (fk - fl)[:, None] + beta[None, :] 广播得到
+        f_value = 0.5 * (fk + fl)
         alpha = (fk - fl)[:, None] + beta[None, :]
-        # f 是 [B, P] 形状的浮点张量，值域 (-0.5, 0.5)
         f = f_value[:, None].expand_as(alpha)
 
         if keep_principal_domain:
-            # mask 是 [B, P] 形状的bool张量
             mask = torch.abs(f) + 0.5 * torch.abs(alpha) < 0.5
             if not torch.any(mask):
                 continue
-            # f[mask] 布尔索引取出 mask 为 True 位置的 f 值
-            # f_chunks 每次循环将一个 chunk 的有效 f 值 append 进去
             f_chunks.append(f[mask])
             alpha_chunks.append(alpha[mask])
             value_chunks.append(z[mask])

@@ -4,6 +4,8 @@ Usage:
   python src/scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa
   python src/scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --output-dir ~/Desktop/dataset/droneRFa/cpp_h5
   python src/scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --max-files 1 --max-samples-per-file 1
+  python src/scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --device mps
+  python src/scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --device cuda:0 --pair-chunk-size 4096
 """
 
 import argparse
@@ -106,6 +108,8 @@ def compute_cpp_pair(
     fam_merge: str,
     f_bins: int,
     alpha_bins: int,
+    device: str,
+    pair_chunk_size: int,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Compute one dual-channel CPP matrix and its axes from RF0/RF1 IQ arrays.
 
@@ -120,6 +124,8 @@ def compute_cpp_pair(
         merge=fam_merge,
         f_bins=f_bins,
         alpha_bins=alpha_bins,
+        device=device,
+        pair_chunk_size=pair_chunk_size,
     )
     image1, _, _ = compute_fam_grid_segmented(
         ch1,
@@ -128,6 +134,8 @@ def compute_cpp_pair(
         merge=fam_merge,
         f_bins=f_bins,
         alpha_bins=alpha_bins,
+        device=device,
+        pair_chunk_size=pair_chunk_size,
     )
     cpp = np.stack([image0, image1], axis=0).astype(np.float32)
     return cpp, f_axis.astype(np.float32), alpha_axis.astype(np.float32)
@@ -143,6 +151,8 @@ def process_one_mat(
     fam_merge: str,
     f_bins: int,
     alpha_bins: int,
+    device: str,
+    pair_chunk_size: int,
     max_samples_per_file: int | None,
 ) -> tuple[str, int]:
     """Convert one DroneRFa .mat file into one CPP .h5 file.
@@ -188,6 +198,8 @@ def process_one_mat(
                     fam_merge=fam_merge,
                     f_bins=f_bins,
                     alpha_bins=alpha_bins,
+                    device=device,
+                    pair_chunk_size=pair_chunk_size,
                 )
                 h5f["cpp"][sample_idx] = cpp
                 h5f["labels"][sample_idx] = label
@@ -219,6 +231,10 @@ def parse_args() -> argparse.Namespace:
                         help="Number of frequency bins in the CPP grid")
     parser.add_argument("--alpha-bins", type=int, default=ALPHA_BINS,
                         help="Number of cyclic-frequency bins in the CPP grid")
+    parser.add_argument("--device", type=str, default="cpu",
+                        help='FAM compute device: "cpu", "cuda", "cuda:0", or "mps"')
+    parser.add_argument("--pair-chunk-size", type=int, default=8192,
+                        help="Number of (k, l) channel pairs per torch batch")
     parser.add_argument("--max-files", type=int, default=None,
                         help="Process at most this many .mat files")
     parser.add_argument("--max-samples-per-file", type=int, default=None,
@@ -252,6 +268,8 @@ def main() -> None:
             fam_merge=args.fam_merge,
             f_bins=args.f_bins,
             alpha_bins=args.alpha_bins,
+            device=args.device,
+            pair_chunk_size=args.pair_chunk_size,
             max_samples_per_file=args.max_samples_per_file,
         )
         total_samples += num_samples

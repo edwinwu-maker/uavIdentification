@@ -7,7 +7,7 @@ from collections.abc import Iterator
 import numpy as np
 
 from src.utils.fam import fam_scf_points
-from src.utils.fam_gpu import fam_scf_points_gpu
+from src.utils.fam_torch import fam_scf_points_torch
 
 SUPPORTED_FAM_MERGE_MODES = ("mean", "max")
 FAM_NFFT = 64
@@ -84,8 +84,8 @@ def compute_fam_grid(
         )
     else:
         # Non-CPU devices use the PyTorch implementation so callers can pass
-        # explicit devices such as "cuda" or "cuda:1".
-        result = fam_scf_points_gpu(
+        # explicit devices such as "cuda", "cuda:1", or "mps".
+        result = fam_scf_points_torch(
             x,
             nfft=FAM_NFFT,
             hop=FAM_HOP,
