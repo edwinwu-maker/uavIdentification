@@ -24,6 +24,18 @@ SAMPLE_LENGTH = 1_000_000
 SAMPLE_DURATION = SAMPLE_LENGTH / FS
 
 
+def _default_data_dir() -> str:
+    if os.name == "nt":
+        return "E:/dataSet/DroneRFa/stft_h5"
+    if sys.platform == "darwin":
+        return os.path.expanduser("~/Desktop/dataset/droneRFa/stft_h5")
+    return "/mnt/data/wurixin/DroneRFa/stft_h5"
+
+
+def _default_save_root() -> str:
+    return os.path.join(_default_data_dir(), "stft_picture")
+
+
 def plot_dual_channel(stft_sample, save_path, sample_idx, label=None):
     """Plot a dual-channel spectrogram and save as PNG.
 
@@ -104,12 +116,8 @@ def process_one_h5(h5_path, save_root):
 
 
 if __name__ == "__main__":
-    if os.name == "nt":
-        DATA_DIR = "E:/dataSet/DroneRFa"
-        SAVE_ROOT = "E:/dataSet/DroneRFa/picture"
-    else:
-        DATA_DIR = "/mnt/data/wurixin/DroneRFa"
-        SAVE_ROOT = "/mnt/data/wurixin/DroneRFa/picture"
+    DATA_DIR = _default_data_dir()
+    SAVE_ROOT = _default_save_root()
     os.makedirs(SAVE_ROOT, exist_ok=True)
 
     h5_files = [

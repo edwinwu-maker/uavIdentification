@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-SUPPORTED_SIGNAL_TYPES = ("bpsk", "bpsk_noise", "noise")
+SUPPORTED_SIGNAL_TYPES = ("bpsk", "bpsk_noise", "ofdm", "ofdm_noise", "noise")
 DEFAULT_SAMPLES_PER_SYMBOL = 10
 
 
@@ -48,6 +48,53 @@ def generate_awgn(
     return noise.astype(np.complex128)
 
 
+def generate_ofdm(
+    *,
+    num_symbols: int = 1024,
+    fft_size: int = 64,
+    num_active_subcarriers: int = 52,
+    cyclic_prefix_len: int = 16,
+    seed: int = 7,
+) -> np.ndarray:
+    """Generate unit-power baseband OFDM IQ with QPSK active subcarriers."""
+
+    if num_active_subcarriers >= fft_size:
+        raise ValueError("num_active_subcarriers must be smaller than fft_size")
+    if num_active_subcarriers % 2 != 0:
+        raise ValueError("num_active_subcarriers must be even to exclude DC")
+    if cyclic_prefix_len >= fft_size:
+        raise ValueError("cyclic_prefix_len must be smaller than fft_size")
+
+    rng = np.random.default_rng(seed)
+    qpsk = (
+        2 * rng.integers(0, 2, size=(num_symbols, num_active_subcarriers)) - 1
+    ) + 1j * (
+        2 * rng.integers(0, 2, size=(num_symbols, num_active_subcarriers)) - 1
+    )
+    qpsk = qpsk / np.sqrt(2.0)
+
+    centered_bins = np.zeros((num_symbols, fft_size), dtype=np.complex128)
+    half_active = num_active_subcarriers // 2
+    dc_index = fft_size // 2
+    active_bins = np.r_[
+        dc_index - half_active : dc_index,
+        dc_index + 1 : dc_index + half_active + 1,
+    ]
+    centered_bins[:, active_bins] = qpsk
+
+    frequency_bins = np.fft.ifftshift(centered_bins, axes=1)
+    time_symbols = np.fft.ifft(frequency_bins, axis=1, norm="ortho")
+    cyclic_prefix = (
+        time_symbols[:, -cyclic_prefix_len:]
+        if cyclic_prefix_len > 0
+        else time_symbols[:, :0]
+    )
+    x = np.concatenate([cyclic_prefix, time_symbols], axis=1).reshape(-1)
+
+    power = float(np.mean(np.abs(x) ** 2))
+    return (x / np.sqrt(power)).astype(np.complex128)
+
+
 def add_awgn_for_snr(
     x: np.ndarray,
     *,
@@ -85,6 +132,11 @@ def generate_signal(
             seed=seed,
         )
         return add_awgn_for_snr(bpsk, snr_db=snr_db, seed=seed + 1)
+    if signal_type == "ofdm":
+        return generate_ofdm(num_symbols=num_symbols, seed=seed)
+    if signal_type == "ofdm_noise":
+        ofdm = generate_ofdm(num_symbols=num_symbols, seed=seed)
+        return add_awgn_for_snr(ofdm, snr_db=snr_db, seed=seed + 1)
     if signal_type == "noise":
         return generate_awgn(
             num_samples=num_symbols * samples_per_symbol,

@@ -63,19 +63,19 @@ def parse_args() -> argparse.Namespace:
         "--signal",
         choices=SUPPORTED_SIGNAL_TYPES,
         default="bpsk",
-        help="Synthetic signal type to generate: bpsk, bpsk_noise, or complex Gaussian white noise.",
+        help="Synthetic signal type to generate: bpsk, bpsk_noise, ofdm, ofdm_noise, or complex Gaussian white noise.",
     )
     parser.add_argument(
         "--snr-db",
         type=float,
         default=10.0,
-        help="SNR in dB for --signal bpsk_noise.",
+        help="SNR in dB for --signal bpsk_noise or ofdm_noise.",
     )
     parser.add_argument(
         "--num-symbols",
         type=int,
         default=200000,
-        help="Number of generated symbols. With 10x oversampling, 1000000 symbols produce 10000000 IQ samples.",
+        help="Number of generated symbols. BPSK uses samples-per-symbol expansion; OFDM uses one FFT block plus cyclic prefix per symbol.",
     )
     parser.add_argument(
         "--full-fam",
