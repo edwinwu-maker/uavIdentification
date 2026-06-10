@@ -12,8 +12,6 @@ import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
 import numpy as np
 import torch
 import torch.nn as nn
@@ -23,7 +21,7 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 
 from src.data.cpp_dataset import CppDataset
 from src.models.resnet import DroneRFaResNet18
-from src.train_cpp import NUM_CLASSES, BATCH_SIZE, TRAIN_RATIO, VAL_RATIO, TEST_RATIO, CHECKPOINT_NAME, _default_data_dir
+from train_cpp import NUM_CLASSES, BATCH_SIZE, TRAIN_RATIO, VAL_RATIO, TEST_RATIO, CHECKPOINT_NAME, _default_data_dir
 from src.utils.logger import logger
 
 CONFUSION_MATRIX_NAME = "cpp_confusion_matrix.npy"
@@ -166,7 +164,7 @@ def test(args):
         model = model.to(device)
 
         if args.model_path is None:
-            args.model_path = os.path.join(str(Path(__file__).resolve().parents[1]), "checkpoints", CHECKPOINT_NAME)
+            args.model_path = os.path.join(str(Path(__file__).resolve().parent), "checkpoints", CHECKPOINT_NAME)
         logger.info("Loading model from %s", args.model_path)
         state_dict = torch.load(args.model_path, map_location=device)
         model.load_state_dict(state_dict)
@@ -186,7 +184,7 @@ def test(args):
         logger.info("=" * 55)
 
         cm = confusion_matrix(labels, preds)
-        checkpoint_dir = os.path.join(str(Path(__file__).resolve().parents[1]), "checkpoints")
+        checkpoint_dir = os.path.join(str(Path(__file__).resolve().parent), "checkpoints")
         os.makedirs(checkpoint_dir, exist_ok=True)
         cm_path = os.path.join(checkpoint_dir, CONFUSION_MATRIX_NAME)
         np.save(cm_path, cm)

@@ -12,7 +12,7 @@ import os
 import multiprocessing
 import tqdm
 
-from utils.logger import logger
+from src.utils.logger import logger
 import h5py
 import numpy as np
 import matplotlib

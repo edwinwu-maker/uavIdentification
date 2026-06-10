@@ -1,13 +1,13 @@
 """
-Single-GPU training for ResNet on pre-computed CPP/FAM .h5 matrices.
+Single-GPU training for ResNet on pre-computed .h5 spectrograms.
 
 Each .h5 file contains:
-  /cpp    (N, 2, alpha_bins, f_bins) float32
+  /stft   (N, 2, 1024, 1024) float32
   /labels (N,) int64
 
 Usage:
-  CUDA_VISIBLE_DEVICES=1 python src/train_cpp.py --batch-size 64
-  python src/train_cpp.py --data-dir ~/Desktop/dataset/droneRFa/cpp_h5
+  CUDA_VISIBLE_DEVICES=1 python src/train_stft.py --batch-size 4
+  python src/train_stft.py --data-dir ~/Desktop/dataset/droneRFa/stft_h5
 """
 
 import argparse
@@ -15,14 +15,12 @@ import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, random_split
 from tqdm import tqdm
 
-from src.data.cpp_dataset import CppDataset
+from src.data.stft_dataset import SpectrogramDataset
 from src.models.resnet import DroneRFaResNet18
 from src.utils.logger import logger
 
@@ -33,7 +31,7 @@ TRAIN_RATIO = 0.6
 VAL_RATIO = 0.2
 TEST_RATIO = 0.2
 PATIENCE = 10
-CHECKPOINT_NAME = "best_cpp_model.pth"
+CHECKPOINT_NAME = "best_stft_model.pth"
 
 
 def _default_device() -> str:
@@ -46,10 +44,10 @@ def _default_device() -> str:
 
 def _default_data_dir() -> str:
     if os.name == "nt":
-        return "E:/dataSet/DroneRFa/cpp_h5"
+        return "E:/dataSet/DroneRFa/stft_h5"
     if sys.platform == "darwin":
-        return os.path.expanduser("~/Desktop/dataset/droneRFa/cpp_h5")
-    return "/mnt/data/wurixin/DroneRFa/cpp_h5"
+        return os.path.expanduser("~/Desktop/dataset/droneRFa/stft_h5")
+    return "/mnt/data/wurixin/DroneRFa/stft_h5"
 
 
 def evaluate(model, dataloader, criterion, device):
@@ -76,9 +74,9 @@ def evaluate(model, dataloader, criterion, device):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Single-GPU training on pre-computed CPP/FAM .h5 matrices")
+    parser = argparse.ArgumentParser(description="Single-GPU training on pre-computed .h5 spectrograms")
     parser.add_argument("--data-dir", type=str, default=None,
-                        help="Directory containing CPP .h5 files")
+                        help="Directory containing .h5 spectrogram files")
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
     parser.add_argument("--lr", type=float, default=LEARNING_RATE)
     parser.add_argument("--num-workers", type=int, default=0,
@@ -103,9 +101,9 @@ def train(args):
     if device.type == "cuda":
         logger.info("GPU: %s", torch.cuda.get_device_name(0))
 
-    dataset = CppDataset(args.data_dir)
+    dataset = SpectrogramDataset(args.data_dir)
     try:
-        logger.info("Loaded %d CPP samples from %d .h5 files in %s",
+        logger.info("Loaded %d spectrograms from %d .h5 files in %s",
                     len(dataset), len(set(s[0] for s in dataset.index)), args.data_dir)
 
         total_size = len(dataset)
@@ -134,7 +132,7 @@ def train(args):
         optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
         criterion = nn.CrossEntropyLoss()
 
-        checkpoint_dir = os.path.join(str(Path(__file__).resolve().parents[1]), "checkpoints")
+        checkpoint_dir = os.path.join(str(Path(__file__).resolve().parent), "checkpoints")
         os.makedirs(checkpoint_dir, exist_ok=True)
 
         best_val_acc = 0.0
@@ -182,7 +180,7 @@ def train(args):
                 best_val_acc = val_acc
                 patience_counter = 0
                 torch.save(model.state_dict(), os.path.join(checkpoint_dir, CHECKPOINT_NAME))
-                logger.info("  -> saved best CPP model (val_acc=%.4f)", val_acc)
+                logger.info("  -> saved best STFT model (val_acc=%.4f)", val_acc)
             else:
                 patience_counter += 1
 

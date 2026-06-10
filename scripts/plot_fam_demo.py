@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 # Allow this script to import project modules when run from the repository root.
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from src.utils.fam_grid import (
