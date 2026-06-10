@@ -31,6 +31,7 @@ Project guidance for coding agents working in this repository.
 - Match the existing style and structure of the project.
 - Add necessary comments for non-obvious code, especially complex logic, important assumptions, GPU/parallel computation details, or behavior that is easy to misuse.
 - Keep comments concise and useful. Do not add comments that merely repeat what the code already says.
+- When adding or modifying an executable Python script, keep the file header usage examples in sync with the current filename, arguments, and recommended invocation.
 - Do not refactor, reformat, or clean up unrelated code.
 - Remove only unused imports, variables, or files introduced by your own change.
 - If unrelated dead code or suspicious behavior is found, mention it instead of editing it.
