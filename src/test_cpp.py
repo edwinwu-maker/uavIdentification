@@ -1,10 +1,10 @@
 """
-Load a trained model and evaluate on the test set (single GPU).
+Load a trained CPP model and evaluate on the test set (single GPU).
 
 Usage:
-  python src/test_stft.py --data-dir /path/to/stft_h5
-  python src/test_stft.py --data-dir /path/to/stft_h5 --gpu 1
-  python src/test_stft.py --data-dir /path/to/stft_h5 --model-path checkpoints/best_stft_model.pth
+  python src/test_cpp.py --data-dir /path/to/cpp_h5
+  python src/test_cpp.py --data-dir /path/to/cpp_h5 --gpu 1
+  python src/test_cpp.py --data-dir /path/to/cpp_h5 --model-path checkpoints/best_cpp_model.pth
 """
 
 import argparse
@@ -21,13 +21,13 @@ from torch.utils.data import DataLoader, random_split
 from tqdm import tqdm
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
 
-from src.data.stft_dataset import SpectrogramDataset
+from src.data.cpp_dataset import CppDataset
 from src.models.resnet import DroneRFaResNet18
-from src.train_stft import NUM_CLASSES, BATCH_SIZE, TRAIN_RATIO, VAL_RATIO, TEST_RATIO, CHECKPOINT_NAME, _default_data_dir
+from src.train_cpp import NUM_CLASSES, BATCH_SIZE, TRAIN_RATIO, VAL_RATIO, TEST_RATIO, CHECKPOINT_NAME, _default_data_dir
 from src.utils.logger import logger
 
-CONFUSION_MATRIX_NAME = "stft_confusion_matrix.npy"
-CONFUSION_MATRIX_IMAGE_NAME = "stft_confusion_matrix.png"
+CONFUSION_MATRIX_NAME = "cpp_confusion_matrix.npy"
+CONFUSION_MATRIX_IMAGE_NAME = "cpp_confusion_matrix.png"
 
 
 def _default_device() -> str:
@@ -56,7 +56,7 @@ def save_confusion_matrix_image(cm, save_path):
 
     class_labels = np.arange(cm.shape[0])
     ax.set(
-        title="Confusion Matrix",
+        title="CPP Confusion Matrix",
         xlabel="Predicted Label",
         ylabel="True Label",
         xticks=class_labels,
@@ -110,9 +110,9 @@ def evaluate(model, dataloader, criterion, device):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Test on pre-computed .h5 spectrograms (single GPU)")
+    parser = argparse.ArgumentParser(description="Test on pre-computed CPP/FAM .h5 matrices (single GPU)")
     parser.add_argument("--data-dir", type=str, default=None,
-                        help="Directory containing .h5 spectrogram files")
+                        help="Directory containing CPP .h5 files")
     parser.add_argument("--model-path", type=str, default=None,
                         help=f"Path to model checkpoint (default: checkpoints/{CHECKPOINT_NAME})")
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
@@ -133,14 +133,12 @@ def test(args):
     if device.type == "cuda":
         logger.info("  GPU: %s", torch.cuda.get_device_name())
 
-    # ── Data dir ──
     if args.data_dir is None:
         args.data_dir = _default_data_dir()
 
-    # ── Dataset (same split as training) ──
-    dataset = SpectrogramDataset(args.data_dir)
+    dataset = CppDataset(args.data_dir)
     try:
-        logger.info("Loaded %d spectrograms from %d .h5 files in %s",
+        logger.info("Loaded %d CPP samples from %d .h5 files in %s",
                     len(dataset), len(set(s[0] for s in dataset.index)), args.data_dir)
 
         total_size = len(dataset)
@@ -154,7 +152,9 @@ def test(args):
         logger.info("Test set size: %d", test_size)
 
         loader_kwargs = dict(
-            batch_size=args.batch_size, num_workers=args.num_workers, pin_memory=True,
+            batch_size=args.batch_size,
+            num_workers=args.num_workers,
+            pin_memory=(device.type == "cuda"),
         )
         if args.num_workers > 0:
             loader_kwargs["prefetch_factor"] = 4
@@ -162,11 +162,9 @@ def test(args):
 
         test_loader = DataLoader(test_ds, **loader_kwargs)
 
-        # ── Model ──
         model = DroneRFaResNet18(num_classes=NUM_CLASSES)
         model = model.to(device)
 
-        # ── Load checkpoint ──
         if args.model_path is None:
             args.model_path = os.path.join(str(Path(__file__).resolve().parents[1]), "checkpoints", CHECKPOINT_NAME)
         logger.info("Loading model from %s", args.model_path)
@@ -175,12 +173,11 @@ def test(args):
 
         criterion = nn.CrossEntropyLoss()
 
-        # ── Test ──
         test_loss, test_acc, preds, labels = evaluate(model, test_loader, criterion, device)
 
         metrics = compute_metrics(preds, labels)
         logger.info("=" * 55)
-        logger.info("Test Results:")
+        logger.info("CPP Test Results:")
         logger.info("  Accuracy:  %.4f", metrics["accuracy"])
         logger.info("  Precision: %.4f", metrics["precision"])
         logger.info("  Recall:    %.4f", metrics["recall"])

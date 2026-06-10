@@ -6,7 +6,7 @@ Each PNG contains two spectrograms (Channel 0 and Channel 1).
 
 import sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import os
 import multiprocessing
@@ -32,8 +32,10 @@ def _default_data_dir() -> str:
     return "/mnt/data/wurixin/DroneRFa/stft_h5"
 
 
-def _default_save_root() -> str:
-    return os.path.join(_default_data_dir(), "stft_picture")
+def _default_save_root(data_dir=None) -> str:
+    if data_dir is None:
+        data_dir = _default_data_dir()
+    return os.path.join(os.path.dirname(data_dir), "stft_picture")
 
 
 def plot_dual_channel(stft_sample, save_path, sample_idx, label=None):
@@ -117,7 +119,7 @@ def process_one_h5(h5_path, save_root):
 
 if __name__ == "__main__":
     DATA_DIR = _default_data_dir()
-    SAVE_ROOT = _default_save_root()
+    SAVE_ROOT = _default_save_root(DATA_DIR)
     os.makedirs(SAVE_ROOT, exist_ok=True)
 
     h5_files = [
