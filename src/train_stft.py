@@ -21,7 +21,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, random_split
 from tqdm import tqdm
 
-from data.spectrogram_dataset import SpectrogramDataset
+from src.data.stft_dataset import SpectrogramDataset
 from models.resnet import DroneRFaResNet18
 from utils.logger import logger
 

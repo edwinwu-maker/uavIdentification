@@ -3,4 +3,4 @@ __pycache__/
 logs/
 checkpoints/
 *.out
-CLAUDE.md
+.pytest_cache/

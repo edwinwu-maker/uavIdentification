@@ -21,9 +21,9 @@ from torch.utils.data import DataLoader, random_split
 from tqdm import tqdm
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
 
-from data.spectrogram_dataset import SpectrogramDataset
+from src.data.stft_dataset import SpectrogramDataset
 from models.resnet import DroneRFaResNet18
-from train_spec import NUM_CLASSES, BATCH_SIZE, TRAIN_RATIO, VAL_RATIO, TEST_RATIO
+from train_stft import NUM_CLASSES, BATCH_SIZE, TRAIN_RATIO, VAL_RATIO, TEST_RATIO
 from utils.logger import logger
 
 
@@ -133,65 +133,66 @@ def test(args):
 
     # ── Dataset (same split as training) ──
     dataset = SpectrogramDataset(args.data_dir)
-    logger.info("Loaded %d spectrograms from %d .h5 files in %s",
-                 len(dataset), len(set(s[0] for s in dataset.index)), args.data_dir)
+    try:
+        logger.info("Loaded %d spectrograms from %d .h5 files in %s",
+                    len(dataset), len(set(s[0] for s in dataset.index)), args.data_dir)
 
-    total_size = len(dataset)
-    train_size = int(total_size * TRAIN_RATIO)
-    val_size = int(total_size * VAL_RATIO)
-    test_size = total_size - train_size - val_size
-    _, _, test_ds = random_split(
-        dataset, [train_size, val_size, test_size],
-        generator=torch.Generator().manual_seed(42),
-    )
-    logger.info("Test set size: %d", test_size)
+        total_size = len(dataset)
+        train_size = int(total_size * TRAIN_RATIO)
+        val_size = int(total_size * VAL_RATIO)
+        test_size = total_size - train_size - val_size
+        _, _, test_ds = random_split(
+            dataset, [train_size, val_size, test_size],
+            generator=torch.Generator().manual_seed(42),
+        )
+        logger.info("Test set size: %d", test_size)
 
-    loader_kwargs = dict(
-        batch_size=args.batch_size, num_workers=args.num_workers, pin_memory=True,
-    )
-    if args.num_workers > 0:
-        loader_kwargs["prefetch_factor"] = 4
-        loader_kwargs["persistent_workers"] = True
+        loader_kwargs = dict(
+            batch_size=args.batch_size, num_workers=args.num_workers, pin_memory=True,
+        )
+        if args.num_workers > 0:
+            loader_kwargs["prefetch_factor"] = 4
+            loader_kwargs["persistent_workers"] = True
 
-    test_loader = DataLoader(test_ds, **loader_kwargs)
+        test_loader = DataLoader(test_ds, **loader_kwargs)
 
-    # ── Model ──
-    model = DroneRFaResNet18(num_classes=NUM_CLASSES)
-    model = model.to(device)
+        # ── Model ──
+        model = DroneRFaResNet18(num_classes=NUM_CLASSES)
+        model = model.to(device)
 
-    # ── Load checkpoint ──
-    if args.model_path is None:
-        args.model_path = os.path.join(str(Path(__file__).parent.parent), "checkpoints", "best_model.pth")
-    logger.info("Loading model from %s", args.model_path)
-    state_dict = torch.load(args.model_path, map_location=device)
-    model.load_state_dict(state_dict)
+        # ── Load checkpoint ──
+        if args.model_path is None:
+            args.model_path = os.path.join(str(Path(__file__).parent.parent), "checkpoints", "best_model.pth")
+        logger.info("Loading model from %s", args.model_path)
+        state_dict = torch.load(args.model_path, map_location=device)
+        model.load_state_dict(state_dict)
 
-    criterion = nn.CrossEntropyLoss()
+        criterion = nn.CrossEntropyLoss()
 
-    # ── Test ──
-    test_loss, test_acc, preds, labels = evaluate(model, test_loader, criterion, device)
+        # ── Test ──
+        test_loss, test_acc, preds, labels = evaluate(model, test_loader, criterion, device)
 
-    metrics = compute_metrics(preds, labels)
-    logger.info("=" * 55)
-    logger.info("Test Results:")
-    logger.info("  Accuracy:  %.4f", metrics["accuracy"])
-    logger.info("  Precision: %.4f", metrics["precision"])
-    logger.info("  Recall:    %.4f", metrics["recall"])
-    logger.info("  F1-Score:  %.4f", metrics["f1"])
-    logger.info("  Test Loss: %.4f", test_loss)
-    logger.info("=" * 55)
+        metrics = compute_metrics(preds, labels)
+        logger.info("=" * 55)
+        logger.info("Test Results:")
+        logger.info("  Accuracy:  %.4f", metrics["accuracy"])
+        logger.info("  Precision: %.4f", metrics["precision"])
+        logger.info("  Recall:    %.4f", metrics["recall"])
+        logger.info("  F1-Score:  %.4f", metrics["f1"])
+        logger.info("  Test Loss: %.4f", test_loss)
+        logger.info("=" * 55)
 
-    cm = confusion_matrix(labels, preds)
-    checkpoint_dir = os.path.join(str(Path(__file__).parent.parent), "checkpoints")
-    os.makedirs(checkpoint_dir, exist_ok=True)
-    np.save(os.path.join(checkpoint_dir, "confusion_matrix.npy"), cm)
-    logger.info("Confusion matrix saved to checkpoints/confusion_matrix.npy")
-    if args.cm_image_path is None:
-        args.cm_image_path = os.path.join(checkpoint_dir, "confusion_matrix.png")
-    save_confusion_matrix_image(cm, args.cm_image_path)
-    logger.info("Confusion matrix image saved to %s", args.cm_image_path)
-
-    dataset.close()
+        cm = confusion_matrix(labels, preds)
+        checkpoint_dir = os.path.join(str(Path(__file__).parent.parent), "checkpoints")
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        np.save(os.path.join(checkpoint_dir, "confusion_matrix.npy"), cm)
+        logger.info("Confusion matrix saved to checkpoints/confusion_matrix.npy")
+        if args.cm_image_path is None:
+            args.cm_image_path = os.path.join(checkpoint_dir, "confusion_matrix.png")
+        save_confusion_matrix_image(cm, args.cm_image_path)
+        logger.info("Confusion matrix image saved to %s", args.cm_image_path)
+    finally:
+        dataset.close()
 
 
 if __name__ == "__main__":
