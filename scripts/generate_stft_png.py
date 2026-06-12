@@ -13,6 +13,7 @@ import multiprocessing
 import tqdm
 
 from src.utils.logger import logger
+from src.utils.paths import figures_dir
 import h5py
 import numpy as np
 import matplotlib
@@ -33,9 +34,7 @@ def _default_data_dir() -> str:
 
 
 def _default_save_root(data_dir=None) -> str:
-    if data_dir is None:
-        data_dir = _default_data_dir()
-    return os.path.join(os.path.dirname(data_dir), "stft_picture")
+    return str(figures_dir() / "stft_png")
 
 
 def plot_dual_channel(stft_sample, save_path, sample_idx, label=None):

@@ -4,7 +4,7 @@ Load a trained CPP model and evaluate on the test set (single GPU).
 Usage:
   python src/test_cpp.py --data-dir /path/to/cpp_h5
   python src/test_cpp.py --data-dir /path/to/cpp_h5 --gpu 1
-  python src/test_cpp.py --data-dir /path/to/cpp_h5 --model-path checkpoints/best_cpp_model.pth
+  python src/test_cpp.py --data-dir /path/to/cpp_h5 --model-path outputs/checkpoints/best_cpp_model.pth
 """
 
 import argparse
@@ -23,9 +23,11 @@ from src.data.cpp_dataset import CppDataset
 from src.models.resnet import DroneRFaResNet18
 from train_cpp import NUM_CLASSES, BATCH_SIZE, TRAIN_RATIO, VAL_RATIO, TEST_RATIO, CHECKPOINT_NAME, _default_data_dir
 from src.utils.logger import logger
+from src.utils.paths import checkpoint_dir, figures_dir, metrics_dir
 
 CONFUSION_MATRIX_NAME = "cpp_confusion_matrix.npy"
 CONFUSION_MATRIX_IMAGE_NAME = "cpp_confusion_matrix.png"
+__test__ = False
 
 
 def _default_device() -> str:
@@ -112,14 +114,14 @@ def parse_args():
     parser.add_argument("--data-dir", type=str, default=None,
                         help="Directory containing CPP .h5 files")
     parser.add_argument("--model-path", type=str, default=None,
-                        help=f"Path to model checkpoint (default: checkpoints/{CHECKPOINT_NAME})")
+                        help=f"Path to model checkpoint (default: outputs/checkpoints/{CHECKPOINT_NAME})")
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
     parser.add_argument("--num-workers", type=int, default=0,
                         help="DataLoader workers (0 = main process only)")
     parser.add_argument("--device", type=str, default=_default_device(),
                         help="Device, e.g. 'cuda:0', 'cuda:1', 'mps', 'cpu'")
     parser.add_argument("--cm-image-path", type=str, default=None,
-                        help=f"Path to save confusion matrix image (default: checkpoints/{CONFUSION_MATRIX_IMAGE_NAME})")
+                        help=f"Path to save confusion matrix image (default: outputs/figures/{CONFUSION_MATRIX_IMAGE_NAME})")
     return parser.parse_args()
 
 
@@ -164,7 +166,7 @@ def test(args):
         model = model.to(device)
 
         if args.model_path is None:
-            args.model_path = os.path.join(str(Path(__file__).resolve().parent), "checkpoints", CHECKPOINT_NAME)
+            args.model_path = checkpoint_dir() / CHECKPOINT_NAME
         logger.info("Loading model from %s", args.model_path)
         state_dict = torch.load(args.model_path, map_location=device)
         model.load_state_dict(state_dict)
@@ -184,13 +186,15 @@ def test(args):
         logger.info("=" * 55)
 
         cm = confusion_matrix(labels, preds)
-        checkpoint_dir = os.path.join(str(Path(__file__).resolve().parent), "checkpoints")
-        os.makedirs(checkpoint_dir, exist_ok=True)
-        cm_path = os.path.join(checkpoint_dir, CONFUSION_MATRIX_NAME)
+        metric_path = metrics_dir()
+        os.makedirs(metric_path, exist_ok=True)
+        cm_path = metric_path / CONFUSION_MATRIX_NAME
         np.save(cm_path, cm)
         logger.info("Confusion matrix saved to %s", cm_path)
         if args.cm_image_path is None:
-            args.cm_image_path = os.path.join(checkpoint_dir, CONFUSION_MATRIX_IMAGE_NAME)
+            args.cm_image_path = figures_dir() / CONFUSION_MATRIX_IMAGE_NAME
+        args.cm_image_path = Path(args.cm_image_path)
+        os.makedirs(args.cm_image_path.parent, exist_ok=True)
         save_confusion_matrix_image(cm, args.cm_image_path)
         logger.info("Confusion matrix image saved to %s", args.cm_image_path)
     finally:

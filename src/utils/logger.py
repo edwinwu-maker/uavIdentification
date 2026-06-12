@@ -2,6 +2,8 @@ import logging
 import os
 from datetime import datetime
 
+from src.utils.paths import log_dir
+
 def setup_logger():
     logger = logging.getLogger("DroneRFa")
     logger.setLevel(logging.DEBUG)
@@ -22,13 +24,8 @@ def setup_logger():
     console_handler.setFormatter(log_format)
 
     # 文件 Handler
-    # 获取当前文件（logger.py）的目录
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    # 上两级 → 到达项目根目录（main.py 的上一级）
-    base_dir = os.path.dirname(os.path.dirname(current_dir))
-    log_dir = os.path.join(base_dir, "logs")
-    os.makedirs(log_dir, exist_ok=True)
-    log_path = os.path.join(log_dir, f"{datetime.now().strftime('%Y%m%d')}.log")
+    log_path = log_dir() / f"{datetime.now().strftime('%Y%m%d')}.log"
+    os.makedirs(log_path.parent, exist_ok=True)
     file_handler = logging.FileHandler(log_path, encoding="utf-8")
     file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(log_format)

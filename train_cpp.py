@@ -13,7 +13,6 @@ Usage:
 import argparse
 import os
 import sys
-from pathlib import Path
 
 import torch
 import torch.nn as nn
@@ -23,6 +22,7 @@ from tqdm import tqdm
 from src.data.cpp_dataset import CppDataset
 from src.models.resnet import DroneRFaResNet18
 from src.utils.logger import logger
+from src.utils.paths import checkpoint_dir
 
 NUM_CLASSES = 25
 BATCH_SIZE = 64
@@ -132,8 +132,8 @@ def train(args):
         optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
         criterion = nn.CrossEntropyLoss()
 
-        checkpoint_dir = os.path.join(str(Path(__file__).resolve().parent), "checkpoints")
-        os.makedirs(checkpoint_dir, exist_ok=True)
+        checkpoint_path = checkpoint_dir() / CHECKPOINT_NAME
+        os.makedirs(checkpoint_path.parent, exist_ok=True)
 
         best_val_acc = 0.0
         patience_counter = 0
@@ -179,7 +179,7 @@ def train(args):
             if val_acc > best_val_acc:
                 best_val_acc = val_acc
                 patience_counter = 0
-                torch.save(model.state_dict(), os.path.join(checkpoint_dir, CHECKPOINT_NAME))
+                torch.save(model.state_dict(), checkpoint_path)
                 logger.info("  -> saved best CPP model (val_acc=%.4f)", val_acc)
             else:
                 patience_counter += 1

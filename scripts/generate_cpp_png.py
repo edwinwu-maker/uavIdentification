@@ -2,7 +2,7 @@
 
 Usage:
   python src/scripts/generate_cpp_png.py --h5-dir ~/Desktop/dataset/droneRFa/cpp_h5
-  python src/scripts/generate_cpp_png.py --h5-dir ~/Desktop/dataset/droneRFa/cpp_h5 --save-root ~/Desktop/dataset/droneRFa/cpp_picture
+  python src/scripts/generate_cpp_png.py --h5-dir ~/Desktop/dataset/droneRFa/cpp_h5 --save-root outputs/figures/cpp_png
   python src/scripts/generate_cpp_png.py --h5-dir ~/Desktop/dataset/droneRFa/cpp_h5 --max-files 1 --max-samples-per-file 1
 """
 
@@ -23,6 +23,7 @@ import numpy as np
 import tqdm
 
 from src.utils.logger import logger
+from src.utils.paths import figures_dir
 
 
 def _default_h5_dir() -> str:
@@ -135,7 +136,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--h5-dir", type=str, default=_default_h5_dir(),
                         help="Directory containing CPP .h5 files")
     parser.add_argument("--save-root", type=str, default=None,
-                        help="Directory for output PNG files (default: sibling cpp_picture directory)")
+                        help="Directory for output PNG files (default: outputs/figures/cpp_png)")
     parser.add_argument("--max-files", type=int, default=None,
                         help="Process at most this many .h5 files")
     parser.add_argument("--max-samples-per-file", type=int, default=None,
@@ -149,7 +150,7 @@ def main() -> None:
     args = parse_args()
     h5_dir = os.path.expanduser(args.h5_dir)
     if args.save_root is None:
-        save_root = os.path.join(os.path.dirname(h5_dir), "cpp_picture")
+        save_root = str(figures_dir() / "cpp_png")
     else:
         save_root = os.path.expanduser(args.save_root)
     os.makedirs(save_root, exist_ok=True)

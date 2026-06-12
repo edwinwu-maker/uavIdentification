@@ -30,27 +30,29 @@ from src.utils.fam_plot import (
     plot_fam_surface_views,
     plot_signal_time_frequency,
 )
+from src.utils.paths import figures_dir
 from src.utils.synthetic_signal import (
     DEFAULT_SAMPLES_PER_SYMBOL,
     SUPPORTED_SIGNAL_TYPES,
     generate_signal,
 )
 
-DEFAULT_GRID_IMAGE_PATH = Path(__file__).with_name("signal_fam_grid.png")
-DEFAULT_SURFACE_IMAGE_PATH = Path(__file__).with_name("signal_fam_surface.png")
-DEFAULT_SURFACE_X_VIEW_IMAGE_PATH = Path(__file__).with_name(
+DEFAULT_OUTPUT_DIR = figures_dir() / "fam_demo"
+DEFAULT_GRID_IMAGE_PATH = DEFAULT_OUTPUT_DIR / "signal_fam_grid.png"
+DEFAULT_SURFACE_IMAGE_PATH = DEFAULT_OUTPUT_DIR / "signal_fam_surface.png"
+DEFAULT_SURFACE_X_VIEW_IMAGE_PATH = DEFAULT_OUTPUT_DIR / (
     "signal_fam_surface_x_view.png"
 )
-DEFAULT_SURFACE_Y_VIEW_IMAGE_PATH = Path(__file__).with_name(
+DEFAULT_SURFACE_Y_VIEW_IMAGE_PATH = DEFAULT_OUTPUT_DIR / (
     "signal_fam_surface_y_view.png"
 )
-DEFAULT_SURFACE_Z_VIEW_IMAGE_PATH = Path(__file__).with_name(
+DEFAULT_SURFACE_Z_VIEW_IMAGE_PATH = DEFAULT_OUTPUT_DIR / (
     "signal_fam_surface_z_view.png"
 )
-DEFAULT_TIME_DOMAIN_IMAGE_PATH = Path(__file__).with_name(
+DEFAULT_TIME_DOMAIN_IMAGE_PATH = DEFAULT_OUTPUT_DIR / (
     "signal_fam_time_domain.png"
 )
-DEFAULT_FREQUENCY_DOMAIN_IMAGE_PATH = Path(__file__).with_name(
+DEFAULT_FREQUENCY_DOMAIN_IMAGE_PATH = DEFAULT_OUTPUT_DIR / (
     "signal_fam_frequency_domain.png"
 )
 
