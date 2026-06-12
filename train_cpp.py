@@ -22,6 +22,7 @@ from src.data.cpp_dataset import CppDataset
 from src.data.splits import split_dataset
 from src.models.resnet import DroneRFaResNet18
 from src.training.trainer import train_model
+from src.utils.config import expand_path, get_config_value, load_config
 from src.utils.device import default_device
 from src.utils.logger import logger
 
@@ -43,24 +44,48 @@ def _default_data_dir() -> str:
     return "/mnt/data/wurixin/DroneRFa/cpp_h5"
 
 
-def parse_args():
+def build_parser(config=None):
     parser = argparse.ArgumentParser(description="Single-GPU training on pre-computed CPP/FAM .h5 matrices")
+    parser.add_argument("--config", type=str, default=None,
+                        help="Path to YAML config")
     parser.add_argument("--data-dir", type=str, default=None,
                         help="Directory containing CPP .h5 files")
-    parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
-    parser.add_argument("--lr", type=float, default=LEARNING_RATE)
-    parser.add_argument("--num-workers", type=int, default=0,
+    parser.add_argument("--batch-size", type=int, default=get_config_value(config, "batch_size", BATCH_SIZE))
+    parser.add_argument("--lr", type=float, default=get_config_value(config, "learning_rate", LEARNING_RATE))
+    parser.add_argument("--num-workers", type=int, default=get_config_value(config, "num_workers", 0),
                         help="DataLoader workers (0 = main process only)")
-    parser.add_argument("--epochs", type=int, default=200)
-    parser.add_argument("--patience", type=int, default=PATIENCE)
+    parser.add_argument("--epochs", type=int, default=get_config_value(config, "epochs", 200))
+    parser.add_argument("--patience", type=int, default=get_config_value(config, "patience", PATIENCE))
     parser.add_argument("--device", type=str, default=default_device(),
                         help="Device, e.g. 'cuda:0', 'cuda:1', 'mps', 'cpu'")
-    return parser.parse_args()
+    parser.add_argument(
+        "--checkpoint-path",
+        type=str,
+        default=CHECKPOINT_NAME,
+        help="Checkpoint path or name",
+    )
+    return parser
+
+
+def parse_args(argv=None):
+    config_parser = argparse.ArgumentParser(add_help=False)
+    config_parser.add_argument("--config", type=str, default=None)
+    config_args, remaining = config_parser.parse_known_args(argv)
+    config = load_config(config_args.config)
+    parser = build_parser(config)
+    args = parser.parse_args(remaining)
+    args.config = config_args.config
+    if args.data_dir is not None:
+        args.data_dir = expand_path(args.data_dir)
+    args.checkpoint_path = expand_path(args.checkpoint_path)
+    return args
 
 
 def train(args):
     if args.data_dir is None:
         args.data_dir = _default_data_dir()
+    else:
+        args.data_dir = expand_path(args.data_dir)
 
     device = torch.device(args.device)
     if device.type == "cuda":
@@ -107,7 +132,7 @@ def train(args):
             device=device,
             epochs=args.epochs,
             patience=args.patience,
-            checkpoint_name=CHECKPOINT_NAME,
+            checkpoint_name=args.checkpoint_path,
             logger=logger,
             train_desc="Training Epochs",
             eval_desc="Evaluating",

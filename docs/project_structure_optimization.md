@@ -34,6 +34,7 @@ droneRFa/
   - `outputs/figures/`
   - `outputs/metrics/`
 - 已新增公共路径工具：`src/utils/paths.py`。
+- 已新增基础配置加载工具：`src/utils/config.py`。
 - 已新增默认设备选择工具：`src/utils/device.py`。
 - 已新增数据集切分工具：`src/data/splits.py`。
 - 已新增通用 H5 特征数据集：`src/data/h5_dataset.py`。
@@ -48,7 +49,7 @@ droneRFa/
   - `tests/test_metrics.py`
   - `tests/test_evaluator.py`
 
-这些改动已经降低了入口脚本、数据读取、指标计算、测试推理、checkpoint 处理和训练循环的重复度，但配置仍然分散。
+这些改动已经降低了入口脚本、数据读取、指标计算、测试推理、checkpoint 处理和训练循环的重复度，并且已经引入基础配置文件支持。
 
 ## 剩余主要问题
 
@@ -76,32 +77,15 @@ test_cpp.py
 
 下一步优化重点应是继续收敛 checkpoint 和训练循环，而不是直接移动包名或大规模改目录。
 
-### 2. 配置仍硬编码在脚本中
+### 2. 配置已经开始外置，但统一入口仍未收敛
 
-如下配置仍在 `train_*.py` 和 `test_*.py` 中：
+`train_*.py` 和 `test_*.py` 已支持 `--config`，并可以从 `configs/stft.yaml` 和 `configs/cpp.yaml` 读取默认参数。不过当前四个入口脚本仍然各自存在，统一 CLI 入口还没有收敛。
 
-```text
-NUM_CLASSES
-BATCH_SIZE
-LEARNING_RATE
-TRAIN_RATIO
-VAL_RATIO
-TEST_RATIO
-PATIENCE
-CHECKPOINT_NAME
-data_dir
-num_workers
-epochs
-device
-```
+这已经改善了实验复现和批量运行能力，下一步主要是把配置入口与 CLI 结构统一起来。
 
-这会影响实验复现，也不利于批量运行 STFT、CPP/FAM 或未来新特征。
-
-### 3. 训练循环已经沉淀，但配置仍未抽离
+### 3. 训练循环已经沉淀
 
 `train_stft.py` 和 `train_cpp.py` 的 epoch 训练循环、early stopping 和 best checkpoint 保存逻辑已经通过 `src/training/trainer.py` 沉淀。
-
-现在剩下的主要重复点是硬编码配置和后续统一入口时的参数组织方式。
 
 ### 4. 预处理和可视化逻辑仍混在 `scripts/` 与 `src/utils/`
 
@@ -279,11 +263,11 @@ src/training/
 ~/Desktop/venv/bin/python test_stft.py --help
 ```
 
-### 阶段 2：配置文件
+### 阶段 2：配置文件（已完成）
 
 目标：把硬编码训练参数迁移到可复现配置。
 
-建议新增：
+已新增：
 
 ```text
 configs/
@@ -300,18 +284,15 @@ batch_size: 64
 learning_rate: 0.001
 epochs: 200
 patience: 10
+num_workers: 0
 split:
   train: 0.6
   val: 0.2
   test: 0.2
   seed: 42
-data:
-  dir: ~/Desktop/dataset/droneRFa/stft_h5
-output:
-  checkpoint: outputs/checkpoints/best_stft_model.pth
 ```
 
-建议先支持：
+当前已支持：
 
 ```bash
 python train_stft.py --config configs/stft.yaml
@@ -320,7 +301,7 @@ python train_cpp.py --config configs/cpp.yaml
 
 暂时不建议一开始就引入复杂配置框架。可以优先使用 `yaml.safe_load` 和一个小型配置解析函数。
 
-成功标准：
+完成状态：
 
 - 无 `--config` 时保持现有默认行为。
 - 有 `--config` 时配置文件覆盖默认参数。
@@ -443,16 +424,15 @@ src/
 
 建议从最小风险到最大风险推进：
 
-1. 增加 `configs/stft.yaml` 和 `configs/cpp.yaml`。
-2. 新增统一 `scripts/train.py` 和 `scripts/evaluate.py`。
-3. 整理 `preprocessing/` 和 `visualization/`。
-4. 增加模型 factory 和 shape 测试。
-5. 最后迁移包名为 `drone_rfa`。
+1. 新增统一 `scripts/train.py` 和 `scripts/evaluate.py`。
+2. 整理 `preprocessing/` 和 `visualization/`。
+3. 增加模型 factory 和 shape 测试。
+4. 最后迁移包名为 `drone_rfa`。
 
 ## 风险与注意事项
 
 - 不建议一次性完成全部重构。训练脚本涉及数据路径、设备、checkpoint 和大文件 H5 读取，改动过大时定位问题困难。
-- 公共训练/评估模块已经覆盖 metrics、evaluator、checkpoint 和 trainer，后续优先把配置和统一入口收敛，不要提前为未来模型做过度抽象。
+- 公共训练/评估模块已经覆盖 metrics、evaluator、checkpoint 和 trainer，配置文件也已经接入，后续优先把统一入口收敛，不要提前为未来模型做过度抽象。
 - 训练与测试集切分必须继续使用同一个 `split_dataset(..., seed=42)`，否则会影响历史结果对比。
 - `outputs/` 已作为默认运行产物目录，后续新增输出应优先归档到 `outputs/README.md` 中定义的子目录。
 - 预计算 `.h5` 文件目前仍建议保留在数据集目录下，因为它们是训练输入数据，不是普通实验产物。
@@ -460,13 +440,13 @@ src/
 
 ## 总结
 
-当前已经完成低风险基础整理：README、outputs、路径工具、设备选择、数据切分、H5 Dataset 抽象、训练评估、checkpoint 与 trainer 公共模块和最小测试。
+当前已经完成低风险基础整理：README、outputs、路径工具、设备选择、数据切分、H5 Dataset 抽象、训练评估、checkpoint 与 trainer 公共模块、基础配置支持和最小测试。
 
 剩余优化的主线应是：
 
-1. 先引入配置文件提高复现能力。
-2. 然后合并 CLI 入口。
-3. 再整理预处理和可视化模块。
+1. 先合并 CLI 入口。
+2. 再整理预处理和可视化模块。
+3. 然后增加模型 factory 和 shape 测试。
 4. 最后做目录语义升级和包名迁移。
 
 这样可以在保持现有实验可运行的前提下，逐步减少重复代码，并为新增特征、模型和系统化实验管理打基础。

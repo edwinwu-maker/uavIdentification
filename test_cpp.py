@@ -16,7 +16,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from tqdm import tqdm
 from sklearn.metrics import confusion_matrix
 
 from src.data.cpp_dataset import CppDataset
@@ -25,6 +24,7 @@ from src.models.resnet import DroneRFaResNet18
 from src.training.checkpoint import default_checkpoint_path, load_checkpoint
 from src.training.evaluator import evaluate_with_predictions
 from src.training.metrics import compute_metrics, save_confusion_matrix_image
+from src.utils.config import expand_path, get_config_value, load_config
 from train_cpp import NUM_CLASSES, BATCH_SIZE, TRAIN_RATIO, VAL_RATIO, TEST_RATIO, CHECKPOINT_NAME, _default_data_dir
 from src.utils.device import default_device
 from src.utils.logger import logger
@@ -35,20 +35,46 @@ CONFUSION_MATRIX_IMAGE_NAME = "cpp_confusion_matrix.png"
 __test__ = False
 
 
-def parse_args():
+def build_parser(config=None):
     parser = argparse.ArgumentParser(description="Test on pre-computed CPP/FAM .h5 matrices (single GPU)")
+    parser.add_argument("--config", type=str, default=None,
+                        help="Path to YAML config")
     parser.add_argument("--data-dir", type=str, default=None,
                         help="Directory containing CPP .h5 files")
-    parser.add_argument("--model-path", type=str, default=None,
-                        help=f"Path to model checkpoint (default: outputs/checkpoints/{CHECKPOINT_NAME})")
-    parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
-    parser.add_argument("--num-workers", type=int, default=0,
+    parser.add_argument(
+        "--model-path",
+        type=str,
+        default=default_checkpoint_path(CHECKPOINT_NAME),
+        help=f"Path to model checkpoint (default: outputs/checkpoints/{CHECKPOINT_NAME})",
+    )
+    parser.add_argument("--batch-size", type=int, default=get_config_value(config, "batch_size", BATCH_SIZE))
+    parser.add_argument("--num-workers", type=int, default=get_config_value(config, "num_workers", 0),
                         help="DataLoader workers (0 = main process only)")
     parser.add_argument("--device", type=str, default=default_device(),
                         help="Device, e.g. 'cuda:0', 'cuda:1', 'mps', 'cpu'")
-    parser.add_argument("--cm-image-path", type=str, default=None,
-                        help=f"Path to save confusion matrix image (default: outputs/figures/{CONFUSION_MATRIX_IMAGE_NAME})")
-    return parser.parse_args()
+    parser.add_argument(
+        "--cm-image-path",
+        type=str,
+        default=figures_dir() / CONFUSION_MATRIX_IMAGE_NAME,
+        help=f"Path to save confusion matrix image (default: outputs/figures/{CONFUSION_MATRIX_IMAGE_NAME})",
+    )
+    return parser
+
+
+def parse_args(argv=None):
+    config_parser = argparse.ArgumentParser(add_help=False)
+    config_parser.add_argument("--config", type=str, default=None)
+    config_args, remaining = config_parser.parse_known_args(argv)
+    config = load_config(config_args.config)
+    parser = build_parser(config)
+    args = parser.parse_args(remaining)
+    args.config = config_args.config
+    if args.data_dir is not None:
+        args.data_dir = expand_path(args.data_dir)
+    if args.model_path is not None:
+        args.model_path = expand_path(args.model_path)
+    args.cm_image_path = expand_path(args.cm_image_path)
+    return args
 
 
 def test(args):
@@ -61,6 +87,8 @@ def test(args):
 
     if args.data_dir is None:
         args.data_dir = _default_data_dir()
+    else:
+        args.data_dir = expand_path(args.data_dir)
 
     dataset = CppDataset(args.data_dir)
     try:
@@ -115,8 +143,6 @@ def test(args):
         cm_path = metric_path / CONFUSION_MATRIX_NAME
         np.save(cm_path, cm)
         logger.info("Confusion matrix saved to %s", cm_path)
-        if args.cm_image_path is None:
-            args.cm_image_path = figures_dir() / CONFUSION_MATRIX_IMAGE_NAME
         args.cm_image_path = Path(args.cm_image_path)
         os.makedirs(args.cm_image_path.parent, exist_ok=True)
         save_confusion_matrix_image(cm, args.cm_image_path)
