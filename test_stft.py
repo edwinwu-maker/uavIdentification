@@ -22,12 +22,13 @@ from sklearn.metrics import confusion_matrix
 from src.data.splits import split_dataset
 from src.data.stft_dataset import SpectrogramDataset
 from src.models.resnet import DroneRFaResNet18
+from src.training.checkpoint import default_checkpoint_path, load_checkpoint
 from src.training.evaluator import evaluate_with_predictions
 from src.training.metrics import compute_metrics, save_confusion_matrix_image
 from train_stft import NUM_CLASSES, BATCH_SIZE, TRAIN_RATIO, VAL_RATIO, TEST_RATIO, CHECKPOINT_NAME, _default_data_dir
 from src.utils.device import default_device
 from src.utils.logger import logger
-from src.utils.paths import checkpoint_dir, figures_dir, metrics_dir
+from src.utils.paths import figures_dir, metrics_dir
 
 CONFUSION_MATRIX_NAME = "stft_confusion_matrix.npy"
 CONFUSION_MATRIX_IMAGE_NAME = "stft_confusion_matrix.png"
@@ -89,9 +90,9 @@ def test(args):
 
         # ── Load checkpoint ──
         if args.model_path is None:
-            args.model_path = checkpoint_dir() / CHECKPOINT_NAME
+            args.model_path = default_checkpoint_path(CHECKPOINT_NAME)
         logger.info("Loading model from %s", args.model_path)
-        state_dict = torch.load(args.model_path, map_location=device)
+        state_dict = load_checkpoint(args.model_path, map_location=device)
         model.load_state_dict(state_dict)
 
         criterion = nn.CrossEntropyLoss()

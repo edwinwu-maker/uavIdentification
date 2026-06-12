@@ -17,15 +17,13 @@ import sys
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from tqdm import tqdm
 
 from src.data.splits import split_dataset
 from src.data.stft_dataset import SpectrogramDataset
 from src.models.resnet import DroneRFaResNet18
-from src.training.evaluator import evaluate
+from src.training.trainer import train_model
 from src.utils.device import default_device
 from src.utils.logger import logger
-from src.utils.paths import checkpoint_dir
 
 NUM_CLASSES = 25
 BATCH_SIZE = 64
@@ -100,64 +98,21 @@ def train(args):
         optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
         criterion = nn.CrossEntropyLoss()
 
-        checkpoint_path = checkpoint_dir() / CHECKPOINT_NAME
-        os.makedirs(checkpoint_path.parent, exist_ok=True)
-
-        best_val_acc = 0.0
-        patience_counter = 0
-
-        epoch_bar = tqdm(total=args.epochs, desc="Training Epochs", unit="epoch")
-        for epoch in range(1, args.epochs + 1):
-            model.train()
-            train_loss_sum = 0.0
-            train_count = 0
-
-            batch_bar = tqdm(
-                train_loader, total=len(train_loader),
-                desc=f"Epoch {epoch}", leave=False, unit="batch",
-            )
-            for inputs, labels in batch_bar:
-                inputs = inputs.to(device, non_blocking=True)
-                labels = labels.to(device, non_blocking=True)
-
-                optimizer.zero_grad()
-                outputs = model(inputs)
-                loss = criterion(outputs, labels)
-                loss.backward()
-                optimizer.step()
-
-                batch_size = inputs.size(0)
-                train_loss_sum += loss.item() * batch_size
-                train_count += batch_size
-                batch_bar.set_postfix({
-                    "batch_loss": f"{loss.item():.4f}",
-                    "lr": f"{optimizer.param_groups[0]['lr']:.6f}",
-                })
-
-            batch_bar.close()
-            train_loss = train_loss_sum / train_count
-            val_loss, val_acc = evaluate(model, val_loader, criterion, device)
-
-            epoch_bar.update(1)
-            logger.info(
-                "Epoch %3d | train_loss: %.4f | val_loss: %.4f | val_acc: %.4f",
-                epoch, train_loss, val_loss, val_acc,
-            )
-
-            if val_acc > best_val_acc:
-                best_val_acc = val_acc
-                patience_counter = 0
-                torch.save(model.state_dict(), checkpoint_path)
-                logger.info("  -> saved best STFT model (val_acc=%.4f)", val_acc)
-            else:
-                patience_counter += 1
-
-            if patience_counter >= args.patience:
-                logger.info("Early stopping at epoch %d", epoch)
-                break
-
-        epoch_bar.close()
-        logger.info("Training complete. Best val_acc: %.4f", best_val_acc)
+        result = train_model(
+            model=model,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            optimizer=optimizer,
+            criterion=criterion,
+            device=device,
+            epochs=args.epochs,
+            patience=args.patience,
+            checkpoint_name=CHECKPOINT_NAME,
+            logger=logger,
+            train_desc="Training Epochs",
+            eval_desc="Evaluating",
+        )
+        logger.info("Training complete. Best val_acc: %.4f", result.best_val_acc)
     finally:
         dataset.close()
 

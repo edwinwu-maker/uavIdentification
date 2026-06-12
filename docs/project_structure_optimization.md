@@ -48,7 +48,7 @@ droneRFa/
   - `tests/test_metrics.py`
   - `tests/test_evaluator.py`
 
-这些改动已经降低了入口脚本、数据读取、指标计算和测试推理的重复度，但 checkpoint、训练循环和配置仍然分散。
+这些改动已经降低了入口脚本、数据读取、指标计算、测试推理、checkpoint 处理和训练循环的重复度，但配置仍然分散。
 
 ## 剩余主要问题
 
@@ -97,15 +97,11 @@ device
 
 这会影响实验复现，也不利于批量运行 STFT、CPP/FAM 或未来新特征。
 
-### 3. checkpoint 和训练循环还没有沉淀
+### 3. 训练循环已经沉淀，但配置仍未抽离
 
-`train_stft.py` 和 `train_cpp.py` 中仍重复包含：
+`train_stft.py` 和 `train_cpp.py` 的 epoch 训练循环、early stopping 和 best checkpoint 保存逻辑已经通过 `src/training/trainer.py` 沉淀。
 
-- epoch 训练循环
-- early stopping
-- best checkpoint 保存逻辑
-
-这些逻辑应抽到公共模块，避免后续新增特征时继续复制。`test_stft.py` 和 `test_cpp.py` 的公共推理逻辑已经通过 `src/training/evaluator.py` 沉淀。
+现在剩下的主要重复点是硬编码配置和后续统一入口时的参数组织方式。
 
 ### 4. 预处理和可视化逻辑仍混在 `scripts/` 与 `src/utils/`
 
@@ -267,11 +263,11 @@ src/training/
    - 成功标准：训练验证和测试推理复用同一套 evaluator。
 
 4. `checkpoint.py`
-   - 抽取 checkpoint 路径、保存和加载。
+   - 已完成。
    - 成功标准：训练脚本不直接调用 `torch.save`，测试脚本不直接拼 checkpoint 路径。
 
 5. `trainer.py`
-   - 抽取 epoch 训练循环、early stopping、best checkpoint 保存。
+   - 已完成。
    - 成功标准：`train_stft.py` 和 `train_cpp.py` 只负责参数解析、选择 dataset、创建 model 并调用 trainer。
 
 建议验证：
@@ -447,18 +443,16 @@ src/
 
 建议从最小风险到最大风险推进：
 
-1. 抽取 `src/training/checkpoint.py`。
-2. 抽取 `src/training/trainer.py`。
-3. 增加 `configs/stft.yaml` 和 `configs/cpp.yaml`。
-4. 新增统一 `scripts/train.py` 和 `scripts/evaluate.py`。
-5. 整理 `preprocessing/` 和 `visualization/`。
-6. 增加模型 factory 和 shape 测试。
-7. 最后迁移包名为 `drone_rfa`。
+1. 增加 `configs/stft.yaml` 和 `configs/cpp.yaml`。
+2. 新增统一 `scripts/train.py` 和 `scripts/evaluate.py`。
+3. 整理 `preprocessing/` 和 `visualization/`。
+4. 增加模型 factory 和 shape 测试。
+5. 最后迁移包名为 `drone_rfa`。
 
 ## 风险与注意事项
 
 - 不建议一次性完成全部重构。训练脚本涉及数据路径、设备、checkpoint 和大文件 H5 读取，改动过大时定位问题困难。
-- 公共训练/评估模块已经覆盖 metrics 和 evaluator，后续优先收敛 checkpoint 和 trainer，不要提前为未来模型做过度抽象。
+- 公共训练/评估模块已经覆盖 metrics、evaluator、checkpoint 和 trainer，后续优先把配置和统一入口收敛，不要提前为未来模型做过度抽象。
 - 训练与测试集切分必须继续使用同一个 `split_dataset(..., seed=42)`，否则会影响历史结果对比。
 - `outputs/` 已作为默认运行产物目录，后续新增输出应优先归档到 `outputs/README.md` 中定义的子目录。
 - 预计算 `.h5` 文件目前仍建议保留在数据集目录下，因为它们是训练输入数据，不是普通实验产物。
@@ -466,13 +460,13 @@ src/
 
 ## 总结
 
-当前已经完成低风险基础整理：README、outputs、路径工具、设备选择、数据切分、H5 Dataset 抽象、训练评估公共模块和最小测试。
+当前已经完成低风险基础整理：README、outputs、路径工具、设备选择、数据切分、H5 Dataset 抽象、训练评估、checkpoint 与 trainer 公共模块和最小测试。
 
 剩余优化的主线应是：
 
-1. 先收敛 checkpoint 和训练循环。
-2. 再引入配置文件提高复现能力。
-3. 然后合并 CLI 入口。
+1. 先引入配置文件提高复现能力。
+2. 然后合并 CLI 入口。
+3. 再整理预处理和可视化模块。
 4. 最后做目录语义升级和包名迁移。
 
 这样可以在保持现有实验可运行的前提下，逐步减少重复代码，并为新增特征、模型和系统化实验管理打基础。
