@@ -15,27 +15,21 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
 
 from src.data.cpp_dataset import CppDataset
+from src.data.splits import split_dataset
 from src.models.resnet import DroneRFaResNet18
 from train_cpp import NUM_CLASSES, BATCH_SIZE, TRAIN_RATIO, VAL_RATIO, TEST_RATIO, CHECKPOINT_NAME, _default_data_dir
+from src.utils.device import default_device
 from src.utils.logger import logger
 from src.utils.paths import checkpoint_dir, figures_dir, metrics_dir
 
 CONFUSION_MATRIX_NAME = "cpp_confusion_matrix.npy"
 CONFUSION_MATRIX_IMAGE_NAME = "cpp_confusion_matrix.png"
 __test__ = False
-
-
-def _default_device() -> str:
-    if torch.cuda.is_available():
-        return "cuda:0"
-    if torch.backends.mps.is_available():
-        return "mps"
-    return "cpu"
 
 
 def compute_metrics(preds, labels):
@@ -118,7 +112,7 @@ def parse_args():
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
     parser.add_argument("--num-workers", type=int, default=0,
                         help="DataLoader workers (0 = main process only)")
-    parser.add_argument("--device", type=str, default=_default_device(),
+    parser.add_argument("--device", type=str, default=default_device(),
                         help="Device, e.g. 'cuda:0', 'cuda:1', 'mps', 'cpu'")
     parser.add_argument("--cm-image-path", type=str, default=None,
                         help=f"Path to save confusion matrix image (default: outputs/figures/{CONFUSION_MATRIX_IMAGE_NAME})")
@@ -141,14 +135,10 @@ def test(args):
         logger.info("Loaded %d CPP samples from %d .h5 files in %s",
                     len(dataset), len(set(s[0] for s in dataset.index)), args.data_dir)
 
-        total_size = len(dataset)
-        train_size = int(total_size * TRAIN_RATIO)
-        val_size = int(total_size * VAL_RATIO)
-        test_size = total_size - train_size - val_size
-        _, _, test_ds = random_split(
-            dataset, [train_size, val_size, test_size],
-            generator=torch.Generator().manual_seed(42),
+        _, _, test_ds = split_dataset(
+            dataset, train_ratio=TRAIN_RATIO, val_ratio=VAL_RATIO, seed=42,
         )
+        test_size = len(test_ds)
         logger.info("Test set size: %d", test_size)
 
         loader_kwargs = dict(

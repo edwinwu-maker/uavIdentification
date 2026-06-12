@@ -16,11 +16,13 @@ import sys
 
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 
+from src.data.splits import split_dataset
 from src.data.stft_dataset import SpectrogramDataset
 from src.models.resnet import DroneRFaResNet18
+from src.utils.device import default_device
 from src.utils.logger import logger
 from src.utils.paths import checkpoint_dir
 
@@ -32,14 +34,6 @@ VAL_RATIO = 0.2
 TEST_RATIO = 0.2
 PATIENCE = 10
 CHECKPOINT_NAME = "best_stft_model.pth"
-
-
-def _default_device() -> str:
-    if torch.cuda.is_available():
-        return "cuda:0"
-    if torch.backends.mps.is_available():
-        return "mps"
-    return "cpu"
 
 
 def _default_data_dir() -> str:
@@ -83,7 +77,7 @@ def parse_args():
                         help="DataLoader workers (0 = main process only)")
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--patience", type=int, default=PATIENCE)
-    parser.add_argument("--device", type=str, default=_default_device(),
+    parser.add_argument("--device", type=str, default=default_device(),
                         help="Device, e.g. 'cuda:0', 'cuda:1', 'mps', 'cpu'")
     return parser.parse_args()
 
@@ -106,14 +100,10 @@ def train(args):
         logger.info("Loaded %d spectrograms from %d .h5 files in %s",
                     len(dataset), len(set(s[0] for s in dataset.index)), args.data_dir)
 
-        total_size = len(dataset)
-        train_size = int(total_size * TRAIN_RATIO)
-        val_size = int(total_size * VAL_RATIO)
-        test_size = total_size - train_size - val_size
-        train_ds, val_ds, _test_ds = random_split(
-            dataset, [train_size, val_size, test_size],
-            generator=torch.Generator().manual_seed(42),
+        train_ds, val_ds, _test_ds = split_dataset(
+            dataset, train_ratio=TRAIN_RATIO, val_ratio=VAL_RATIO, seed=42,
         )
+        train_size, val_size, test_size = len(train_ds), len(val_ds), len(_test_ds)
         logger.info("Split - train: %d, val: %d, test: %d", train_size, val_size, test_size)
 
         loader_kwargs = dict(

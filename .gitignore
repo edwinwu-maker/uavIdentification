@@ -7,3 +7,4 @@ outputs/*
 !outputs/README.md
 *.out
 .pytest_cache/
+tests/
