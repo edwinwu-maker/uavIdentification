@@ -38,12 +38,17 @@ droneRFa/
 - 已新增数据集切分工具：`src/data/splits.py`。
 - 已新增通用 H5 特征数据集：`src/data/h5_dataset.py`。
 - `SpectrogramDataset` 和 `CppDataset` 已改为 `H5FeatureDataset` 的薄封装。
+- 已新增训练评估公共模块：
+  - `src/training/metrics.py`
+  - `src/training/evaluator.py`
 - 已新增最小测试：
   - `tests/test_device.py`
   - `tests/test_splits.py`
   - `tests/test_h5_dataset.py`
+  - `tests/test_metrics.py`
+  - `tests/test_evaluator.py`
 
-这些改动已经降低了入口脚本、数据读取和输出目录的重复度，但训练、评估、指标和配置仍然分散。
+这些改动已经降低了入口脚本、数据读取、指标计算和测试推理的重复度，但 checkpoint、训练循环和配置仍然分散。
 
 ## 剩余主要问题
 
@@ -66,11 +71,10 @@ test_cpp.py
 - 优化器和 loss 创建。
 - 训练循环。
 - 验证/测试推理。
-- 指标计算。
 - checkpoint 加载/保存。
 - 混淆矩阵保存和绘图。
 
-下一步优化重点应是抽取训练与评估公共模块，而不是直接移动包名或大规模改目录。
+下一步优化重点应是继续收敛 checkpoint 和训练循环，而不是直接移动包名或大规模改目录。
 
 ### 2. 配置仍硬编码在脚本中
 
@@ -93,16 +97,15 @@ device
 
 这会影响实验复现，也不利于批量运行 STFT、CPP/FAM 或未来新特征。
 
-### 3. 指标、混淆矩阵和评估循环还没有沉淀
+### 3. checkpoint 和训练循环还没有沉淀
 
-`test_stft.py` 和 `test_cpp.py` 中仍重复包含：
+`train_stft.py` 和 `train_cpp.py` 中仍重复包含：
 
-- `compute_metrics`
-- `save_confusion_matrix_image`
-- 测试集推理循环
-- 混淆矩阵 `.npy` 和 `.png` 保存逻辑
+- epoch 训练循环
+- early stopping
+- best checkpoint 保存逻辑
 
-这些逻辑应抽到公共模块，避免后续新增特征时继续复制。
+这些逻辑应抽到公共模块，避免后续新增特征时继续复制。`test_stft.py` 和 `test_cpp.py` 的公共推理逻辑已经通过 `src/training/evaluator.py` 沉淀。
 
 ### 4. 预处理和可视化逻辑仍混在 `scripts/` 与 `src/utils/`
 
@@ -252,17 +255,15 @@ src/training/
 建议拆分顺序：
 
 1. `metrics.py`
-   - 抽取 `compute_metrics`。
-   - 抽取 confusion matrix 计算。
+   - 已完成。
    - 成功标准：`test_stft.py` 和 `test_cpp.py` 不再各自定义 `compute_metrics`。
 
 2. `visualization/confusion_matrix.py` 或 `training/metrics.py`
-   - 抽取混淆矩阵图片保存。
+   - 已完成。
    - 成功标准：混淆矩阵 `.npy` 仍进 `outputs/metrics/`，图片仍进 `outputs/figures/`。
 
 3. `evaluator.py`
-   - 抽取验证/测试推理循环。
-   - 兼容只返回 loss/accuracy 和返回 preds/labels 两种场景。
+   - 已完成。
    - 成功标准：训练验证和测试推理复用同一套 evaluator。
 
 4. `checkpoint.py`
@@ -446,21 +447,18 @@ src/
 
 建议从最小风险到最大风险推进：
 
-1. 抽取 `src/training/metrics.py`。
-2. 抽取混淆矩阵保存和绘图逻辑。
-3. 抽取 `src/training/evaluator.py`。
-4. 抽取 `src/training/checkpoint.py`。
-5. 抽取 `src/training/trainer.py`。
-6. 增加 `configs/stft.yaml` 和 `configs/cpp.yaml`。
-7. 新增统一 `scripts/train.py` 和 `scripts/evaluate.py`。
-8. 整理 `preprocessing/` 和 `visualization/`。
-9. 增加模型 factory 和 shape 测试。
-10. 最后迁移包名为 `drone_rfa`。
+1. 抽取 `src/training/checkpoint.py`。
+2. 抽取 `src/training/trainer.py`。
+3. 增加 `configs/stft.yaml` 和 `configs/cpp.yaml`。
+4. 新增统一 `scripts/train.py` 和 `scripts/evaluate.py`。
+5. 整理 `preprocessing/` 和 `visualization/`。
+6. 增加模型 factory 和 shape 测试。
+7. 最后迁移包名为 `drone_rfa`。
 
 ## 风险与注意事项
 
 - 不建议一次性完成全部重构。训练脚本涉及数据路径、设备、checkpoint 和大文件 H5 读取，改动过大时定位问题困难。
-- 公共训练/评估模块应先服务现有 STFT/CPP 两条线，不要提前为未来模型做过度抽象。
+- 公共训练/评估模块已经覆盖 metrics 和 evaluator，后续优先收敛 checkpoint 和 trainer，不要提前为未来模型做过度抽象。
 - 训练与测试集切分必须继续使用同一个 `split_dataset(..., seed=42)`，否则会影响历史结果对比。
 - `outputs/` 已作为默认运行产物目录，后续新增输出应优先归档到 `outputs/README.md` 中定义的子目录。
 - 预计算 `.h5` 文件目前仍建议保留在数据集目录下，因为它们是训练输入数据，不是普通实验产物。
@@ -468,11 +466,11 @@ src/
 
 ## 总结
 
-当前已经完成低风险基础整理：README、outputs、路径工具、设备选择、数据切分、H5 Dataset 抽象和最小测试。
+当前已经完成低风险基础整理：README、outputs、路径工具、设备选择、数据切分、H5 Dataset 抽象、训练评估公共模块和最小测试。
 
 剩余优化的主线应是：
 
-1. 先收敛训练/评估公共逻辑。
+1. 先收敛 checkpoint 和训练循环。
 2. 再引入配置文件提高复现能力。
 3. 然后合并 CLI 入口。
 4. 最后做目录语义升级和包名迁移。

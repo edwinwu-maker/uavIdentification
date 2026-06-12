@@ -22,6 +22,7 @@ from sklearn.metrics import confusion_matrix
 from src.data.splits import split_dataset
 from src.data.stft_dataset import SpectrogramDataset
 from src.models.resnet import DroneRFaResNet18
+from src.training.evaluator import evaluate_with_predictions
 from src.training.metrics import compute_metrics, save_confusion_matrix_image
 from train_stft import NUM_CLASSES, BATCH_SIZE, TRAIN_RATIO, VAL_RATIO, TEST_RATIO, CHECKPOINT_NAME, _default_data_dir
 from src.utils.device import default_device
@@ -31,34 +32,6 @@ from src.utils.paths import checkpoint_dir, figures_dir, metrics_dir
 CONFUSION_MATRIX_NAME = "stft_confusion_matrix.npy"
 CONFUSION_MATRIX_IMAGE_NAME = "stft_confusion_matrix.png"
 __test__ = False
-
-
-def evaluate(model, dataloader, criterion, device):
-    model.eval()
-    loss_sum = 0.0
-    count = 0
-    all_preds = []
-    all_labels = []
-
-    with torch.no_grad():
-        for inputs, labels in tqdm(
-            dataloader, desc="Testing", leave=False, unit="batch",
-        ):
-            inputs = inputs.to(device, non_blocking=True)
-            labels = labels.to(device, non_blocking=True)
-            outputs = model(inputs)
-            loss = criterion(outputs, labels)
-
-            loss_sum += loss.item() * inputs.size(0)
-            count += inputs.size(0)
-            all_preds.append(outputs.argmax(dim=1).cpu())
-            all_labels.append(labels.cpu())
-
-    avg_loss = loss_sum / count
-    preds = torch.cat(all_preds).numpy()
-    labels = torch.cat(all_labels).numpy()
-    acc = (preds == labels).mean()
-    return avg_loss, acc, preds, labels
 
 
 def parse_args():
@@ -124,7 +97,9 @@ def test(args):
         criterion = nn.CrossEntropyLoss()
 
         # ── Test ──
-        test_loss, test_acc, preds, labels = evaluate(model, test_loader, criterion, device)
+        test_loss, test_acc, preds, labels = evaluate_with_predictions(
+            model, test_loader, criterion, device
+        )
 
         metrics = compute_metrics(preds, labels)
         logger.info("=" * 55)

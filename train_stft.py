@@ -22,6 +22,7 @@ from tqdm import tqdm
 from src.data.splits import split_dataset
 from src.data.stft_dataset import SpectrogramDataset
 from src.models.resnet import DroneRFaResNet18
+from src.training.evaluator import evaluate
 from src.utils.device import default_device
 from src.utils.logger import logger
 from src.utils.paths import checkpoint_dir
@@ -42,29 +43,6 @@ def _default_data_dir() -> str:
     if sys.platform == "darwin":
         return os.path.expanduser("~/Desktop/dataset/droneRFa/stft_h5")
     return "/mnt/data/wurixin/DroneRFa/stft_h5"
-
-
-def evaluate(model, dataloader, criterion, device):
-    model.eval()
-    loss_sum = 0.0
-    count = 0
-    correct = 0
-
-    with torch.no_grad():
-        for inputs, labels in tqdm(
-            dataloader, desc="Evaluating", leave=False, unit="batch",
-        ):
-            inputs = inputs.to(device, non_blocking=True)
-            labels = labels.to(device, non_blocking=True)
-            outputs = model(inputs)
-            loss = criterion(outputs, labels)
-
-            batch_size = inputs.size(0)
-            loss_sum += loss.item() * batch_size
-            count += batch_size
-            correct += (outputs.argmax(dim=1) == labels).sum().item()
-
-    return loss_sum / count, correct / count
 
 
 def parse_args():
