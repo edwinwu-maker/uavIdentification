@@ -1,10 +1,10 @@
 # 项目结构规划优化方向
 
-本文基于当前 `droneRFa` 项目的实际目录与代码组织情况，给出后续结构优化建议。
+本文基于当前 `droneRFa` 项目的实际目录与代码组织情况，记录已经完成的结构优化，并给出剩余重构方向。
 
-## 当前结构观察
+## 当前状态
 
-项目当前已经具备基本分层：
+项目目前仍保留早期实验入口：
 
 ```text
 droneRFa/
@@ -19,26 +19,37 @@ droneRFa/
     data/
     models/
     utils/
+  tests/
   docs/
-  logs/
-  checkpoints/
+  outputs/
 ```
 
-其中：
+当前已经完成一部分低风险整理：
 
-- `src/data` 负责 STFT、CPP/FAM 的 H5 数据集读取。
-- `src/models` 目前主要包含 ResNet 模型定义。
-- `src/utils` 包含 FAM、绘图、日志、合成信号等工具函数。
-- `scripts` 存放预处理、图片生成和演示脚本。
-- 根目录包含 STFT/CPP 两套训练与测试入口。
+- `readme.md` 已更新为当前真实结构和运行命令。
+- `.gitignore` 已忽略 `outputs/*`，保留 `outputs/README.md`。
+- 日志、checkpoint、图像和指标已按 `outputs/README.md` 归档：
+  - `outputs/logs/`
+  - `outputs/checkpoints/`
+  - `outputs/figures/`
+  - `outputs/metrics/`
+- 已新增公共路径工具：`src/utils/paths.py`。
+- 已新增默认设备选择工具：`src/utils/device.py`。
+- 已新增数据集切分工具：`src/data/splits.py`。
+- 已新增通用 H5 特征数据集：`src/data/h5_dataset.py`。
+- `SpectrogramDataset` 和 `CppDataset` 已改为 `H5FeatureDataset` 的薄封装。
+- 已新增最小测试：
+  - `tests/test_device.py`
+  - `tests/test_splits.py`
+  - `tests/test_h5_dataset.py`
 
-整体结构适合早期实验，但如果继续扩展模型、特征、实验配置和评估流程，当前结构会逐渐出现重复代码多、入口分散、配置难复现的问题。
+这些改动已经降低了入口脚本、数据读取和输出目录的重复度，但训练、评估、指标和配置仍然分散。
 
-## 主要问题
+## 剩余主要问题
 
-### 1. 根目录入口过多
+### 1. 训练与评估入口仍然重复
 
-当前根目录包含：
+根目录仍有四个入口：
 
 ```text
 train_stft.py
@@ -47,38 +58,23 @@ test_stft.py
 test_cpp.py
 ```
 
-这些脚本承担了训练、评估、参数解析、设备选择、数据切分、checkpoint 管理等多种职责。STFT 和 CPP 两套流程高度相似，后续新增特征或模型时容易继续复制脚本。
+它们仍重复承担：
 
-### 2. `src` 包命名不够清晰
-
-当前代码使用：
-
-```python
-from src.data.stft_dataset import SpectrogramDataset
-from src.models.resnet import DroneRFaResNet18
-```
-
-这在实验阶段可以接受，但长期项目中建议将 `src` 作为源码根目录，将真实包名改为业务语义更明确的 `drone_rfa`。
-
-### 3. 训练、评估、指标逻辑没有公共模块
-
-当前多个脚本中重复存在：
-
-- 默认设备选择。
-- 默认数据目录选择。
-- 数据集切分。
-- DataLoader 参数构造。
+- 参数解析。
+- DataLoader 构造。
+- 模型创建。
+- 优化器和 loss 创建。
 - 训练循环。
-- 评估循环。
+- 验证/测试推理。
 - 指标计算。
-- 混淆矩阵保存。
-- checkpoint 路径管理。
+- checkpoint 加载/保存。
+- 混淆矩阵保存和绘图。
 
-这些逻辑应沉淀到 `training`、`evaluation`、`metrics` 等公共模块中。
+下一步优化重点应是抽取训练与评估公共模块，而不是直接移动包名或大规模改目录。
 
-### 4. 配置硬编码较多
+### 2. 配置仍硬编码在脚本中
 
-如下参数散落在脚本中：
+如下配置仍在 `train_*.py` 和 `test_*.py` 中：
 
 ```text
 NUM_CLASSES
@@ -90,36 +86,64 @@ TEST_RATIO
 PATIENCE
 CHECKPOINT_NAME
 data_dir
-device
 num_workers
+epochs
+device
 ```
 
-这会影响实验复现，也不利于批量运行不同配置。
+这会影响实验复现，也不利于批量运行 STFT、CPP/FAM 或未来新特征。
 
-### 5. 文档与实际结构不一致
+### 3. 指标、混淆矩阵和评估循环还没有沉淀
 
-当前 `readme.md` 存在中文编码错乱问题，并且目录说明中包含已经不存在或已经改名的文件，例如：
+`test_stft.py` 和 `test_cpp.py` 中仍重复包含：
 
-- `droneRFa_dataset.py`
-- `spectrogram_dataset.py`
-- `transforms.py`
+- `compute_metrics`
+- `save_confusion_matrix_image`
+- 测试集推理循环
+- 混淆矩阵 `.npy` 和 `.png` 保存逻辑
 
-README 应优先修复为当前真实结构，避免交接和复现实验时误导。
+这些逻辑应抽到公共模块，避免后续新增特征时继续复制。
 
-### 6. 运行产物和源码边界不够清晰
+### 4. 预处理和可视化逻辑仍混在 `scripts/` 与 `src/utils/`
 
-项目中存在：
+当前 `scripts/` 里既有 CLI 参数解析，也有较多业务逻辑：
 
-- `logs/`
-- `checkpoints/`
-- `.pytest_cache/`
-- 多处 `__pycache__/`
+- STFT 预计算。
+- CPP/FAM 预计算。
+- STFT PNG 生成。
+- CPP/FAM PNG 生成。
+- FAM demo 图生成。
 
-虽然 `.gitignore` 已经忽略部分产物，但建议进一步统一输出目录，明确源码、数据、缓存、模型权重和实验结果的边界。
+`src/utils/` 中也包含不同职责：
+
+- 日志和路径工具。
+- FAM/SCF 算法。
+- 图像绘制。
+- 合成信号。
+
+长期看应拆成 `preprocessing/` 和 `visualization/`，但这一步应放在训练/评估管线收敛之后。
+
+### 5. 包名仍为泛化的 `src`
+
+当前导入仍是：
+
+```python
+from src.data.stft_dataset import SpectrogramDataset
+from src.models.resnet import DroneRFaResNet18
+```
+
+长期建议迁移为：
+
+```python
+from drone_rfa.data.stft_dataset import SpectrogramDataset
+from drone_rfa.models.resnet import DroneRFaResNet18
+```
+
+但包名迁移会影响所有导入路径、脚本执行方式和测试，应单独作为后期阶段处理。
 
 ## 推荐目标结构
 
-建议中期目标结构如下：
+中期目标结构建议如下：
 
 ```text
 droneRFa/
@@ -187,8 +211,10 @@ droneRFa/
 
   tests/
     test_data.py
+    test_device.py
     test_metrics.py
     test_shapes.py
+    test_splits.py
 
   docs/
     dataset.md
@@ -197,21 +223,78 @@ droneRFa/
     snr_accuracy_curve_implementation_plan.md
 
   outputs/
+    README.md
     checkpoints/
     logs/
     figures/
     metrics/
 ```
 
-其中 `outputs/` 应加入 `.gitignore`，作为统一实验输出目录。
+注意：`src/drone_rfa/` 包名迁移不是下一步优先事项，应在公共训练/评估模块稳定后单独执行。
 
-## 模块职责建议
+## 剩余优化方案
 
-### `configs/`
+### 阶段 1：训练与评估公共模块
 
-保存实验配置，避免在脚本中硬编码训练参数。
+目标：减少 `train_stft.py`、`train_cpp.py`、`test_stft.py`、`test_cpp.py` 中的重复逻辑，但先保留现有入口文件。
 
-示例：
+建议新增：
+
+```text
+src/training/
+  __init__.py
+  evaluator.py
+  metrics.py
+  checkpoint.py
+  trainer.py
+```
+
+建议拆分顺序：
+
+1. `metrics.py`
+   - 抽取 `compute_metrics`。
+   - 抽取 confusion matrix 计算。
+   - 成功标准：`test_stft.py` 和 `test_cpp.py` 不再各自定义 `compute_metrics`。
+
+2. `visualization/confusion_matrix.py` 或 `training/metrics.py`
+   - 抽取混淆矩阵图片保存。
+   - 成功标准：混淆矩阵 `.npy` 仍进 `outputs/metrics/`，图片仍进 `outputs/figures/`。
+
+3. `evaluator.py`
+   - 抽取验证/测试推理循环。
+   - 兼容只返回 loss/accuracy 和返回 preds/labels 两种场景。
+   - 成功标准：训练验证和测试推理复用同一套 evaluator。
+
+4. `checkpoint.py`
+   - 抽取 checkpoint 路径、保存和加载。
+   - 成功标准：训练脚本不直接调用 `torch.save`，测试脚本不直接拼 checkpoint 路径。
+
+5. `trainer.py`
+   - 抽取 epoch 训练循环、early stopping、best checkpoint 保存。
+   - 成功标准：`train_stft.py` 和 `train_cpp.py` 只负责参数解析、选择 dataset、创建 model 并调用 trainer。
+
+建议验证：
+
+```bash
+~/Desktop/venv/bin/python -m pytest
+~/Desktop/venv/bin/python -m py_compile train_stft.py train_cpp.py test_stft.py test_cpp.py src/training/*.py
+~/Desktop/venv/bin/python train_stft.py --help
+~/Desktop/venv/bin/python test_stft.py --help
+```
+
+### 阶段 2：配置文件
+
+目标：把硬编码训练参数迁移到可复现配置。
+
+建议新增：
+
+```text
+configs/
+  stft.yaml
+  cpp.yaml
+```
+
+配置内容建议：
 
 ```yaml
 feature: stft
@@ -224,159 +307,174 @@ split:
   train: 0.6
   val: 0.2
   test: 0.2
+  seed: 42
 data:
-  dir: E:/dataSet/DroneRFa/stft_h5
+  dir: ~/Desktop/dataset/droneRFa/stft_h5
 output:
   checkpoint: outputs/checkpoints/best_stft_model.pth
 ```
 
-### `data/`
+建议先支持：
 
-负责数据读取、H5 索引、数据切分。
-
-建议抽象一个通用 H5 数据集：
-
-```python
-H5FeatureDataset(cache_dir, feature_key)
+```bash
+python train_stft.py --config configs/stft.yaml
+python train_cpp.py --config configs/cpp.yaml
 ```
 
-然后 STFT 和 CPP/FAM 数据集只保留差异化封装：
+暂时不建议一开始就引入复杂配置框架。可以优先使用 `yaml.safe_load` 和一个小型配置解析函数。
 
-```python
-SpectrogramDataset(cache_dir) -> feature_key="stft"
-CppDataset(cache_dir) -> feature_key="cpp"
-```
+成功标准：
 
-### `training/`
+- 无 `--config` 时保持现有默认行为。
+- 有 `--config` 时配置文件覆盖默认参数。
+- README 中给出最小配置示例。
+- 测试覆盖配置读取和默认值合并。
 
-负责训练、评估、指标和 checkpoint 管理。
+### 阶段 3：统一 CLI 入口
 
-建议拆分为：
+目标：在公共训练/评估模块稳定后，新增统一入口：
 
-- `trainer.py`：训练循环、early stopping。
-- `evaluator.py`：验证集和测试集推理。
-- `metrics.py`：accuracy、precision、recall、f1、confusion matrix。
-- `checkpoint.py`：模型保存、加载、路径管理。
-
-### `preprocessing/`
-
-保存信号处理和特征计算逻辑，例如：
-
-- STFT 计算。
-- CPP/FAM 计算。
-- FAM grid 聚合。
-- Torch/NumPy 两种实现。
-
-这样可以将算法计算逻辑从通用 `utils` 中移出，职责更明确。
-
-### `visualization/`
-
-负责所有可视化输出，例如：
-
-- STFT 图。
-- CPP/FAM 图。
-- 混淆矩阵图。
-- 时域、频域和 FAM 演示图。
-
-### `scripts/`
-
-只保留命令行入口，不承载复杂业务逻辑。
-
-推荐入口形式：
-
-```powershell
+```bash
 python scripts/train.py --feature stft --config configs/stft.yaml
 python scripts/train.py --feature cpp --config configs/cpp.yaml
-python scripts/evaluate.py --feature stft --checkpoint outputs/checkpoints/best_stft_model.pth
-python scripts/evaluate.py --feature cpp --checkpoint outputs/checkpoints/best_cpp_model.pth
+python scripts/evaluate.py --feature stft --config configs/stft.yaml
+python scripts/evaluate.py --feature cpp --config configs/cpp.yaml
 ```
 
-## 优先级建议
+迁移策略：
 
-### 第一阶段：低风险整理
+1. 先新增 `scripts/train.py` 和 `scripts/evaluate.py`。
+2. 保留 `train_stft.py`、`train_cpp.py`、`test_stft.py`、`test_cpp.py` 作为兼容入口。
+3. README 先推荐新入口，但保留旧入口说明。
+4. 等新入口稳定后，再决定是否删除旧入口。
 
-优先处理不改变核心行为的结构问题：
+成功标准：
 
-1. 修复 `readme.md` 编码和过期目录说明。
-2. 新增 `configs/`，迁移训练参数。
-3. 新增 `outputs/` 目录规划，并加入 `.gitignore`。
-4. 抽取设备选择、路径选择、数据切分公共逻辑。
-5. 清理不应进入项目结构认知的 `__pycache__/`、`.pytest_cache/` 等缓存目录。
+- STFT/CPP 可以通过同一个训练入口运行。
+- STFT/CPP 可以通过同一个评估入口运行。
+- 旧入口仍可运行或明确标记为 deprecated。
 
-### 第二阶段：训练与评估管线收敛
+### 阶段 4：预处理与可视化模块化
 
-将 STFT/CPP 的重复训练和测试流程合并：
+目标：让 `scripts/` 只负责 CLI，不承载大量业务逻辑。
 
-1. 抽取 `training/trainer.py`。
-2. 抽取 `training/evaluator.py`。
-3. 抽取 `training/metrics.py`。
-4. 抽取 `training/checkpoint.py`。
-5. 将根目录的 `train_stft.py`、`train_cpp.py`、`test_stft.py`、`test_cpp.py` 收敛为 `scripts/train.py` 和 `scripts/evaluate.py`。
+建议迁移：
 
-### 第三阶段：包名和目录语义升级
+```text
+src/preprocessing/
+  stft.py
+  cpp.py
+  fam.py
+  fam_torch.py
+  fam_grid.py
 
-将 `src` 从包名改为源码根目录：
+src/visualization/
+  stft_png.py
+  cpp_png.py
+  fam_plot.py
+  plot_utils.py
+  confusion_matrix.py
+```
+
+迁移顺序：
+
+1. 先移动纯函数和算法函数。
+2. 再让 `scripts/precompute_*.py` 调用模块函数。
+3. 最后让图片生成脚本调用 `visualization` 模块。
+
+注意：
+
+- 这一步可能影响预处理性能和设备路径，应该在训练/评估入口稳定后做。
+- 不建议同时改算法实现和文件结构。
+
+### 阶段 5：模型工厂与形状测试
+
+目标：为后续新增模型或特征输入尺寸做准备。
+
+建议新增：
+
+```text
+src/models/factory.py
+tests/test_shapes.py
+```
+
+初始只支持：
+
+```python
+create_model("resnet18", num_classes=25)
+```
+
+成功标准：
+
+- ResNet 前向输出 shape 为 `(batch_size, num_classes)`。
+- STFT/CPP 样本可被模型接受或在 README 中明确输入尺寸约束。
+
+### 阶段 6：包名迁移
+
+目标：将真实业务包名从 `src` 迁移到 `drone_rfa`。
+
+建议迁移目标：
 
 ```text
 src/
   drone_rfa/
+    data/
+    models/
+    training/
+    preprocessing/
+    visualization/
+    utils/
 ```
 
-同步将导入路径从：
+迁移策略：
 
-```python
-from src.data.stft_dataset import SpectrogramDataset
-```
+1. 新增 `pyproject.toml`，配置 package discovery。
+2. 移动模块到 `src/drone_rfa/`。
+3. 全局替换导入路径。
+4. 调整脚本入口的运行方式。
+5. 跑全量测试和关键 CLI `--help`。
 
-迁移为：
+风险：
 
-```python
-from drone_rfa.data.stft_dataset import SpectrogramDataset
-```
+- 影响所有导入路径。
+- 影响直接运行脚本的方式。
+- 容易与未提交重构混在一起。
 
-这个阶段改动范围较大，建议在前两阶段稳定后执行。
+因此该阶段应最后单独进行。
 
-### 第四阶段：测试与复现能力建设
+## 推荐后续执行顺序
 
-补充最小测试集：
+建议从最小风险到最大风险推进：
 
-- H5 Dataset 能正确读取样本。
-- STFT/CPP 样本 shape 符合模型输入。
-- split 结果在固定 seed 下可复现。
-- metrics 计算结果正确。
-- ResNet 前向输出维度为 `(batch_size, num_classes)`。
-
-## 推荐迁移顺序
-
-建议按以下顺序推进：
-
-1. 修复 README 和文档结构。
-2. 增加 `configs/` 和 `outputs/`。
-3. 抽取公共数据切分、设备选择、路径工具。
-4. 抽取公共 H5 Dataset。
-5. 抽取训练和评估公共模块。
-6. 合并命令行入口。
-7. 迁移包名为 `drone_rfa`。
-8. 补充测试。
+1. 抽取 `src/training/metrics.py`。
+2. 抽取混淆矩阵保存和绘图逻辑。
+3. 抽取 `src/training/evaluator.py`。
+4. 抽取 `src/training/checkpoint.py`。
+5. 抽取 `src/training/trainer.py`。
+6. 增加 `configs/stft.yaml` 和 `configs/cpp.yaml`。
+7. 新增统一 `scripts/train.py` 和 `scripts/evaluate.py`。
+8. 整理 `preprocessing/` 和 `visualization/`。
+9. 增加模型 factory 和 shape 测试。
+10. 最后迁移包名为 `drone_rfa`。
 
 ## 风险与注意事项
 
-- 不建议一次性完成全部重构，训练脚本涉及数据路径、设备、checkpoint 和大文件 H5 读取，改动过大时定位问题困难。
-- 包名迁移会影响所有导入路径，应单独作为一个阶段处理。
-- 训练与测试集切分逻辑必须保持一致，否则会影响历史实验结果对比。
-- 迁移 checkpoint 输出目录时，应保留旧路径兼容或在 README 中明确说明新路径。
-- 当前 `docs` 下有 PDF 删除状态，整理文档前应确认该文件是有意删除还是误删。
+- 不建议一次性完成全部重构。训练脚本涉及数据路径、设备、checkpoint 和大文件 H5 读取，改动过大时定位问题困难。
+- 公共训练/评估模块应先服务现有 STFT/CPP 两条线，不要提前为未来模型做过度抽象。
+- 训练与测试集切分必须继续使用同一个 `split_dataset(..., seed=42)`，否则会影响历史结果对比。
+- `outputs/` 已作为默认运行产物目录，后续新增输出应优先归档到 `outputs/README.md` 中定义的子目录。
+- 预计算 `.h5` 文件目前仍建议保留在数据集目录下，因为它们是训练输入数据，不是普通实验产物。
+- 包名迁移应在公共模块和 CLI 稳定后独立执行。
 
 ## 总结
 
-当前项目的核心优化方向不是增加更多目录，而是把重复的实验流程收敛成稳定的训练管线，把硬编码参数迁移到配置，把运行产物集中管理，并让文档反映真实结构。
+当前已经完成低风险基础整理：README、outputs、路径工具、设备选择、数据切分、H5 Dataset 抽象和最小测试。
 
-短期内建议优先完成：
+剩余优化的主线应是：
 
-1. README 修复。
-2. 配置目录建设。
-3. 公共训练/评估逻辑抽取。
-4. 统一输出目录。
-5. 最小测试补充。
+1. 先收敛训练/评估公共逻辑。
+2. 再引入配置文件提高复现能力。
+3. 然后合并 CLI 入口。
+4. 最后做目录语义升级和包名迁移。
 
-完成这些后，项目会更容易复现实验、扩展新特征、替换模型，并支持后续更系统的实验管理。
+这样可以在保持现有实验可运行的前提下，逐步减少重复代码，并为新增特征、模型和系统化实验管理打基础。

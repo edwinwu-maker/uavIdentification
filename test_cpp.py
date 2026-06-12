@@ -17,11 +17,12 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
+from sklearn.metrics import confusion_matrix
 
 from src.data.cpp_dataset import CppDataset
 from src.data.splits import split_dataset
 from src.models.resnet import DroneRFaResNet18
+from src.training.metrics import compute_metrics, save_confusion_matrix_image
 from train_cpp import NUM_CLASSES, BATCH_SIZE, TRAIN_RATIO, VAL_RATIO, TEST_RATIO, CHECKPOINT_NAME, _default_data_dir
 from src.utils.device import default_device
 from src.utils.logger import logger
@@ -30,49 +31,6 @@ from src.utils.paths import checkpoint_dir, figures_dir, metrics_dir
 CONFUSION_MATRIX_NAME = "cpp_confusion_matrix.npy"
 CONFUSION_MATRIX_IMAGE_NAME = "cpp_confusion_matrix.png"
 __test__ = False
-
-
-def compute_metrics(preds, labels):
-    return {
-        "accuracy": accuracy_score(labels, preds),
-        "precision": precision_score(labels, preds, average="macro", zero_division=0),
-        "recall": recall_score(labels, preds, average="macro", zero_division=0),
-        "f1": f1_score(labels, preds, average="macro", zero_division=0),
-    }
-
-
-def save_confusion_matrix_image(cm, save_path):
-    import matplotlib.pyplot as plt
-
-    fig, ax = plt.subplots(figsize=(12, 10))
-    im = ax.imshow(cm, interpolation="nearest", cmap="Blues")
-    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-
-    class_labels = np.arange(cm.shape[0])
-    ax.set(
-        title="CPP Confusion Matrix",
-        xlabel="Predicted Label",
-        ylabel="True Label",
-        xticks=class_labels,
-        yticks=class_labels,
-    )
-
-    threshold = cm.max() / 2 if cm.size else 0
-    for i in range(cm.shape[0]):
-        for j in range(cm.shape[1]):
-            ax.text(
-                j,
-                i,
-                int(cm[i, j]),
-                ha="center",
-                va="center",
-                color="white" if cm[i, j] > threshold else "black",
-                fontsize=7,
-            )
-
-    fig.tight_layout()
-    fig.savefig(save_path, dpi=300, bbox_inches="tight")
-    plt.close(fig)
 
 
 def evaluate(model, dataloader, criterion, device):
