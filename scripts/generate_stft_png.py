@@ -1,7 +1,7 @@
-"""Generate spectrogram PNGs from pre-computed .h5 files.
+"""Generate stft PNGs from pre-computed .h5 files.
 
 Reads .h5 files produced by precompute_h5.py and generates PNG images.
-Each PNG contains two spectrograms (Channel 0 and Channel 1).
+Each PNG contains two stfts (Channel 0 and Channel 1).
 """
 
 import sys
@@ -38,7 +38,7 @@ def _default_save_root(data_dir=None) -> str:
 
 
 def plot_dual_channel(stft_sample, save_path, sample_idx, label=None):
-    """Plot a dual-channel spectrogram and save as PNG.
+    """Plot a dual-channel stft and save as PNG.
 
     stft_sample: (2, 1024, 1024) float32, z-score normalized STFT.
     """
@@ -82,7 +82,7 @@ def _task_generator(h5f, name_no_extension, drone_code, save_root):
 
 
 def _process_sample(args):
-    """Worker: plot and save a single spectrogram sample."""
+    """Worker: plot and save a single stft sample."""
     stft_slice, idx, label, save_path = args
     try:
         plot_dual_channel(stft_slice, save_path, idx, label)

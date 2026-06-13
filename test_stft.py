@@ -19,7 +19,7 @@ from torch.utils.data import DataLoader
 from sklearn.metrics import confusion_matrix
 
 from src.data.splits import split_dataset
-from src.data.stft_dataset import SpectrogramDataset
+from src.data.stft_dataset import StftDataset
 from src.models.resnet import DroneRFaResNet18
 from src.training.checkpoint import default_checkpoint_path, load_checkpoint
 from src.training.evaluator import evaluate_with_predictions
@@ -36,11 +36,11 @@ __test__ = False
 
 
 def build_parser(config=None):
-    parser = argparse.ArgumentParser(description="Test on pre-computed .h5 spectrograms (single GPU)")
+    parser = argparse.ArgumentParser(description="Test on pre-computed .h5 stfts (single GPU)")
     parser.add_argument("--config", type=str, default=None,
                         help="Path to YAML config")
     parser.add_argument("--data-dir", type=str, default=None,
-                        help="Directory containing .h5 spectrogram files")
+                        help="Directory containing .h5 stft files")
     parser.add_argument(
         "--model-path",
         type=str,
@@ -92,9 +92,9 @@ def test(args):
         args.data_dir = expand_path(args.data_dir)
 
     # ── Dataset (same split as training) ──
-    dataset = SpectrogramDataset(args.data_dir)
+    dataset = StftDataset(args.data_dir)
     try:
-        logger.info("Loaded %d spectrograms from %d .h5 files in %s",
+        logger.info("Loaded %d s from %d .h5 files in %s",
                     len(dataset), len(set(s[0] for s in dataset.index)), args.data_dir)
 
         _, _, test_ds = split_dataset(

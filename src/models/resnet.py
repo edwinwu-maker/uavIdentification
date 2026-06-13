@@ -3,16 +3,16 @@ from torchvision.models import resnet18
 
 
 class DroneRFaResNet18(nn.Module):
-    """ResNet-18 adapted for DroneRFa spectrogram classification.
+    """ResNet-18 adapted for DroneRFa stft classification.
 
-    Input: (B, 2, 1024, 1024) — 2-channel spectrograms (RF0, RF1).
+    Input: (B, 2, 1024, 1024) — 2-channel stfts (RF0, RF1).
     Output: (B, 25) — logits over 25 drone/background classes.
     """
 
     def __init__(self, num_classes: int = 25):
         super().__init__()
         self.model = resnet18(weights=None)
-        # Replace first conv: 3-channel RGB → 2-channel spectrogram
+        # Replace first conv: 3-channel RGB → 2-channel stft
         self.model.conv1 = nn.Conv2d(
             2, 64, kernel_size=7, stride=2, padding=3, bias=False
         )

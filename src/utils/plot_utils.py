@@ -71,7 +71,7 @@ def plot_iq_frequency_domain(sig_iq: np.ndarray,
     plt.show()
 
 
-def plot_spectrogram(
+def plot_stft(
     freqs: np.ndarray,
     times: np.ndarray,
     time_freq_matrix_dB: np.ndarray,
@@ -93,7 +93,7 @@ def plot_spectrogram(
     vmin, vmax : float or None
         colorbar 的 dB 范围，None 时自动根据数据确定。
     """
-    title = "Spectrogram (STFT)"
+    title = "stft (STFT)"
     plt.figure(figsize=(14, 6))
     plt.pcolormesh(
         freqs / 1e6,
@@ -112,5 +112,5 @@ def plot_spectrogram(
     plt.tight_layout()
     if save_path:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        logger.info("Saved spectrogram to '%s'", save_path)
+        logger.info("Saved stft to '%s'", save_path)
     plt.close()

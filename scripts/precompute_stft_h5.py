@@ -1,5 +1,5 @@
 """
-Convert .mat IQ files -> one .h5 per file with pre-computed spectrograms.
+Convert .mat IQ files -> one .h5 per file with pre-computed stfts.
 
 Each .mat is converted independently to a same-named .h5 in the output
 directory.
@@ -201,18 +201,18 @@ def process_one_mat(
                 h5f["stft"][sample_idx:batch_end] = batch_stft
                 h5f["labels"][sample_idx:batch_end] = label
 
-    logger.info("Done: %s -> %d spectrograms", mat_file, num_samples)
+    logger.info("Done: %s -> %d stfts", mat_file, num_samples)
     return mat_file, num_samples
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Convert .mat IQ → .h5 spectrogram files")
+    parser = argparse.ArgumentParser(description="Convert .mat IQ → .h5 stft files")
     parser.add_argument("--data-dir", type=str, default=_default_data_dir(),
                         help="Directory containing .mat files")
     parser.add_argument("--output-dir", type=str, default=None,
                         help="Directory for output .h5 files (default: <data-dir>/stft_h5)")
     parser.add_argument("--sample-length", type=int, default=SAMPLE_LENGTH,
-                        help="Number of IQ samples per output spectrogram")
+                        help="Number of IQ samples per output stft")
     parser.add_argument("--batch-size", type=int, default=8,
                         help="STFT batch size")
     parser.add_argument("--device", type=str, default="cpu",
@@ -245,7 +245,7 @@ def main() -> None:
         )
         total_samples += num_samples
 
-    logger.info("All done. %d files -> %d spectrograms", len(mat_files), total_samples)
+    logger.info("All done. %d files -> %d stfts", len(mat_files), total_samples)
 
 
 if __name__ == "__main__":
