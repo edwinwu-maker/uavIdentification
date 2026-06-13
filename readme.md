@@ -35,11 +35,13 @@ python <script-or-command>
 ├── AGENTS.md                         # 代码代理协作规则和项目运行约定
 ├── readme.md                         # 项目说明文档
 ├── requirements.txt                  # 项目依赖列表
-├── train_stft.py                     # 基于预计算 STFT .h5 数据训练 ResNet
-├── train_cpp.py                      # 基于预计算 CPP/FAM .h5 数据训练 ResNet
-├── test_stft.py                      # 加载 STFT checkpoint 并在测试集评估
-├── test_cpp.py                       # 加载 CPP/FAM checkpoint 并在测试集评估
+├── train_stft.py                     # STFT 训练兼容入口，转发到 scripts/train.py
+├── train_cpp.py                      # CPP/FAM 训练兼容入口，转发到 scripts/train.py
+├── test_stft.py                      # STFT 评估兼容入口，转发到 scripts/evaluate.py
+├── test_cpp.py                       # CPP/FAM 评估兼容入口，转发到 scripts/evaluate.py
 ├── scripts/
+│   ├── train.py                      # 统一训练入口，支持 --feature stft|cpp
+│   ├── evaluate.py                   # 统一评估入口，支持 --feature stft|cpp
 │   ├── precompute_stft_h5.py         # 将原始 .mat IQ 数据预计算为 STFT .h5
 │   ├── precompute_cpp_h5.py          # 将原始 .mat IQ 数据预计算为 CPP/FAM .h5
 │   ├── generate_stft_png.py          # 从 STFT .h5 生成双通道频谱图 PNG
@@ -71,6 +73,8 @@ python <script-or-command>
 
 `outputs/` 是统一实验输出目录。日志默认写入 `outputs/logs/`，模型 checkpoint 默认写入 `outputs/checkpoints/`，图片默认写入 `outputs/figures/`，指标和混淆矩阵数组默认写入 `outputs/metrics/`。
 
+仓库内代码默认使用 `src.*` 导入路径，不使用 `drone_rfa.*` 别名。
+
 ## 常用命令
 
 以下命令默认从仓库根目录运行。macOS 可将 `python` 替换为 `~/Desktop/venv/bin/python`。
@@ -96,31 +100,33 @@ python scripts/precompute_cpp_h5.py \
 ### 生成特征图片
 
 ```bash
-python scripts/generate_stft_png.py
+python scripts/generate_stft_png.py --h5-dir ~/Desktop/dataset/droneRFa/stft_h5
 python scripts/generate_cpp_png.py --h5-dir ~/Desktop/dataset/droneRFa/cpp_h5
 ```
 
-`generate_stft_png.py` 当前使用平台默认的 `stft_h5` 输入目录。STFT 图片默认保存到 `outputs/figures/stft_png/`，CPP/FAM 图片默认保存到 `outputs/figures/cpp_png/`。
+STFT 图片默认保存到 `outputs/figures/stft_png/`，CPP/FAM 图片默认保存到 `outputs/figures/cpp_png/`。
 
 ### 训练模型
 
 ```bash
-python train_stft.py --data-dir ~/Desktop/dataset/droneRFa/stft_h5 --batch-size 64
-python train_cpp.py --data-dir ~/Desktop/dataset/droneRFa/cpp_h5 --batch-size 64
+python scripts/train.py --feature stft --data-dir ~/Desktop/dataset/droneRFa/stft_h5 --batch-size 64
+python scripts/train.py --feature cpp --data-dir ~/Desktop/dataset/droneRFa/cpp_h5 --batch-size 64
 ```
 
-可通过 `--device` 指定设备，例如 `cuda:0`、`mps` 或 `cpu`。
+兼容入口 `train_stft.py` 和 `train_cpp.py` 仍可直接使用。可通过 `--device` 指定设备，例如 `cuda:0`、`mps` 或 `cpu`。
 
 ### 测试模型
 
 ```bash
-python test_stft.py \
+python scripts/evaluate.py \
+  --feature stft \
   --data-dir ~/Desktop/dataset/droneRFa/stft_h5 \
   --model-path outputs/checkpoints/best_stft_model.pth
 
-python test_cpp.py \
+python scripts/evaluate.py \
+  --feature cpp \
   --data-dir ~/Desktop/dataset/droneRFa/cpp_h5 \
   --model-path outputs/checkpoints/best_cpp_model.pth
 ```
 
-测试脚本会输出 accuracy、precision、recall、F1-score 和 loss，并将混淆矩阵数组保存到 `outputs/metrics/`，混淆矩阵图片保存到 `outputs/figures/`。
+兼容入口 `test_stft.py` 和 `test_cpp.py` 仍可直接使用。测试脚本会输出 accuracy、precision、recall、F1-score 和 loss，并将混淆矩阵数组保存到 `outputs/metrics/`，混淆矩阵图片保存到 `outputs/figures/`。

@@ -1,31 +1,33 @@
-"""Generate stft PNGs from pre-computed .h5 files.
+"""Generate STFT PNGs from pre-computed .h5 files.
 
 Reads .h5 files produced by precompute_h5.py and generates PNG images.
-Each PNG contains two stfts (Channel 0 and Channel 1).
+Each PNG contains two STFTs (Channel 0 and Channel 1).
 """
 
+import argparse
+import multiprocessing
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import os
-import multiprocessing
+
+import h5py
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import numpy as np
 import tqdm
 
 from src.utils.logger import logger
 from src.utils.paths import figures_dir
-import h5py
-import numpy as np
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
 
 FS = 100e6
 SAMPLE_LENGTH = 1_000_000
 SAMPLE_DURATION = SAMPLE_LENGTH / FS
 
 
-def _default_data_dir() -> str:
+def _default_h5_dir() -> str:
     if os.name == "nt":
         return "E:/dataSet/DroneRFa/stft_h5"
     if sys.platform == "darwin":
@@ -33,7 +35,7 @@ def _default_data_dir() -> str:
     return "/mnt/data/wurixin/DroneRFa/stft_h5"
 
 
-def _default_save_root(data_dir=None) -> str:
+def _default_save_root() -> str:
     return str(figures_dir() / "stft_png")
 
 
@@ -68,14 +70,16 @@ def plot_dual_channel(stft_sample, save_path, sample_idx, label=None):
     plt.close(fig)
 
 
-def _task_generator(h5f, name_no_extension, drone_code, save_root):
-    """ 生成器函数
-     Yield (stft_slice, idx, label, save_path) one sample at a time.
-    """
+def _task_generator(h5f, name_no_extension, drone_code, save_root, max_samples_per_file):
+    """Yield (stft_slice, idx, label, save_path) one sample at a time."""
     stft = h5f["stft"]
     labels = h5f["labels"]
     save_sub_dir = os.path.join(save_root, drone_code)
-    for i in range(stft.shape[0]):
+    num_samples = stft.shape[0]
+    if max_samples_per_file is not None:
+        num_samples = min(num_samples, max_samples_per_file)
+
+    for i in range(num_samples):
         png_name = f"{name_no_extension}_sample_{i:04d}.png"
         save_path = os.path.join(save_sub_dir, png_name)
         yield (stft[i], i, int(labels[i]), save_path)
@@ -90,7 +94,7 @@ def _process_sample(args):
         logger.error(f"Sample {idx}: {e}")
 
 
-def process_one_h5(h5_path, save_root):
+def process_one_h5(h5_path, save_root, *, max_samples_per_file=None, num_workers=None):
     """Read a .h5 file and generate dual-channel PNGs for all samples."""
     h5_name = os.path.basename(h5_path)
     name_no_extension = os.path.splitext(h5_name)[0]
@@ -100,14 +104,20 @@ def process_one_h5(h5_path, save_root):
 
     with h5py.File(h5_path, "r") as h5f:
         num_samples = h5f["stft"].shape[0]
+        if max_samples_per_file is not None:
+            num_samples = min(num_samples, max_samples_per_file)
 
-        num_workers = min(2, multiprocessing.cpu_count() // 2)
+        if num_workers is None:
+            num_workers = min(2, max(1, multiprocessing.cpu_count() // 2))
         with multiprocessing.Pool(num_workers) as pool:
-            # 此时_task_generator函数内部一行都没跑！只是准备好，等着你要数据。
-            tasks = _task_generator(h5f, name_no_extension, drone_code, save_root)
-            # imap_unordered 返回的是迭代器，惰性取值，不写 list 不会真正跑任务。
+            tasks = _task_generator(
+                h5f,
+                name_no_extension,
+                drone_code,
+                save_root,
+                max_samples_per_file,
+            )
             list(tqdm.tqdm(
-                # chunksize=1 多进程池一次只从生成器拿 1 个任务，分给空闲进程。
                 pool.imap_unordered(_process_sample, tasks, chunksize=1),
                 total=num_samples,
                 desc=f"  {h5_name}",
@@ -116,19 +126,51 @@ def process_one_h5(h5_path, save_root):
     logger.info(f"Done: {h5_name}")
 
 
-if __name__ == "__main__":
-    DATA_DIR = _default_data_dir()
-    SAVE_ROOT = _default_save_root(DATA_DIR)
-    os.makedirs(SAVE_ROOT, exist_ok=True)
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Generate STFT PNGs from pre-computed STFT .h5 files")
+    parser.add_argument("--h5-dir", type=str, default=_default_h5_dir(),
+                        help="Directory containing STFT .h5 files")
+    parser.add_argument("--save-root", type=str, default=None,
+                        help="Directory for output PNG files (default: outputs/figures/stft_png)")
+    parser.add_argument("--max-files", type=int, default=None,
+                        help="Process at most this many .h5 files")
+    parser.add_argument("--max-samples-per-file", type=int, default=None,
+                        help="Process at most this many samples from each .h5 file")
+    parser.add_argument("--num-workers", type=int, default=None,
+                        help="Number of PNG worker processes per .h5 file")
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    h5_dir = os.path.expanduser(args.h5_dir)
+    if args.save_root is None:
+        save_root = _default_save_root()
+    else:
+        save_root = os.path.expanduser(args.save_root)
+    os.makedirs(save_root, exist_ok=True)
 
     h5_files = [
-        os.path.join(DATA_DIR, f)
-        for f in os.listdir(DATA_DIR)
+        os.path.join(h5_dir, f)
+        for f in sorted(os.listdir(h5_dir))
         if f.endswith(".h5")
     ]
+    if args.max_files is not None:
+        h5_files = h5_files[:args.max_files]
+
     logger.info(f"Found {len(h5_files)} .h5 files")
+    logger.info(f"Output directory: {save_root}")
 
     for h5_path in tqdm.tqdm(h5_files, desc="Processing .h5 files"):
-        process_one_h5(h5_path, SAVE_ROOT)
+        process_one_h5(
+            h5_path,
+            save_root,
+            max_samples_per_file=args.max_samples_per_file,
+            num_workers=args.num_workers,
+        )
 
     logger.info("All done!")
+
+
+if __name__ == "__main__":
+    main()

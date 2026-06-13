@@ -1,3 +1,5 @@
+"""Shared feature metadata for the STFT and CPP/FAM workflows."""
+
 import os
 import sys
 from dataclasses import dataclass
@@ -8,7 +10,6 @@ from torch.utils.data import Dataset
 from src.data.cpp_dataset import CppDataset
 from src.data.stft_dataset import StftDataset
 
-# TODO:需要简要介绍本脚本的功能
 @dataclass(frozen=True)
 class FeatureSpec:
     name: str

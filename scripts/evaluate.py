@@ -1,5 +1,19 @@
+"""Evaluate ResNet on pre-computed DroneRFa features.
+
+Usage:
+  python scripts/evaluate.py --feature stft --data-dir ~/Desktop/dataset/droneRFa/stft_h5 --model-path outputs/checkpoints/best_stft_model.pth
+  python scripts/evaluate.py --feature cpp --data-dir ~/Desktop/dataset/droneRFa/cpp_h5 --model-path outputs/checkpoints/best_cpp_model.pth
+  python scripts/evaluate.py --config configs/stft.yaml
+  python scripts/evaluate.py --config configs/cpp.yaml --device mps
+
+Compatibility wrappers:
+  python test_stft.py --data-dir ~/Desktop/dataset/droneRFa/stft_h5
+  python test_cpp.py --data-dir ~/Desktop/dataset/droneRFa/cpp_h5
+"""
+
 import argparse
 import os
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -7,6 +21,9 @@ import torch
 import torch.nn as nn
 from sklearn.metrics import confusion_matrix
 from torch.utils.data import DataLoader
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
 
 from src.data.splits import split_dataset
 from src.models.resnet import DroneRFaResNet18
