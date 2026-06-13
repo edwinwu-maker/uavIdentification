@@ -19,19 +19,19 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from src.utils.fam_grid import (
+from src.preprocess.fam_grid import (
     DEFAULT_SEGMENT_SAMPLES,
     SUPPORTED_FAM_MERGE_MODES,
     compute_fam_grid,
     compute_fam_grid_segmented,
 )
-from src.utils.fam_plot import (
+from src.visualization.fam_plot import (
     plot_fam_cpp,
     plot_fam_surface_views,
     plot_signal_time_frequency,
 )
 from src.utils.paths import figures_dir
-from src.utils.synthetic_signal import (
+from src.signal.synthetic_signal import (
     DEFAULT_SAMPLES_PER_SYMBOL,
     SUPPORTED_SIGNAL_TYPES,
     generate_signal,

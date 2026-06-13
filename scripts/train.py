@@ -6,9 +6,6 @@ Usage:
   python scripts/train.py --config configs/stft.yaml
   python scripts/train.py --config configs/cpp.yaml --device mps
 
-Compatibility wrappers:
-  python train_stft.py --data-dir ~/Desktop/dataset/droneRFa/stft_h5
-  python train_cpp.py --data-dir ~/Desktop/dataset/droneRFa/cpp_h5
 """
 
 import argparse

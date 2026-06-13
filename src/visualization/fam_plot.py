@@ -54,29 +54,22 @@ def plot_signal_time_frequency(
 
         matplotlib.use("Agg")
 
-    import matplotlib.pyplot as plt
+    from src.visualization.plot_utils import plot_iq_frequency_domain, plot_iq_time_domain
 
-    from src.utils.plot_utils import plot_iq_frequency_domain, plot_iq_time_domain
-
-    original_show = plt.show
-    plt.show = lambda *args, **kwargs: None
-
-    try:
-        plot_iq_time_domain(x, sample_start=0, sample_limit=400)
-        time_fig = plt.gcf()
-        time_fig.savefig(time_path, dpi=150, bbox_inches="tight")
-        if show:
-            original_show()
-        plt.close(time_fig)
-
-        plot_iq_frequency_domain(x, sample_start=0, sample_limit=len(x))
-        frequency_fig = plt.gcf()
-        frequency_fig.savefig(frequency_path, dpi=150, bbox_inches="tight")
-        if show:
-            original_show()
-        plt.close(frequency_fig)
-    finally:
-        plt.show = original_show
+    plot_iq_time_domain(
+        x,
+        sample_start=0,
+        sample_limit=400,
+        show=show,
+        save_path=time_path,
+    )
+    plot_iq_frequency_domain(
+        x,
+        sample_start=0,
+        sample_limit=len(x),
+        show=show,
+        save_path=frequency_path,
+    )
 
     return str(time_path), str(frequency_path)
 

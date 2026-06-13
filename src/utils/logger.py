@@ -1,16 +1,29 @@
 import logging
-import os
 from datetime import datetime
 
 from src.utils.paths import log_dir
 
+
+def _mark_handler(handler, kind: str):
+    handler._drone_rfa_kind = kind
+    return handler
+
+
+def _has_handler(logger, kind: str, *, log_path: str | None = None) -> bool:
+    for handler in logger.handlers:
+        if getattr(handler, "_drone_rfa_kind", None) != kind:
+            continue
+        if kind == "file" and log_path is not None:
+            if getattr(handler, "baseFilename", None) == log_path:
+                return True
+            continue
+        return True
+    return False
+
+
 def setup_logger():
     logger = logging.getLogger("DroneRFa")
     logger.setLevel(logging.DEBUG)
-
-    # 防止重复追加handler
-    if logger.handlers:
-        logger.handlers.clear()
 
     # 日志格式
     log_format = logging.Formatter(
@@ -19,20 +32,24 @@ def setup_logger():
     )
 
     # 控制台 Handler
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
-    console_handler.setFormatter(log_format)
+    if not _has_handler(logger, "console"):
+        console_handler = _mark_handler(logging.StreamHandler(), "console")
+        console_handler.setLevel(logging.INFO)
+        console_handler.setFormatter(log_format)
+        logger.addHandler(console_handler)
 
     # 文件 Handler
     log_path = log_dir() / f"{datetime.now().strftime('%Y%m%d')}.log"
-    os.makedirs(log_path.parent, exist_ok=True)
-    file_handler = logging.FileHandler(log_path, encoding="utf-8")
-    file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(log_format)
-
-    # 日志 Handler
-    logger.addHandler(console_handler)
-    logger.addHandler(file_handler)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path_str = str(log_path)
+    if not _has_handler(logger, "file", log_path=log_path_str):
+        file_handler = _mark_handler(
+            logging.FileHandler(log_path, encoding="utf-8"),
+            "file",
+        )
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(log_format)
+        logger.addHandler(file_handler)
     return logger
 
 # 全局单例

@@ -35,10 +35,6 @@ python <script-or-command>
 ├── AGENTS.md                         # 代码代理协作规则和项目运行约定
 ├── readme.md                         # 项目说明文档
 ├── requirements.txt                  # 项目依赖列表
-├── train_stft.py                     # STFT 训练兼容入口，转发到 scripts/train.py
-├── train_cpp.py                      # CPP/FAM 训练兼容入口，转发到 scripts/train.py
-├── test_stft.py                      # STFT 评估兼容入口，转发到 scripts/evaluate.py
-├── test_cpp.py                       # CPP/FAM 评估兼容入口，转发到 scripts/evaluate.py
 ├── scripts/
 │   ├── train.py                      # 统一训练入口，支持 --feature stft|cpp
 │   ├── evaluate.py                   # 统一评估入口，支持 --feature stft|cpp
@@ -53,14 +49,22 @@ python <script-or-command>
 │   │   └── cpp_dataset.py            # 按样本索引懒加载 CPP/FAM .h5 数据
 │   ├── models/
 │   │   └── resnet.py                 # 适配双通道特征输入的 ResNet-18
+│   ├── preprocess/
+│   │   ├── fam.py                    # CPU/NumPy 版本 FAM/SCF 计算工具
+│   │   ├── fam_constants.py          # FAM 相关常量与边界定义
+│   │   ├── fam_grid.py               # FAM 稀疏点到 CPP/FAM 网格的聚合工具
+│   │   └── fam_torch.py              # PyTorch 版本 FAM/SCF 计算工具
+│   ├── signal/
+│   │   └── synthetic_signal.py       # FAM 示例使用的合成信号生成器
+│   ├── visualization/
+│   │   ├── fam_plot.py               # FAM/CPP 热力图、三维曲面和时频图绘制工具
+│   │   └── plot_utils.py             # 通用时域、频域和 STFT 可视化工具
 │   └── utils/
-│       ├── fam.py                    # CPU/NumPy 版本 FAM/SCF 计算工具
-│       ├── fam_grid.py               # FAM 稀疏点到 CPP/FAM 网格的聚合工具
-│       ├── fam_plot.py               # FAM/CPP 热力图、三维曲面和时频图绘制工具
-│       ├── fam_torch.py              # PyTorch 版本 FAM/SCF 计算工具
 │       ├── logger.py                 # 全局日志工具
-│       ├── plot_utils.py             # 通用时域、频域和 STFT 可视化工具
-│       └── synthetic_signal.py       # FAM 示例使用的合成信号生成器
+│       ├── feature_specs.py          # STFT/CPP 特征配置定义
+│       ├── config.py                 # 轻量 YAML 配置解析
+│       ├── device.py                 # 设备选择辅助函数
+│       └── paths.py                  # 输出目录路径约定
 ├── docs/
 │   ├── project_structure_optimization.md
 │   ├── snr_accuracy_curve_implementation_plan.md
@@ -73,7 +77,7 @@ python <script-or-command>
 
 `outputs/` 是统一实验输出目录。日志默认写入 `outputs/logs/`，模型 checkpoint 默认写入 `outputs/checkpoints/`，图片默认写入 `outputs/figures/`，指标和混淆矩阵数组默认写入 `outputs/metrics/`。
 
-仓库内代码默认使用 `src.*` 导入路径，不使用 `drone_rfa.*` 别名。
+仓库内代码默认使用 `src.*` 导入路径，不使用 `drone_rfa.*` 别名。合成信号和 FAM 相关实现分别位于 `src.signal` 和 `src.preprocess`，绘图工具位于 `src.visualization`。
 
 ## 常用命令
 
@@ -113,7 +117,7 @@ python scripts/train.py --feature stft --data-dir ~/Desktop/dataset/droneRFa/stf
 python scripts/train.py --feature cpp --data-dir ~/Desktop/dataset/droneRFa/cpp_h5 --batch-size 64
 ```
 
-兼容入口 `train_stft.py` 和 `train_cpp.py` 仍可直接使用。可通过 `--device` 指定设备，例如 `cuda:0`、`mps` 或 `cpu`。
+可通过 `--device` 指定设备，例如 `cuda:0`、`mps` 或 `cpu`。
 
 ### 测试模型
 
@@ -129,4 +133,4 @@ python scripts/evaluate.py \
   --model-path outputs/checkpoints/best_cpp_model.pth
 ```
 
-兼容入口 `test_stft.py` 和 `test_cpp.py` 仍可直接使用。测试脚本会输出 accuracy、precision、recall、F1-score 和 loss，并将混淆矩阵数组保存到 `outputs/metrics/`，混淆矩阵图片保存到 `outputs/figures/`。
+测试脚本会输出 accuracy、precision、recall、F1-score 和 loss，并将混淆矩阵数组保存到 `outputs/metrics/`，混淆矩阵图片保存到 `outputs/figures/`。

@@ -4,8 +4,75 @@ from __future__ import annotations
 
 import numpy as np
 
-SUPPORTED_SIGNAL_TYPES = ("bpsk", "bpsk_noise", "ofdm", "ofdm_noise", "noise")
 DEFAULT_SAMPLES_PER_SYMBOL = 10
+
+
+def _generate_bpsk_signal(
+    *,
+    num_symbols: int,
+    samples_per_symbol: int,
+    seed: int,
+) -> np.ndarray:
+    return generate_bpsk(
+        num_symbols=num_symbols,
+        samples_per_symbol=samples_per_symbol,
+        seed=seed,
+    )
+
+
+def _generate_bpsk_noise_signal(
+    *,
+    num_symbols: int,
+    samples_per_symbol: int,
+    snr_db: float,
+    seed: int,
+) -> np.ndarray:
+    bpsk = generate_bpsk(
+        num_symbols=num_symbols,
+        samples_per_symbol=samples_per_symbol,
+        seed=seed,
+    )
+    return add_awgn_for_snr(bpsk, snr_db=snr_db, seed=seed + 1)
+
+
+def _generate_ofdm_signal(
+    *,
+    num_symbols: int,
+    seed: int,
+) -> np.ndarray:
+    return generate_ofdm(num_symbols=num_symbols, seed=seed)
+
+
+def _generate_ofdm_noise_signal(
+    *,
+    num_symbols: int,
+    snr_db: float,
+    seed: int,
+) -> np.ndarray:
+    ofdm = generate_ofdm(num_symbols=num_symbols, seed=seed)
+    return add_awgn_for_snr(ofdm, snr_db=snr_db, seed=seed + 1)
+
+
+def _generate_noise_signal(
+    *,
+    num_symbols: int,
+    samples_per_symbol: int,
+    seed: int,
+) -> np.ndarray:
+    return generate_awgn(
+        num_samples=num_symbols * samples_per_symbol,
+        seed=seed,
+    )
+
+
+_SIGNAL_GENERATORS = {
+    "bpsk": _generate_bpsk_signal,
+    "bpsk_noise": _generate_bpsk_noise_signal,
+    "ofdm": _generate_ofdm_signal,
+    "ofdm_noise": _generate_ofdm_noise_signal,
+    "noise": _generate_noise_signal,
+}
+SUPPORTED_SIGNAL_TYPES = tuple(_SIGNAL_GENERATORS)
 
 
 def generate_bpsk(
@@ -119,30 +186,40 @@ def generate_signal(
 ) -> np.ndarray:
     """Generate the selected IQ signal for FAM visualization."""
 
+    try:
+        generator = _SIGNAL_GENERATORS[signal_type]
+    except KeyError as exc:
+        raise ValueError(f"unsupported signal type: {signal_type}") from exc
+
     if signal_type == "bpsk":
-        return generate_bpsk(
+        return generator(
             num_symbols=num_symbols,
             samples_per_symbol=samples_per_symbol,
             seed=seed,
         )
     if signal_type == "bpsk_noise":
-        bpsk = generate_bpsk(
+        return generator(
             num_symbols=num_symbols,
             samples_per_symbol=samples_per_symbol,
+            snr_db=snr_db,
             seed=seed,
         )
-        return add_awgn_for_snr(bpsk, snr_db=snr_db, seed=seed + 1)
     if signal_type == "ofdm":
-        return generate_ofdm(num_symbols=num_symbols, seed=seed)
-    if signal_type == "ofdm_noise":
-        ofdm = generate_ofdm(num_symbols=num_symbols, seed=seed)
-        return add_awgn_for_snr(ofdm, snr_db=snr_db, seed=seed + 1)
-    if signal_type == "noise":
-        return generate_awgn(
-            num_samples=num_symbols * samples_per_symbol,
+        return generator(
+            num_symbols=num_symbols,
             seed=seed,
         )
-    raise ValueError(f"unsupported signal type: {signal_type}")
+    if signal_type == "ofdm_noise":
+        return generator(
+            num_symbols=num_symbols,
+            snr_db=snr_db,
+            seed=seed,
+        )
+    return generator(
+        num_symbols=num_symbols,
+        samples_per_symbol=samples_per_symbol,
+        seed=seed,
+    )
 
 
 def root_raised_cosine(

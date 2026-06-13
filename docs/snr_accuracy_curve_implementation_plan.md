@@ -15,12 +15,11 @@
 ```text
 原始 .mat IQ 文件
   -> scripts/precompute_stft_h5.py / scripts/precompute_cpp_h5.py
-  -> train_stft.py / train_cpp.py
-  -> test_stft.py / test_cpp.py
+  -> scripts/train.py / scripts/evaluate.py
   -> checkpoints/best_stft_model.pth / checkpoints/best_cpp_model.pth
 ```
 
-现有测试脚本 `test_stft.py` 和 `test_cpp.py` 会在预计算 `.h5` 测试集上输出整体 accuracy、precision、recall、F1 和混淆矩阵，但不会按 SNR 分组，因为 `.h5` 文件中目前只有：
+现有评估脚本 `scripts/evaluate.py` 会在预计算 `.h5` 测试集上输出整体 accuracy、precision、recall、F1 和混淆矩阵，但不会按 SNR 分组，因为 `.h5` 文件中目前只有：
 
 ```text
 /stft 或 /cpp
@@ -55,7 +54,7 @@ CSV 记录每个 SNR 档位的样本数、正确数和准确率；PNG 绘制 SNR
 
 ## 推荐实现方案
 
-推荐新增独立脚本，而不是修改 `test_stft.py` / `test_cpp.py`：
+推荐新增独立脚本，而不是修改 `scripts/evaluate.py`：
 
 ```text
 scripts/eval_snr_accuracy_stft.py
@@ -91,7 +90,7 @@ y = x + noise
 项目中已有类似函数：
 
 ```text
-src/utils/synthetic_signal.py
+src/signal/synthetic_signal.py
 ```
 
 其中的 `add_awgn_for_snr` 可复用，或在新评估脚本中实现一个本地版本以减少跨用途耦合。
@@ -335,10 +334,6 @@ Output: checkpoints/cpp_snr_accuracy.png
 不建议修改：
 
 ```text
-train_stft.py
-train_cpp.py
-test_stft.py
-test_cpp.py
 src/data/stft_dataset.py
 src/data/cpp_dataset.py
 ```

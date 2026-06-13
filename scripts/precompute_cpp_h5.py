@@ -22,7 +22,7 @@ import numpy as np
 from tqdm import tqdm
 
 from src.data.drone_rfa_io import count_iq_samples, default_raw_data_dir, parse_label
-from src.utils.fam_grid import (
+from src.preprocess.fam_grid import (
     DEFAULT_SEGMENT_SAMPLES,
     SUPPORTED_FAM_MERGE_MODES,
     compute_fam_grid_segmented,

@@ -5,6 +5,14 @@ from typing import Optional
 
 import numpy as np
 
+from src.preprocess.fam_constants import (
+    FAM_ALPHA_RANGE,
+    FAM_F_RANGE,
+    FAM_NYQUIST_BIN,
+    SUPPORTED_FAM_WINDOWS,
+    principal_domain_mask,
+)
+
 # 声明模块的公开接口
 __all__ = ["fam_scf_grid"]
 
@@ -55,11 +63,11 @@ def _window(name: str, nfft: int) -> np.ndarray:
     """Step 2: 生成 channelizer data-tapering window。"""
 
     name = name.lower()
-    if name in {"hamming", "hamm"}:
+    if name in SUPPORTED_FAM_WINDOWS[:2]:
         return np.hamming(nfft)
-    if name in {"hann", "hanning"}:
+    if name in SUPPORTED_FAM_WINDOWS[2:4]:
         return np.hanning(nfft)
-    if name in {"rect", "boxcar", "rectangle"}:
+    if name in SUPPORTED_FAM_WINDOWS[4:]:
         return np.ones(nfft)
     raise ValueError(f"unsupported window: {name}")
 
@@ -106,16 +114,6 @@ def _channelize(
     return x_tilde, freqs, window_energy
 
 
-def _principal_domain_mask(f: np.ndarray, alpha: np.ndarray) -> np.ndarray:
-    """non-conjugate SCF 常用 principal domain。
-
-    normalized frequency 下：
-        |f| + |alpha|/2 < 1/2
-    """
-
-    return np.abs(f) + 0.5 * np.abs(alpha) < 0.5
-
-
 def _iter_fam_point_batches(
     x: np.ndarray,
     *,
@@ -152,7 +150,7 @@ def _iter_fam_point_batches(
         # Drop the one-sided Nyquist bin from even-length FFTs. np.fft.fftfreq
         # represents Nyquist as -0.5, with no matching +0.5 bin, which can
         # create asymmetric edge artifacts near the principal-domain boundary.
-        if np.isclose(fk, -0.5) or np.isclose(fl, -0.5):
+        if np.isclose(fk, FAM_NYQUIST_BIN) or np.isclose(fl, FAM_NYQUIST_BIN):
             continue
 
         # Step 4: 构造长度 P 的 channelizer product vector。
@@ -171,9 +169,8 @@ def _iter_fam_point_batches(
         f = np.full_like(alpha, f_value, dtype=float)
 
         # 同一组 (k, l) 的 spectral frequency 固定，cycle frequency 随 beta 变化。
-        # principal-domain 过滤必须同时作用于 f、alpha 和对应的谱值 z。
         if keep_principal_domain:
-            mask = _principal_domain_mask(f, alpha)
+            mask = principal_domain_mask(f, alpha)
             if not np.any(mask):
                 continue
             f = f[mask]
@@ -194,8 +191,8 @@ def fam_scf_grid(
     normalize: bool = True,
     f_bins: int = 257,
     alpha_bins: int = 513,
-    f_range: tuple[float, float] = (-0.5, 0.5),
-    alpha_range: tuple[float, float] = (-1.0, 1.0),
+    f_range: tuple[float, float] = FAM_F_RANGE,
+    alpha_range: tuple[float, float] = FAM_ALPHA_RANGE,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Estimate FAM and aggregate |SCF| directly into a grid."""
 

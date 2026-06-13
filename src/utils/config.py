@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 
 def load_config(path):
@@ -44,15 +45,25 @@ def _parse_simple_yaml(text):
         key = key.strip()
         value = value.strip()
 
+        if key in current:
+            raise ValueError(f"Duplicate config key: {key!r}")
+
         if not value:
             new_mapping = {}
             current[key] = new_mapping
             stack.append((indent + 2, new_mapping))
             continue
 
+        value = _strip_inline_comment(value)
         current[key] = _parse_scalar(value)
 
     return root
+
+
+def _strip_inline_comment(value):
+    if value.startswith(("'", '"')):
+        return value
+    return re.sub(r"\s+#.*$", "", value).rstrip()
 
 
 def _parse_scalar(value):

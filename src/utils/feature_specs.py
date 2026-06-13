@@ -1,12 +1,12 @@
 """Shared feature metadata for the STFT and CPP/FAM workflows."""
 
-import os
-import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Type
 
 from torch.utils.data import Dataset
 
+from src.data.drone_rfa_io import default_raw_data_dir
 from src.data.cpp_dataset import CppDataset
 from src.data.stft_dataset import StftDataset
 
@@ -23,22 +23,14 @@ class FeatureSpec:
     eval_description: str
 
 
-def _base_data_dir() -> str:
-    if os.name == "nt":
-        return "E:/dataSet/DroneRFa"
-    if sys.platform == "darwin":
-        return os.path.expanduser("~/Desktop/dataset/droneRFa")
-    return "/mnt/data/wurixin/DroneRFa"
-
-
 def _build_specs() -> dict[str, FeatureSpec]:
-    base_dir = _base_data_dir()
+    base_dir = default_raw_data_dir()
     return {
         "stft": FeatureSpec(
             name="stft",
             dataset_class=StftDataset,
             feature_key="stft",
-            default_data_dir=os.path.join(base_dir, "stft_h5"),
+            default_data_dir=str(Path(base_dir) / "stft_h5"),
             checkpoint_name="best_stft_model.pth",
             cm_array_name="stft_confusion_matrix.npy",
             cm_image_name="stft_confusion_matrix.png",
@@ -49,7 +41,7 @@ def _build_specs() -> dict[str, FeatureSpec]:
             name="cpp",
             dataset_class=CppDataset,
             feature_key="cpp",
-            default_data_dir=os.path.join(base_dir, "cpp_h5"),
+            default_data_dir=str(Path(base_dir) / "cpp_h5"),
             checkpoint_name="best_cpp_model.pth",
             cm_array_name="cpp_confusion_matrix.npy",
             cm_image_name="cpp_confusion_matrix.png",

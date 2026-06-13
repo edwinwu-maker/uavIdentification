@@ -6,8 +6,9 @@ from collections.abc import Iterator
 
 import numpy as np
 
-from src.utils.fam import fam_scf_grid
-from src.utils.fam_torch import fam_scf_grid_torch
+from src.preprocess.fam_constants import FAM_ALPHA_RANGE, FAM_F_RANGE
+from src.preprocess.fam import fam_scf_grid
+from src.preprocess.fam_torch import fam_scf_grid_torch
 
 SUPPORTED_FAM_MERGE_MODES = ("mean", "max")
 FAM_NFFT = 64
@@ -20,8 +21,8 @@ def compute_fam_grid(
     *,
     f_bins: int = 257,
     alpha_bins: int = 513,
-    f_range: tuple[float, float] = (-0.5, 0.5),
-    alpha_range: tuple[float, float] = (-1.0, 1.0),
+    f_range: tuple[float, float] = FAM_F_RANGE,
+    alpha_range: tuple[float, float] = FAM_ALPHA_RANGE,
     normalize: bool = True,
     device: str = "cpu",
     pair_chunk_size: int = 8192,
@@ -85,8 +86,8 @@ def compute_fam_grid_segmented(
     merge: str = "mean",
     f_bins: int = 257,
     alpha_bins: int = 513,
-    f_range: tuple[float, float] = (-0.5, 0.5),
-    alpha_range: tuple[float, float] = (-1.0, 1.0),
+    f_range: tuple[float, float] = FAM_F_RANGE,
+    alpha_range: tuple[float, float] = FAM_ALPHA_RANGE,
     device: str = "cpu",
     pair_chunk_size: int = 8192,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
