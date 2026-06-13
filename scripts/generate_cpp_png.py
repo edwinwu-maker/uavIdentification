@@ -1,13 +1,12 @@
 """Generate CPP/FAM PNGs from pre-computed CPP .h5 files.
 
 Usage:
-  python src/scripts/generate_cpp_png.py --h5-dir ~/Desktop/dataset/droneRFa/cpp_h5
-  python src/scripts/generate_cpp_png.py --h5-dir ~/Desktop/dataset/droneRFa/cpp_h5 --save-root outputs/figures/cpp_png
-  python src/scripts/generate_cpp_png.py --h5-dir ~/Desktop/dataset/droneRFa/cpp_h5 --max-files 1 --max-samples-per-file 1
+  python scripts/generate_cpp_png.py --h5-dir ~/Desktop/dataset/droneRFa/cpp_h5
+  python scripts/generate_cpp_png.py --h5-dir ~/Desktop/dataset/droneRFa/cpp_h5 --save-root outputs/figures/cpp_png
+  python scripts/generate_cpp_png.py --h5-dir ~/Desktop/dataset/droneRFa/cpp_h5 --max-files 1 --max-samples-per-file 1
 """
 
 import argparse
-import multiprocessing
 import os
 import sys
 from pathlib import Path
@@ -15,23 +14,25 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-import h5py
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import tqdm
 
+from src.utils.feature_specs import get_feature_spec
 from src.utils.logger import logger
 from src.utils.paths import figures_dir
+from src.visualization.h5_png_export import (
+    limited_sample_count,
+    list_h5_files,
+    process_h5_samples,
+    sample_save_path,
+)
 
 
 def _default_h5_dir() -> str:
-    if os.name == "nt":
-        return "E:/dataSet/DroneRFa/cpp_h5"
-    if sys.platform == "darwin":
-        return os.path.expanduser("~/Desktop/dataset/droneRFa/cpp_h5")
-    return "/mnt/data/wurixin/DroneRFa/cpp_h5"
+    return get_feature_spec("cpp").default_data_dir
 
 
 def plot_dual_channel_cpp(
@@ -74,14 +75,10 @@ def _task_generator(h5f, name_no_extension, drone_code, save_root, max_samples_p
     labels = h5f["labels"]
     f_axis = h5f["f_axis"][:]
     alpha_axis = h5f["alpha_axis"][:]
-    save_sub_dir = os.path.join(save_root, drone_code)
-    num_samples = cpp.shape[0]
-    if max_samples_per_file is not None:
-        num_samples = min(num_samples, max_samples_per_file)
+    num_samples = limited_sample_count(cpp.shape[0], max_samples_per_file)
 
     for i in range(num_samples):
-        png_name = f"{name_no_extension}_sample_{i:04d}.png"
-        save_path = os.path.join(save_sub_dir, png_name)
+        save_path = sample_save_path(save_root, drone_code, name_no_extension, i)
         yield (cpp[i], f_axis, alpha_axis, i, int(labels[i]), save_path)
 
 
@@ -101,34 +98,15 @@ def process_one_h5(
     num_workers: int | None = None,
 ) -> None:
     """Read a CPP .h5 file and generate dual-channel CPP PNGs."""
-
-    h5_name = os.path.basename(h5_path)
-    name_no_extension = os.path.splitext(h5_name)[0]
-    drone_code = name_no_extension.split("_")[0]
-
-    logger.info("Processing: %s", h5_name)
-    with h5py.File(h5_path, "r") as h5f:
-        num_samples = h5f["cpp"].shape[0]
-        if max_samples_per_file is not None:
-            num_samples = min(num_samples, max_samples_per_file)
-
-        if num_workers is None:
-            num_workers = min(2, max(1, multiprocessing.cpu_count() // 2))
-        with multiprocessing.Pool(num_workers) as pool:
-            tasks = _task_generator(
-                h5f,
-                name_no_extension,
-                drone_code,
-                save_root,
-                max_samples_per_file,
-            )
-            list(tqdm.tqdm(
-                pool.imap_unordered(_process_sample, tasks, chunksize=1),
-                total=num_samples,
-                desc=f"  {h5_name}",
-            ))
-
-    logger.info("Done: %s", h5_name)
+    process_h5_samples(
+        h5_path,
+        save_root,
+        feature_key="cpp",
+        build_tasks=_task_generator,
+        process_sample=_process_sample,
+        max_samples_per_file=max_samples_per_file,
+        num_workers=num_workers,
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -155,13 +133,7 @@ def main() -> None:
         save_root = os.path.expanduser(args.save_root)
     os.makedirs(save_root, exist_ok=True)
 
-    h5_files = [
-        os.path.join(h5_dir, f)
-        for f in sorted(os.listdir(h5_dir))
-        if f.endswith(".h5")
-    ]
-    if args.max_files is not None:
-        h5_files = h5_files[:args.max_files]
+    h5_files = list_h5_files(h5_dir, args.max_files)
 
     logger.info("Found %d .h5 files in %s", len(h5_files), h5_dir)
     logger.info("Output directory: %s", save_root)

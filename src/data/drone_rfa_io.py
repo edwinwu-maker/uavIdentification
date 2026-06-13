@@ -58,3 +58,17 @@ def read_iq_batch(
     iq_batch[:, 1, :].real = rf1_i
     iq_batch[:, 1, :].imag = rf1_q
     return iq_batch
+
+
+def iter_iq_pairs(
+    src: h5py.File,
+    *,
+    sample_length: int,
+    num_samples: int,
+):
+    for sample_idx in range(num_samples):
+        offset = sample_idx * sample_length
+        end = offset + sample_length
+        ch0 = src["RF0_I"][0, offset:end] + 1j * src["RF0_Q"][0, offset:end]
+        ch1 = src["RF1_I"][0, offset:end] + 1j * src["RF1_Q"][0, offset:end]
+        yield sample_idx, ch0, ch1

@@ -29,6 +29,7 @@ Project guidance for coding agents working in this repository.
 
 - Make surgical changes. Touch only files and lines needed for the task.
 - Match the existing style and structure of the project.
+- Code comments should be Chinese-first when possible; keep necessary English technical terms, but avoid long English-only注释 unless the surrounding file already uses them.
 - Add necessary comments for non-obvious code, especially complex logic, important assumptions, GPU/parallel computation details, or behavior that is easy to misuse.
 - Keep comments concise and useful. Do not add comments that merely repeat what the code already says.
 - When adding or modifying an executable Python script, keep the file header usage examples in sync with the current filename, arguments, and recommended invocation.

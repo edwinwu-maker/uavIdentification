@@ -1,12 +1,12 @@
 """Generate time-domain, frequency-domain, and FAM plots for synthetic signals.
 
 Usage:
-  python src/scripts/plot_fam_demo.py --no-show
-  python src/scripts/plot_fam_demo.py --signal bpsk_noise --snr-db 5 --no-show
-  python src/scripts/plot_fam_demo.py --segment-samples 131072 --fam-merge max --no-show
-  python src/scripts/plot_fam_demo.py --full-fam --num-symbols 2000 --no-show
-  python src/scripts/plot_fam_demo.py --device cuda --no-show
-  python src/scripts/plot_fam_demo.py --device cuda:1 --gpu-pair-chunk-size 4096 --no-show
+  python scripts/plot_fam_demo.py --no-show
+  python scripts/plot_fam_demo.py --signal bpsk_noise --snr-db 5 --no-show
+  python scripts/plot_fam_demo.py --segment-samples 131072 --fam-merge max --no-show
+  python scripts/plot_fam_demo.py --full-fam --num-symbols 2000 --no-show
+  python scripts/plot_fam_demo.py --device cuda --no-show
+  python scripts/plot_fam_demo.py --device cuda:1 --gpu-pair-chunk-size 4096 --no-show
 """
 
 from __future__ import annotations

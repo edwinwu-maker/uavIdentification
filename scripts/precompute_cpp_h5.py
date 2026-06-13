@@ -1,17 +1,16 @@
 """Convert DroneRFa .mat IQ files to pre-computed CPP/FAM .h5 files.
 
 Usage:
-  python src/scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa
-  python src/scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --output-dir ~/Desktop/dataset/droneRFa/cpp_h5
-  python src/scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --max-files 1 --max-samples-per-file 1
-  python src/scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --device mps
-  python src/scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --device cuda:0 --pair-chunk-size 4096
+  python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa
+  python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --output-dir ~/Desktop/dataset/droneRFa/cpp_h5
+  python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --max-samples-per-file 1
+  python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --device mps
+  python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --device cuda:0 --pair-chunk-size 4096
 """
 
 import argparse
 import os
 import sys
-from collections.abc import Iterator
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -21,12 +20,14 @@ import h5py
 import numpy as np
 from tqdm import tqdm
 
-from src.data.drone_rfa_io import count_iq_samples, default_raw_data_dir, parse_label
+from src.data.drone_rfa_io import default_raw_data_dir
+from src.data.drone_rfa_io import count_iq_samples, iter_iq_pairs, parse_label
 from src.preprocess.fam_grid import (
     DEFAULT_SEGMENT_SAMPLES,
     SUPPORTED_FAM_MERGE_MODES,
-    compute_fam_grid_segmented,
 )
+from src.preprocess.h5_precompute import resolve_output_dir, run_precompute_batch, output_h5_path
+from src.preprocess.cpp import compute_cpp_pair
 from src.utils.logger import logger
 
 SAMPLE_LENGTH = 1_000_000
@@ -34,67 +35,33 @@ F_BINS = 257
 ALPHA_BINS = 513
 
 
-def iter_iq_pairs(
-    src: h5py.File,
-    *,
-    sample_length: int,
-    num_samples: int,
-) -> Iterator[tuple[int, np.ndarray, np.ndarray]]:
-    """Yield fixed-length dual-channel complex IQ samples from one .mat file.
+def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments for the .mat to CPP .h5 conversion script."""
 
-    Yields:
-        Tuples of (sample_idx, ch0, ch1), where ch0 and ch1 are one-dimensional
-        complex IQ arrays for RF0 and RF1.
-    """
-
-    for sample_idx in range(num_samples):
-        offset = sample_idx * sample_length
-        end = offset + sample_length
-        ch0 = src["RF0_I"][0, offset:end] + 1j * src["RF0_Q"][0, offset:end]
-        ch1 = src["RF1_I"][0, offset:end] + 1j * src["RF1_Q"][0, offset:end]
-        yield sample_idx, ch0, ch1
-
-
-def compute_cpp_pair(
-    ch0: np.ndarray,
-    ch1: np.ndarray,
-    *,
-    segment_samples: int,
-    segment_hop_samples: int | None,
-    fam_merge: str,
-    f_bins: int,
-    alpha_bins: int,
-    device: str,
-    pair_chunk_size: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Compute one dual-channel CPP matrix and its axes from RF0/RF1 IQ arrays.
-
-    Returns:
-        (cpp, f_axis, alpha_axis), where cpp has shape (2, alpha_bins, f_bins).
-    """
-
-    image0, f_axis, alpha_axis = compute_fam_grid_segmented(
-        ch0,
-        segment_samples=segment_samples,
-        segment_hop_samples=segment_hop_samples,
-        merge=fam_merge,
-        f_bins=f_bins,
-        alpha_bins=alpha_bins,
-        device=device,
-        pair_chunk_size=pair_chunk_size,
-    )
-    image1, _, _ = compute_fam_grid_segmented(
-        ch1,
-        segment_samples=segment_samples,
-        segment_hop_samples=segment_hop_samples,
-        merge=fam_merge,
-        f_bins=f_bins,
-        alpha_bins=alpha_bins,
-        device=device,
-        pair_chunk_size=pair_chunk_size,
-    )
-    cpp = np.stack([image0, image1], axis=0).astype(np.float32)
-    return cpp, f_axis.astype(np.float32), alpha_axis.astype(np.float32)
+    parser = argparse.ArgumentParser(description="Convert DroneRFa .mat IQ files to CPP/FAM .h5 files")
+    parser.add_argument("--data-dir", type=str, default=default_raw_data_dir(),
+                        help="Directory containing .mat files")
+    parser.add_argument("--output-dir", type=str, default=None,
+                        help="Directory for output .h5 files (default: <data-dir>/cpp_h5)")
+    parser.add_argument("--sample-length", type=int, default=SAMPLE_LENGTH,
+                        help="Number of IQ samples per output CPP sample")
+    parser.add_argument("--segment-samples", type=int, default=DEFAULT_SEGMENT_SAMPLES,
+                        help="Number of IQ samples per internal FAM segment")
+    parser.add_argument("--segment-hop-samples", type=int, default=None,
+                        help="Hop size between internal FAM segments. Defaults to --segment-samples")
+    parser.add_argument("--fam-merge", choices=SUPPORTED_FAM_MERGE_MODES, default="mean",
+                        help="How to merge segmented FAM grids: mean or max")
+    parser.add_argument("--f-bins", type=int, default=F_BINS,
+                        help="Number of frequency bins in the CPP grid")
+    parser.add_argument("--alpha-bins", type=int, default=ALPHA_BINS,
+                        help="Number of cyclic-frequency bins in the CPP grid")
+    parser.add_argument("--device", type=str, default="cpu",
+                        help='FAM compute device: "cpu", "cuda", "cuda:0", or "mps"')
+    parser.add_argument("--pair-chunk-size", type=int, default=8192,
+                        help="Number of (k, l) channel pairs per torch batch")
+    parser.add_argument("--max-samples-per-file", type=int, default=None,
+                        help="Process at most this many samples from each .mat file")
+    return parser.parse_args()
 
 
 def process_one_mat(
@@ -111,17 +78,14 @@ def process_one_mat(
     pair_chunk_size: int,
     max_samples_per_file: int | None,
 ) -> tuple[str, int]:
-    """Convert one DroneRFa .mat file into one CPP .h5 file.
-
-    Returns:
-        (mat_name, num_samples), where num_samples is the number of CPP samples written.
-    """
+    """Convert one DroneRFa .mat file into one CPP .h5 file."""
 
     mat_name = os.path.basename(mat_path)
-    out_path = os.path.join(output_dir, mat_name.replace(".mat", ".h5"))
+    out_path = output_h5_path(mat_path, output_dir)
     label = parse_label(mat_name)
 
     logger.info("Processing: %s", mat_name)
+    os.makedirs(output_dir, exist_ok=True)
     with h5py.File(mat_path, "r") as src:
         num_samples = count_iq_samples(
             src,
@@ -167,70 +131,30 @@ def process_one_mat(
     return mat_name, num_samples
 
 
-def parse_args() -> argparse.Namespace:
-    """Parse command-line arguments for the .mat to CPP .h5 conversion script."""
-
-    parser = argparse.ArgumentParser(description="Convert DroneRFa .mat IQ files to CPP/FAM .h5 files")
-    parser.add_argument("--data-dir", type=str, default=default_raw_data_dir(),
-                        help="Directory containing .mat files")
-    parser.add_argument("--output-dir", type=str, default=None,
-                        help="Directory for output .h5 files (default: <data-dir>/cpp_h5)")
-    parser.add_argument("--sample-length", type=int, default=SAMPLE_LENGTH,
-                        help="Number of IQ samples per output CPP sample")
-    parser.add_argument("--segment-samples", type=int, default=DEFAULT_SEGMENT_SAMPLES,
-                        help="Number of IQ samples per internal FAM segment")
-    parser.add_argument("--segment-hop-samples", type=int, default=None,
-                        help="Hop size between internal FAM segments. Defaults to --segment-samples")
-    parser.add_argument("--fam-merge", choices=SUPPORTED_FAM_MERGE_MODES, default="mean",
-                        help="How to merge segmented FAM grids: mean or max")
-    parser.add_argument("--f-bins", type=int, default=F_BINS,
-                        help="Number of frequency bins in the CPP grid")
-    parser.add_argument("--alpha-bins", type=int, default=ALPHA_BINS,
-                        help="Number of cyclic-frequency bins in the CPP grid")
-    parser.add_argument("--device", type=str, default="cpu",
-                        help='FAM compute device: "cpu", "cuda", "cuda:0", or "mps"')
-    parser.add_argument("--pair-chunk-size", type=int, default=8192,
-                        help="Number of (k, l) channel pairs per torch batch")
-    parser.add_argument("--max-files", type=int, default=None,
-                        help="Process at most this many .mat files")
-    parser.add_argument("--max-samples-per-file", type=int, default=None,
-                        help="Process at most this many samples from each .mat file")
-    return parser.parse_args()
-
-
 def main() -> None:
     """Run batch conversion from DroneRFa .mat files to CPP .h5 files."""
 
     args = parse_args()
     data_dir = os.path.expanduser(args.data_dir)
-    output_dir = os.path.expanduser(args.output_dir) if args.output_dir else os.path.join(data_dir, "cpp_h5")
+    output_dir = resolve_output_dir(data_dir, args.output_dir, "cpp_h5")
     os.makedirs(output_dir, exist_ok=True)
-
-    mat_files = sorted(f for f in os.listdir(data_dir) if f.endswith(".mat"))
-    if args.max_files is not None:
-        mat_files = mat_files[:args.max_files]
-
-    logger.info("Found %d .mat files in %s", len(mat_files), data_dir)
-    logger.info("Output directory: %s", output_dir)
-
-    total_samples = 0
-    for mat_file in tqdm(mat_files, desc="Processing .mat files"):
-        _, num_samples = process_one_mat(
-            os.path.join(data_dir, mat_file),
-            output_dir,
-            sample_length=args.sample_length,
-            segment_samples=args.segment_samples,
-            segment_hop_samples=args.segment_hop_samples,
-            fam_merge=args.fam_merge,
-            f_bins=args.f_bins,
-            alpha_bins=args.alpha_bins,
-            device=args.device,
-            pair_chunk_size=args.pair_chunk_size,
-            max_samples_per_file=args.max_samples_per_file,
-        )
-        total_samples += num_samples
-
-    logger.info("All done. %d files -> %d CPP samples", len(mat_files), total_samples)
+    run_precompute_batch(
+        data_dir,
+        output_dir,
+        process_one_mat=process_one_mat,
+        process_kwargs={
+            "sample_length": args.sample_length,
+            "segment_samples": args.segment_samples,
+            "segment_hop_samples": args.segment_hop_samples,
+            "fam_merge": args.fam_merge,
+            "f_bins": args.f_bins,
+            "alpha_bins": args.alpha_bins,
+            "device": args.device,
+            "pair_chunk_size": args.pair_chunk_size,
+            "max_samples_per_file": args.max_samples_per_file,
+        },
+        result_label="CPP samples",
+    )
 
 
 if __name__ == "__main__":

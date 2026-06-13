@@ -1,18 +1,21 @@
 """Generate STFT PNGs from pre-computed .h5 files.
 
-Reads .h5 files produced by precompute_h5.py and generates PNG images.
+Usage:
+  python scripts/generate_stft_png.py --h5-dir ~/Desktop/dataset/droneRFa/stft_h5
+  python scripts/generate_stft_png.py --h5-dir ~/Desktop/dataset/droneRFa/stft_h5 --save-root outputs/figures/stft_png
+  python scripts/generate_stft_png.py --h5-dir ~/Desktop/dataset/droneRFa/stft_h5 --max-files 1 --max-samples-per-file 1
+
+Reads .h5 files produced by precompute_stft_h5.py and generates PNG images.
 Each PNG contains two STFTs (Channel 0 and Channel 1).
 """
 
 import argparse
-import multiprocessing
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import os
 
-import h5py
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -20,7 +23,14 @@ import numpy as np
 import tqdm
 
 from src.utils.logger import logger
+from src.utils.feature_specs import get_feature_spec
 from src.utils.paths import figures_dir
+from src.visualization.h5_png_export import (
+    limited_sample_count,
+    list_h5_files,
+    process_h5_samples,
+    sample_save_path,
+)
 
 FS = 100e6
 SAMPLE_LENGTH = 1_000_000
@@ -28,11 +38,7 @@ SAMPLE_DURATION = SAMPLE_LENGTH / FS
 
 
 def _default_h5_dir() -> str:
-    if os.name == "nt":
-        return "E:/dataSet/DroneRFa/stft_h5"
-    if sys.platform == "darwin":
-        return os.path.expanduser("~/Desktop/dataset/droneRFa/stft_h5")
-    return "/mnt/data/wurixin/DroneRFa/stft_h5"
+    return get_feature_spec("stft").default_data_dir
 
 
 def _default_save_root() -> str:
@@ -74,14 +80,10 @@ def _task_generator(h5f, name_no_extension, drone_code, save_root, max_samples_p
     """Yield (stft_slice, idx, label, save_path) one sample at a time."""
     stft = h5f["stft"]
     labels = h5f["labels"]
-    save_sub_dir = os.path.join(save_root, drone_code)
-    num_samples = stft.shape[0]
-    if max_samples_per_file is not None:
-        num_samples = min(num_samples, max_samples_per_file)
+    num_samples = limited_sample_count(stft.shape[0], max_samples_per_file)
 
     for i in range(num_samples):
-        png_name = f"{name_no_extension}_sample_{i:04d}.png"
-        save_path = os.path.join(save_sub_dir, png_name)
+        save_path = sample_save_path(save_root, drone_code, name_no_extension, i)
         yield (stft[i], i, int(labels[i]), save_path)
 
 
@@ -96,34 +98,15 @@ def _process_sample(args):
 
 def process_one_h5(h5_path, save_root, *, max_samples_per_file=None, num_workers=None):
     """Read a .h5 file and generate dual-channel PNGs for all samples."""
-    h5_name = os.path.basename(h5_path)
-    name_no_extension = os.path.splitext(h5_name)[0]
-    drone_code = name_no_extension.split("_")[0]
-
-    logger.info(f"Processing: {h5_name}")
-
-    with h5py.File(h5_path, "r") as h5f:
-        num_samples = h5f["stft"].shape[0]
-        if max_samples_per_file is not None:
-            num_samples = min(num_samples, max_samples_per_file)
-
-        if num_workers is None:
-            num_workers = min(2, max(1, multiprocessing.cpu_count() // 2))
-        with multiprocessing.Pool(num_workers) as pool:
-            tasks = _task_generator(
-                h5f,
-                name_no_extension,
-                drone_code,
-                save_root,
-                max_samples_per_file,
-            )
-            list(tqdm.tqdm(
-                pool.imap_unordered(_process_sample, tasks, chunksize=1),
-                total=num_samples,
-                desc=f"  {h5_name}",
-            ))
-
-    logger.info(f"Done: {h5_name}")
+    process_h5_samples(
+        h5_path,
+        save_root,
+        feature_key="stft",
+        build_tasks=_task_generator,
+        process_sample=_process_sample,
+        max_samples_per_file=max_samples_per_file,
+        num_workers=num_workers,
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -150,13 +133,7 @@ def main() -> None:
         save_root = os.path.expanduser(args.save_root)
     os.makedirs(save_root, exist_ok=True)
 
-    h5_files = [
-        os.path.join(h5_dir, f)
-        for f in sorted(os.listdir(h5_dir))
-        if f.endswith(".h5")
-    ]
-    if args.max_files is not None:
-        h5_files = h5_files[:args.max_files]
+    h5_files = list_h5_files(h5_dir, args.max_files)
 
     logger.info(f"Found {len(h5_files)} .h5 files")
     logger.info(f"Output directory: {save_root}")
