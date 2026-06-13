@@ -21,6 +21,7 @@ import h5py
 import numpy as np
 from tqdm import tqdm
 
+from src.data.drone_rfa_io import count_iq_samples, default_raw_data_dir, parse_label
 from src.utils.fam_grid import (
     DEFAULT_SEGMENT_SAMPLES,
     SUPPORTED_FAM_MERGE_MODES,
@@ -31,51 +32,6 @@ from src.utils.logger import logger
 SAMPLE_LENGTH = 1_000_000
 F_BINS = 257
 ALPHA_BINS = 513
-LABEL_MAPPING = {
-    "T0000": 0, "T0001": 1, "T0010": 2, "T0011": 3,
-    "T0100": 4, "T0101": 5, "T0110": 6, "T0111": 7,
-    "T1000": 8, "T1001": 9, "T1010": 10, "T1011": 11,
-    "T1100": 12, "T1101": 13, "T1110": 14, "T1111": 15,
-    "T10000": 16, "T10001": 17, "T10010": 18, "T10011": 19,
-    "T10100": 20, "T10101": 21, "T10110": 22, "T10111": 23,
-    "T11000": 24,
-}
-
-
-def _default_data_dir() -> str:
-    """Return the platform-specific default directory containing DroneRFa .mat files."""
-
-    if os.name == "nt":
-        return "E:/dataSet/DroneRFa"
-    if sys.platform == "darwin":
-        return os.path.expanduser("~/Desktop/dataset/droneRFa")
-    return "/mnt/data/wurixin/DroneRFa"
-
-
-def _parse_label(mat_file: str) -> int:
-    """Parse a .mat file name and return its integer drone label."""
-
-    drone_code = os.path.basename(mat_file).split("_")[0]
-    return LABEL_MAPPING[drone_code]
-
-
-def count_iq_samples(
-    src: h5py.File,
-    *,
-    sample_length: int,
-    max_samples: int | None = None,
-) -> int:
-    """Return the number of complete fixed-length IQ samples to process.
-
-    Returns:
-        Number of complete samples available after applying max_samples.
-    """
-
-    total_points = int(src["RF0_I"].shape[1])
-    num_samples = total_points // sample_length
-    if max_samples is not None:
-        num_samples = min(num_samples, max_samples)
-    return num_samples
 
 
 def iter_iq_pairs(
@@ -163,7 +119,7 @@ def process_one_mat(
 
     mat_name = os.path.basename(mat_path)
     out_path = os.path.join(output_dir, mat_name.replace(".mat", ".h5"))
-    label = _parse_label(mat_name)
+    label = parse_label(mat_name)
 
     logger.info("Processing: %s", mat_name)
     with h5py.File(mat_path, "r") as src:
@@ -215,7 +171,7 @@ def parse_args() -> argparse.Namespace:
     """Parse command-line arguments for the .mat to CPP .h5 conversion script."""
 
     parser = argparse.ArgumentParser(description="Convert DroneRFa .mat IQ files to CPP/FAM .h5 files")
-    parser.add_argument("--data-dir", type=str, default=_default_data_dir(),
+    parser.add_argument("--data-dir", type=str, default=default_raw_data_dir(),
                         help="Directory containing .mat files")
     parser.add_argument("--output-dir", type=str, default=None,
                         help="Directory for output .h5 files (default: <data-dir>/cpp_h5)")

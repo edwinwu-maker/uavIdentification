@@ -31,6 +31,7 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
+from src.data.drone_rfa_io import count_iq_samples, default_raw_data_dir, parse_label, read_iq_batch
 from src.utils.logger import logger
 
 # ── Paper parameters (match transforms.py) ──
@@ -39,35 +40,8 @@ N_FFT = 1024
 WIN_LENGTH = 1024
 SPEC_TIME_BINS = 1024
 
-LABEL_MAPPING = {
-    "T0000": 0, "T0001": 1, "T0010": 2, "T0011": 3,
-    "T0100": 4, "T0101": 5, "T0110": 6, "T0111": 7,
-    "T1000": 8, "T1001": 9, "T1010": 10, "T1011": 11,
-    "T1100": 12, "T1101": 13, "T1110": 14, "T1111": 15,
-    "T10000": 16, "T10001": 17, "T10010": 18, "T10011": 19,
-    "T10100": 20, "T10101": 21, "T10110": 22, "T10111": 23,
-    "T11000": 24,
-}
-
 _WINDOW: torch.Tensor | None = None
 _WINDOW_DEVICE: str | None = None
-
-
-def _default_data_dir() -> str:
-    """Return the platform-specific default directory containing DroneRFa .mat files."""
-
-    if os.name == "nt":
-        return "E:/dataSet/DroneRFa"
-    if sys.platform == "darwin":
-        return os.path.expanduser("~/Desktop/dataset/droneRFa")
-    return "/mnt/data/wurixin/DroneRFa"
-
-
-def _parse_label(mat_file: str) -> int:
-    """Parse a .mat file name and return its integer drone label."""
-
-    drone_code = os.path.basename(mat_file).split("_")[0]
-    return LABEL_MAPPING[drone_code]
 
 
 def _get_window(device: str = "cpu") -> torch.Tensor:
@@ -124,39 +98,6 @@ def compute_stft(iq_batch: np.ndarray, device: str = "cpu") -> np.ndarray:
     return Zxx_norm.cpu().numpy().astype(np.float32)
 
 
-def count_iq_samples(src: h5py.File, *, sample_length: int) -> int:
-    """Return the number of complete fixed-length IQ samples in one .mat file."""
-
-    total_points = int(src["RF0_I"].shape[1])
-    return total_points // sample_length
-
-
-def _read_iq_batch(
-    src: h5py.File,
-    *,
-    sample_length: int,
-    start_idx: int,
-    end_idx: int,
-) -> np.ndarray:
-    """Read one contiguous batch of dual-channel IQ samples from one .mat file."""
-
-    batch_size = end_idx - start_idx
-    offset = start_idx * sample_length
-    end = end_idx * sample_length
-
-    rf0_i = src["RF0_I"][0, offset:end].reshape(batch_size, sample_length)
-    rf0_q = src["RF0_Q"][0, offset:end].reshape(batch_size, sample_length)
-    rf1_i = src["RF1_I"][0, offset:end].reshape(batch_size, sample_length)
-    rf1_q = src["RF1_Q"][0, offset:end].reshape(batch_size, sample_length)
-
-    iq_batch = np.empty((batch_size, 2, sample_length), dtype=np.complex64)
-    iq_batch[:, 0, :].real = rf0_i
-    iq_batch[:, 0, :].imag = rf0_q
-    iq_batch[:, 1, :].real = rf1_i
-    iq_batch[:, 1, :].imag = rf1_q
-    return iq_batch
-
-
 def process_one_mat(
     mat_path: str,
     output_dir: str,
@@ -171,7 +112,7 @@ def process_one_mat(
     if device.startswith("cuda"):
         torch.cuda.set_device(device)
     out_path = os.path.join(output_dir, mat_file.replace(".mat", ".h5"))
-    label = _parse_label(mat_file)
+    label = parse_label(mat_file)
 
     logger.info("Processing: %s", mat_file)
 
@@ -190,7 +131,7 @@ def process_one_mat(
             batch_starts = range(0, num_samples, batch_size)
             for sample_idx in tqdm(batch_starts, total=len(batch_starts), desc=f"  {mat_file}"):
                 batch_end = min(sample_idx + batch_size, num_samples)
-                chunk_iq = _read_iq_batch(
+                chunk_iq = read_iq_batch(
                     src,
                     sample_length=sample_length,
                     start_idx=sample_idx,
@@ -207,7 +148,7 @@ def process_one_mat(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Convert .mat IQ → .h5 stft files")
-    parser.add_argument("--data-dir", type=str, default=_default_data_dir(),
+    parser.add_argument("--data-dir", type=str, default=default_raw_data_dir(),
                         help="Directory containing .mat files")
     parser.add_argument("--output-dir", type=str, default=None,
                         help="Directory for output .h5 files (default: <data-dir>/stft_h5)")
