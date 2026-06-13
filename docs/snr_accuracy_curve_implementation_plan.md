@@ -170,7 +170,7 @@ scripts/precompute_cpp_h5.py
 ```text
 count_iq_samples
 iter_iq_pairs
-compute_cpp_pair
+compute_cpp
 _parse_label
 ```
 
@@ -178,7 +178,7 @@ _parse_label
 
 1. 读取 RF0 和 RF1 两路复 IQ。
 2. 对两路 IQ 分别按相同目标 SNR 加 AWGN。
-3. 调用 `compute_cpp_pair` 得到 `(2, alpha_bins, f_bins)`。
+3. 调用 `compute_cpp` 得到 `(2, alpha_bins, f_bins)`。
 4. 送入训练好的 CPP 模型。
 
 考虑计算成本，CPP 曲线脚本建议支持：
@@ -372,7 +372,7 @@ src/data/cpp_dataset.py
 
 5. 需要保证模型输入归一化一致。
    - STFT 必须复用 `compute_stft`。
-   - CPP 必须复用 `compute_cpp_pair`。
+   - CPP 必须复用 `compute_cpp`。
 
 ## 后续扩展
 

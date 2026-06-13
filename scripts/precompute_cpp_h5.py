@@ -3,6 +3,7 @@
 Usage:
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --output-dir ~/Desktop/dataset/droneRFa/cpp_h5
+  python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --max-files 1
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --max-samples-per-file 1
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --device mps
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --device cuda:0 --pair-chunk-size 4096
@@ -22,12 +23,12 @@ from tqdm import tqdm
 
 from src.data.drone_rfa_io import default_raw_data_dir
 from src.data.drone_rfa_io import count_iq_samples, iter_iq_pairs, parse_label
-from src.preprocess.fam_grid import (
+from src.preprocess.cpp import (
+    compute_cpp,
     DEFAULT_SEGMENT_SAMPLES,
     SUPPORTED_FAM_MERGE_MODES,
 )
 from src.preprocess.h5_precompute import resolve_output_dir, run_precompute_batch, output_h5_path
-from src.preprocess.cpp import compute_cpp_pair
 from src.utils.logger import logger
 
 SAMPLE_LENGTH = 1_000_000
@@ -59,6 +60,8 @@ def parse_args() -> argparse.Namespace:
                         help='FAM compute device: "cpu", "cuda", "cuda:0", or "mps"')
     parser.add_argument("--pair-chunk-size", type=int, default=8192,
                         help="Number of (k, l) channel pairs per torch batch")
+    parser.add_argument("--max-files", type=int, default=None,
+                        help="Process at most this many .mat files")
     parser.add_argument("--max-samples-per-file", type=int, default=None,
                         help="Process at most this many samples from each .mat file")
     return parser.parse_args()
@@ -110,7 +113,7 @@ def process_one_mat(
                 num_samples=num_samples,
             )
             for sample_idx, ch0, ch1 in tqdm(samples, total=num_samples, desc=f"  {mat_name}"):
-                cpp, f_axis, alpha_axis = compute_cpp_pair(
+                cpp, f_axis, alpha_axis = compute_cpp(
                     ch0,
                     ch1,
                     segment_samples=segment_samples,
@@ -153,7 +156,8 @@ def main() -> None:
             "pair_chunk_size": args.pair_chunk_size,
             "max_samples_per_file": args.max_samples_per_file,
         },
-        result_label="CPP samples",
+        max_files=args.max_files,
+        log_label="CPP samples",
     )
 
 

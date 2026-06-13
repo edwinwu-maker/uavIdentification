@@ -52,7 +52,7 @@ python <script-or-command>
 │   ├── preprocess/
 │   │   ├── fam.py                    # CPU/NumPy 版本 FAM/SCF 计算工具
 │   │   ├── fam_constants.py          # FAM 相关常量与边界定义
-│   │   ├── fam_grid.py               # FAM 稀疏点到 CPP/FAM 网格的聚合工具
+│   │   ├── cpp.py                    # CPP/FAM 网格生成与双通道 CPP 特征组装
 │   │   └── fam_torch.py              # PyTorch 版本 FAM/SCF 计算工具
 │   ├── signal/
 │   │   └── synthetic_signal.py       # FAM 示例使用的合成信号生成器

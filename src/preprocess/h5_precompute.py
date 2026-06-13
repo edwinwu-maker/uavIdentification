@@ -28,11 +28,20 @@ def run_precompute_batch(
     *,
     process_one_mat: Callable[..., tuple[str, int]],
     process_kwargs: dict[str, Any] | None = None,
-    result_label: str,
+    max_files: int | None = None,
+    log_label: str,
 ) -> tuple[int, int]:
-    """Run the shared .mat-to-.h5 batch loop and return file/sample counts."""
+    """
+    Run the shared .mat-to-.h5 batch loop and return file/sample counts.
+
+    process_one_mat: Callable[..., tuple[str, int]]:传入一个回调函数, 返回(字符串占位, 当前文件样本数量)
+    process_kwargs: 传给 process_one_mat 的自定义参数字典
+    log_label:日志文案后缀
+    """
 
     mat_files = _list_mat_files(data_dir)
+    if max_files is not None:
+        mat_files = mat_files[:max_files]
     logger.info("Found %d .mat files in %s", len(mat_files), data_dir)
     logger.info("Output directory: %s", output_dir)
 
@@ -42,11 +51,11 @@ def run_precompute_batch(
         _, num_samples = process_one_mat(
             os.path.join(data_dir, mat_file),
             output_dir,
-            **process_kwargs,
+            **process_kwargs,   # 字典解包语法
         )
         total_samples += num_samples
 
-    logger.info("All done. %d files -> %d %s", len(mat_files), total_samples, result_label)
+    logger.info("All done. %d files -> %d %s", len(mat_files), total_samples, log_label)
     return len(mat_files), total_samples
 
 

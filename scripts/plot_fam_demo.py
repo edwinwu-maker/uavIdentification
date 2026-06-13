@@ -19,7 +19,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from src.preprocess.fam_grid import (
+from src.preprocess.cpp import (
     DEFAULT_SEGMENT_SAMPLES,
     SUPPORTED_FAM_MERGE_MODES,
     compute_fam_grid,

@@ -16,6 +16,7 @@ Usage:
   python scripts/precompute_stft_h5.py --data-dir ... --device cuda:2 --batch-size 64
   python scripts/precompute_stft_h5.py --data-dir ... --sample-length 1000000
   python scripts/precompute_stft_h5.py --data-dir ... --device mps
+  python scripts/precompute_stft_h5.py --data-dir ... --max-files 1
   python scripts/precompute_stft_h5.py --data-dir ... --max-samples-per-file 1
 """
 
@@ -55,6 +56,8 @@ def parse_args() -> argparse.Namespace:
                         help="STFT batch size")
     parser.add_argument("--device", type=str, default="cpu",
                         help='Torch device for STFT, e.g. "cpu", "cuda", "cuda:0", or "mps"')
+    parser.add_argument("--max-files", type=int, default=None,
+                        help="Process at most this many .mat files")
     parser.add_argument("--max-samples-per-file", type=int, default=None,
                         help="Process at most this many samples from each .mat file")
     return parser.parse_args()
@@ -137,7 +140,8 @@ def main() -> None:
             "device": device,
             "max_samples_per_file": args.max_samples_per_file,
         },
-        result_label="stfts",
+        max_files=args.max_files,
+        log_label="stfts",
     )
 
 
