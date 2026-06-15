@@ -50,24 +50,28 @@ DEFAULT_MODEL_NAME = "best_stft_model.pth"
 DEFAULT_OUTPUT_CSV = metrics_dir() / "stft_snr_accuracy.csv"
 DEFAULT_OUTPUT_PNG = figures_dir() / "stft_snr_accuracy.png"
 
-
+# (frozen=True)对象创建初始化之后，不能修改、新增、删除任何实例属性
 @dataclass(frozen=True)
 class SampleRecord:
-    path: str
-    sample_idx: int
-    label: int
+    path: str       # 样本归属 .mat 文件
+    sample_idx: int # .mat 文件里的第几个样本
+    label: int      # 类别标签
 
 
 class H5FileCache:
+    """ 缓存并统一关闭 HDF5 文件句柄 """
     def __init__(self) -> None:
+        # 初始化一个字典 self._files，用来保存已经打开过的 h5py.File
         self._files: dict[str, h5py.File] = {}
 
     def get(self, path: str) -> h5py.File:
+        # 如果某个 .mat 文件还没打开，就用 h5py.File 打开并缓存起来；如果已经打开过，直接复用
         if path not in self._files:
             self._files[path] = h5py.File(path, "r", rdcc_nbytes=64 * 1024 * 1024)
         return self._files[path]
 
     def close(self) -> None:
+        # 把缓存里的所有文件都关闭，然后清空字典
         for file_obj in self._files.values():
             file_obj.close()
         self._files.clear()
@@ -87,6 +91,8 @@ def build_sample_index(
 
     sample_index: list[SampleRecord] = []
     mat_files = sorted(fname for fname in os.listdir(data_dir) if fname.endswith(".mat"))
+
+    # 如果传了 max_files，就只取前 N 个文件(一般测试用)
     if max_files is not None:
         mat_files = mat_files[:max_files]
 
@@ -94,6 +100,7 @@ def build_sample_index(
         path = os.path.join(data_dir, fname)
         label = parse_label(fname)
         with h5py.File(path, "r") as src:
+            # 打开文件，用 count_iq_samples() 计算这个文件里有多少个可用 IQ 样本
             num_samples = count_iq_samples(
                 src,
                 sample_length=sample_length,
@@ -131,13 +138,16 @@ def _load_iq_batch(
     *,
     sample_length: int,
 ) -> np.ndarray:
+    """从缓存里的 HDF5 文件中读取某一条样本，并把它转换成单个复数 IQ 样本(np.complex64)返回"""
     src = file_cache.get(record.path)
+    # iq形状通常是 (1, 2, sample_length)
     iq = read_iq_batch(
         src,
         sample_length=sample_length,
         start_idx=record.sample_idx,
         end_idx=record.sample_idx + 1,
     )
+    # 这里取第 0 个样本，返回(2, sample_length)
     return iq[0]
 
 

@@ -29,6 +29,7 @@ def parse_label(mat_file: str) -> int:
 
 
 def count_iq_samples(src: h5py.File, *, sample_length: int, max_samples: int | None = None) -> int:
+    """根据 HDF5 文件(原始.mat)里的总点数，计算能切出多少个固定长度的 IQ 样本"""
     total_points = int(src["RF0_I"].shape[1])
     num_samples = total_points // sample_length
     if max_samples is not None:
@@ -43,6 +44,7 @@ def read_iq_batch(
     start_idx: int,
     end_idx: int,
 ) -> np.ndarray:
+    """ 从 HDF5 文件(.mat 文件)里按样本区间读取 IQ 数据，并把实部/虚部重新组装成复数数组 """
     batch_size = end_idx - start_idx
     offset = start_idx * sample_length
     end = end_idx * sample_length
