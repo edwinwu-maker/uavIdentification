@@ -16,7 +16,7 @@
 原始 .mat IQ 文件
   -> scripts/precompute_stft_h5.py / scripts/precompute_cpp_h5.py
   -> scripts/train.py / scripts/evaluate.py
-  -> checkpoints/best_stft_model.pth / checkpoints/best_cpp_model.pth
+  -> outputs/checkpoints/best_stft_model.pth / outputs/checkpoints/best_cpp_model.pth
 ```
 
 现有评估脚本 `scripts/evaluate.py` 会在预计算 `.h5` 测试集上输出整体 accuracy、precision、recall、F1 和混淆矩阵，但不会按 SNR 分组，因为 `.h5` 文件中目前只有：
@@ -39,15 +39,15 @@
 新增一个独立评估流程，在不改动训练逻辑、不重新训练模型的前提下，生成：
 
 ```text
-checkpoints/stft_snr_accuracy.csv
-checkpoints/stft_snr_accuracy.png
+outputs/metrics/stft_snr_accuracy.csv
+outputs/figures/stft_snr_accuracy.png
 ```
 
 或：
 
 ```text
-checkpoints/cpp_snr_accuracy.csv
-checkpoints/cpp_snr_accuracy.png
+outputs/metrics/cpp_snr_accuracy.csv
+outputs/figures/cpp_snr_accuracy.png
 ```
 
 CSV 记录每个 SNR 档位的样本数、正确数和准确率；PNG 绘制 SNR-Accuracy 曲线。
@@ -90,10 +90,10 @@ y = x + noise
 项目中已有类似函数：
 
 ```text
-src/signal/synthetic_signal.py
+src/data/drone_rfa_io.py
 ```
 
-其中的 `add_awgn_for_snr` 可复用，或在新评估脚本中实现一个本地版本以减少跨用途耦合。
+其中的 IQ 读取和标签解析函数可复用；加噪函数建议在新评估脚本中实现一个本地版本，以减少跨用途耦合。
 
 ## 测试集划分一致性
 
@@ -123,10 +123,10 @@ random_split(
 STFT 路线最直接，因为 `scripts/precompute_stft_h5.py` 已经提供了可复用函数：
 
 ```text
-count_iq_samples
-_read_iq_batch
-compute_stft
-_parse_label
+src.data.drone_rfa_io.count_iq_samples
+src.data.drone_rfa_io.read_iq_batch
+src.data.drone_rfa_io.parse_label
+src.preprocess.stft.compute_stft
 ```
 
 建议流程：
@@ -168,10 +168,10 @@ scripts/precompute_cpp_h5.py
 关键函数：
 
 ```text
-count_iq_samples
-iter_iq_pairs
-compute_cpp
-_parse_label
+src.data.drone_rfa_io.count_iq_samples
+src.data.drone_rfa_io.iter_iq_pairs
+src.data.drone_rfa_io.parse_label
+src.preprocess.cpp.compute_cpp
 ```
 
 建议流程与 STFT 类似，但每个样本需要：
@@ -201,7 +201,7 @@ STFT 评估命令建议设计为：
 conda activate droneRFa
 python scripts/eval_snr_accuracy_stft.py `
   --data-dir E:/dataSet/DroneRFa `
-  --model-path checkpoints/best_stft_model.pth `
+  --model-path outputs/checkpoints/best_stft_model.pth `
   --device cuda:0 `
   --batch-size 8 `
   --snrs -20 -15 -10 -5 0 5 10 15 20 25 30
@@ -213,7 +213,7 @@ CPP 评估命令建议设计为：
 conda activate droneRFa
 python scripts/eval_snr_accuracy_cpp.py `
   --data-dir E:/dataSet/DroneRFa `
-  --model-path checkpoints/best_cpp_model.pth `
+  --model-path outputs/checkpoints/best_cpp_model.pth `
   --device cuda:0 `
   --snrs -20 -15 -10 -5 0 5 10 15 20 25 30
 ```
@@ -319,16 +319,16 @@ CPP 低 SNR 高于 STFT：
 
 ```text
 Create: scripts/eval_snr_accuracy_stft.py
-Output: checkpoints/stft_snr_accuracy.csv
-Output: checkpoints/stft_snr_accuracy.png
+Output: outputs/metrics/stft_snr_accuracy.csv
+Output: outputs/figures/stft_snr_accuracy.png
 ```
 
 验证通过后，再实现 CPP 版本：
 
 ```text
 Create: scripts/eval_snr_accuracy_cpp.py
-Output: checkpoints/cpp_snr_accuracy.csv
-Output: checkpoints/cpp_snr_accuracy.png
+Output: outputs/metrics/cpp_snr_accuracy.csv
+Output: outputs/figures/cpp_snr_accuracy.png
 ```
 
 不建议修改：
@@ -368,7 +368,7 @@ src/data/cpp_dataset.py
    - 当前目标是评估鲁棒性，不是噪声增强训练。
 
 4. 需要保证类别映射完全一致。
-   - 复用现有 `_parse_label` 和 `LABEL_MAPPING`。
+   - 复用现有 `parse_label` 和 `LABEL_MAPPING`。
 
 5. 需要保证模型输入归一化一致。
    - STFT 必须复用 `compute_stft`。
