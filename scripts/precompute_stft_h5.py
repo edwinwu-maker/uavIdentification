@@ -113,7 +113,7 @@ def process_one_mat(
                     n_fft=N_FFT,
                     win_length=WIN_LENGTH,
                     spec_time_bins=SPEC_TIME_BINS,
-                )
+                ).cpu().numpy()
                 h5f["stft"][sample_idx:batch_end] = batch_stft
                 h5f["labels"][sample_idx:batch_end] = label
 

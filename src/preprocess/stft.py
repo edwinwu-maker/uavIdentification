@@ -29,11 +29,12 @@ def compute_stft(
     n_fft: int = 1024,
     win_length: int = 1024,
     spec_time_bins: int = 1024,
-) -> np.ndarray:
+) -> torch.Tensor:
     """
     iq_batch: (B, 2, L) complex64
     device:  torch device string, e.g. "cpu", "cuda:0", "mps"
-    returns: (B, 2, n_fft, spec_time_bins) float32, z-score normalized per channel
+    returns: torch.Tensor with shape (B, 2, n_fft, spec_time_bins), float32,
+             z-score normalized per channel
     B: batch size, 2: channels, n_fft: freq bins, spec_time_bins: time bins
     """
     B, C, L = iq_batch.shape
@@ -58,4 +59,4 @@ def compute_stft(
         std = Zxx_db.std(dim=(1, 2), keepdim=True)
         Zxx_norm = (Zxx_db - mean) / (std + 1e-8)
         Zxx_norm = Zxx_norm.reshape(B, C, n_fft, spec_time_bins)
-    return Zxx_norm.cpu().numpy().astype(np.float32)
+    return Zxx_norm

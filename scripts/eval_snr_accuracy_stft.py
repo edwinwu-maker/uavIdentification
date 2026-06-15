@@ -127,11 +127,6 @@ def add_awgn_for_snr(iq: np.ndarray, snr_db: float, rng: np.random.Generator) ->
     return (iq + noise).astype(np.complex64, copy=False)
 
 
-def _records_to_batches(records: list[SampleRecord], batch_size: int):
-    for start in range(0, len(records), batch_size):
-        yield records[start:start + batch_size]
-
-
 def _load_iq_batch(
     file_cache: H5FileCache,
     record: SampleRecord,
@@ -196,6 +191,7 @@ def evaluate_snr_accuracy(
 ) -> list[dict[str, object]]:
     """Run SNR-wise evaluation and save CSV/PNG outputs."""
 
+    # 扫描原始 .mat 文件，按 sample_length 切成list[SampleRecord]
     sample_index = build_sample_index(
         data_dir,
         sample_length=sample_length,
@@ -240,18 +236,20 @@ def evaluate_snr_accuracy(
         rows: list[dict[str, object]] = []
         for snr_db in snrs:
             rng = np.random.default_rng(seed)
-            num_correct = 0
-            num_samples = 0
+            num_correct = 0     # 统计这个 SNR 下预测正确的样本数量
+            num_samples = 0     # 统计这个 SNR 下测试的总样本数量
 
+            # 把 test_records 按 batch_size 切成批
             test_loader = DataLoader(
                 test_records,
                 batch_size=batch_size,
                 shuffle=False,
-                collate_fn=lambda batch: batch,
+                collate_fn=lambda batch: batch, 
             )
 
             with torch.inference_mode():
-                for batch_records in test_loader:
+                # batch_records 是一个 SampleRecord 的列表，长度不超过 batch_size
+                for batch_records in test_loader:   
                     iq_batch = []
                     labels = []
                     for record in batch_records:
@@ -267,8 +265,7 @@ def evaluate_snr_accuracy(
                         win_length=DEFAULT_WIN_LENGTH,
                         spec_time_bins=DEFAULT_SPEC_TIME_BINS,
                     )
-                    inputs = torch.from_numpy(stft_batch).to(torch_device)
-                    logits = model(inputs)
+                    logits = model(stft_batch.to(torch_device))
                     preds = torch.argmax(logits, dim=1).cpu().numpy()
                     labels_np = np.asarray(labels, dtype=np.int64)
                     num_correct += int(np.sum(preds == labels_np))
