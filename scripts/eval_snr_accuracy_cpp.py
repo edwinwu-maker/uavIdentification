@@ -20,6 +20,7 @@ import h5py
 import matplotlib
 import numpy as np
 import torch
+from tqdm import tqdm
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -242,13 +243,20 @@ def evaluate_snr_accuracy(
     file_cache = H5FileCache()
     try:
         rows: list[dict[str, object]] = []
-        for snr_db in snrs:
+        for snr_db in tqdm(snrs, desc="SNR", unit="snr"):
             rng = np.random.default_rng(seed)
             num_correct = 0
             num_samples = 0
 
             with torch.inference_mode():
-                for batch_records in _records_to_batches(test_records, batch_size):
+                total_batches = (len(test_records) + batch_size - 1) // batch_size
+                for batch_records in tqdm(
+                    _records_to_batches(test_records, batch_size),
+                    total=total_batches,
+                    desc=f"SNR {snr_db} dB",
+                    unit="batch",
+                    leave=False,
+                ):
                     cpp_batch = []
                     labels = []
                     for record in batch_records:

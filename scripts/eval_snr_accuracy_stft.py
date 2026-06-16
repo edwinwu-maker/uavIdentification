@@ -21,6 +21,7 @@ import matplotlib
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -234,7 +235,7 @@ def evaluate_snr_accuracy(
     file_cache = H5FileCache()
     try:
         rows: list[dict[str, object]] = []
-        for snr_db in snrs:
+        for snr_db in tqdm(snrs, desc="SNR", unit="snr"):
             rng = np.random.default_rng(seed)
             num_correct = 0     # 统计这个 SNR 下预测正确的样本数量
             num_samples = 0     # 统计这个 SNR 下测试的总样本数量
@@ -249,7 +250,12 @@ def evaluate_snr_accuracy(
 
             with torch.inference_mode():
                 # batch_records 是一个 SampleRecord 的列表，长度不超过 batch_size
-                for batch_records in test_loader:   
+                for batch_records in tqdm(
+                    test_loader,
+                    desc=f"SNR {snr_db} dB",
+                    unit="batch",
+                    leave=False,
+                ):
                     iq_batch = []
                     labels = []
                     for record in batch_records:
