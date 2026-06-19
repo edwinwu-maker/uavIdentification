@@ -1,36 +1,44 @@
 """Evaluate STFT ResNet robustness under synthetic SNR levels.
 
 Usage:
+  # CLI — quick evaluation with defaults
   python scripts/eval_snr_accuracy_stft.py
-  python scripts/eval_snr_accuracy_stft.py --data-dir E:/dataSet/DroneRFa
-  python scripts/eval_snr_accuracy_stft.py --model-path outputs/checkpoints/best_stft_model.pth
-  python scripts/eval_snr_accuracy_stft.py --snrs -10 0 10 --max-samples 20
+  python scripts/eval_snr_accuracy_stft.py --data-dir E:/dataSet/DroneRFa --snrs -10 0 10 --max-samples 20
+
+  # API — import and call from other scripts
+  from scripts.eval_snr_accuracy_stft import evaluate_snr_accuracy
+  rows = evaluate_snr_accuracy(
+      data_dir="E:/dataSet/DroneRFa",
+      model_path="outputs/checkpoints/best_stft_model.pth",
+      snrs=[0, 10, 20],
+      max_samples=50,
+  )
 """
 
 from __future__ import annotations
 
 import argparse
-import csv
-import os
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 
-import h5py
-import matplotlib
 import numpy as np
 import torch
-from torch.utils.data import DataLoader
 from tqdm import tqdm
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from src.data.drone_rfa_io import count_iq_samples, default_raw_data_dir, parse_label, read_iq_batch
-from src.data.splits import split_dataset
+from src.data.drone_rfa_io import default_raw_data_dir, read_iq_batch
+from src.evaluation.snr_accuracy import (
+    H5FileCache,
+    SampleRecord,
+    add_awgn_for_snr,
+    build_sample_index,
+    make_record_loader,
+    prepare_test_records,
+    save_snr_accuracy_csv,
+    save_snr_accuracy_plot,
+)
 from src.models.resnet import DroneRFaResNet18
 from src.training.checkpoint import load_checkpoint
 from src.preprocess.stft import compute_stft
@@ -38,7 +46,7 @@ from src.utils.device import default_device
 from src.utils.logger import logger
 from src.utils.paths import checkpoint_dir, figures_dir, metrics_dir
 
-DEFAULT_SNRS = [-20, -15, -10, -5, 0, 5, 10, 15, 20, 25, 30]
+DEFAULT_SNRS = [-15, -10, -7.5, -5, -2.5, 0, 2.5, 5, 7.5, 10]
 DEFAULT_SAMPLE_LENGTH = 1_000_000
 DEFAULT_BATCH_SIZE = 8
 DEFAULT_TRAIN_RATIO = 0.6
@@ -50,83 +58,6 @@ DEFAULT_SPEC_TIME_BINS = 1024
 DEFAULT_MODEL_NAME = "best_stft_model.pth"
 DEFAULT_OUTPUT_CSV = metrics_dir() / "stft_snr_accuracy.csv"
 DEFAULT_OUTPUT_PNG = figures_dir() / "stft_snr_accuracy.png"
-
-# (frozen=True)对象创建初始化之后，不能修改、新增、删除任何实例属性
-@dataclass(frozen=True)
-class SampleRecord:
-    path: str       # 样本归属 .mat 文件
-    sample_idx: int # .mat 文件里的第几个样本
-    label: int      # 类别标签
-
-
-class H5FileCache:
-    """ 缓存并统一关闭 HDF5 文件句柄 """
-    def __init__(self) -> None:
-        # 初始化一个字典 self._files，用来保存已经打开过的 h5py.File
-        self._files: dict[str, h5py.File] = {}
-
-    def get(self, path: str) -> h5py.File:
-        # 如果某个 .mat 文件还没打开，就用 h5py.File 打开并缓存起来；如果已经打开过，直接复用
-        if path not in self._files:
-            self._files[path] = h5py.File(path, "r", rdcc_nbytes=64 * 1024 * 1024)
-        return self._files[path]
-
-    def close(self) -> None:
-        # 把缓存里的所有文件都关闭，然后清空字典
-        for file_obj in self._files.values():
-            file_obj.close()
-        self._files.clear()
-
-
-def build_sample_index(
-    data_dir: str,
-    *,
-    sample_length: int = DEFAULT_SAMPLE_LENGTH,
-    max_files: int | None = None,
-    max_samples_per_file: int | None = None,
-) -> list[SampleRecord]:
-    """Scan raw .mat files and build a stable sample index."""
-
-    if not os.path.isdir(data_dir):
-        raise FileNotFoundError(f"Raw data directory does not exist: {data_dir}")
-
-    sample_index: list[SampleRecord] = []
-    mat_files = sorted(fname for fname in os.listdir(data_dir) if fname.endswith(".mat"))
-
-    # 如果传了 max_files，就只取前 N 个文件(一般测试用)
-    if max_files is not None:
-        mat_files = mat_files[:max_files]
-
-    for fname in mat_files:
-        path = os.path.join(data_dir, fname)
-        label = parse_label(fname)
-        with h5py.File(path, "r") as src:
-            # 打开文件，用 count_iq_samples() 计算这个文件里有多少个可用 IQ 样本
-            num_samples = count_iq_samples(
-                src,
-                sample_length=sample_length,
-                max_samples=max_samples_per_file,
-            )
-        for sample_idx in range(num_samples):
-            sample_index.append(SampleRecord(path=path, sample_idx=sample_idx, label=label))
-
-    return sample_index
-
-
-def add_awgn_for_snr(iq: np.ndarray, snr_db: float, rng: np.random.Generator) -> np.ndarray:
-    """Add complex AWGN to one IQ sample at the requested SNR."""
-
-    iq = np.asarray(iq, dtype=np.complex64)
-    signal_power = float(np.mean(np.abs(iq) ** 2))
-    if signal_power <= 0.0:
-        return iq.copy()
-
-    noise_power = signal_power / (10.0 ** (snr_db / 10.0))
-    noise = np.sqrt(noise_power / 2.0) * (
-        rng.standard_normal(iq.shape) + 1j * rng.standard_normal(iq.shape)
-    )
-    return (iq + noise).astype(np.complex64, copy=False)
-
 
 def _load_iq_batch(
     file_cache: H5FileCache,
@@ -145,32 +76,6 @@ def _load_iq_batch(
     )
     # 这里取第 0 个样本，返回(2, sample_length)
     return iq[0]
-
-
-def _save_csv(rows: list[dict[str, object]], output_csv: str | Path) -> None:
-    output_path = Path(output_csv)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=["snr_db", "num_samples", "num_correct", "accuracy"])
-        writer.writeheader()
-        writer.writerows(rows)
-
-
-def _save_plot(rows: list[dict[str, object]], output_png: str | Path) -> None:
-    output_path = Path(output_png)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    snrs = [int(row["snr_db"]) for row in rows]
-    accuracies = [float(row["accuracy"]) for row in rows]
-    fig, ax = plt.subplots(figsize=(7, 5))
-    ax.plot(snrs, accuracies, marker="o", linewidth=2)
-    ax.set_xlabel("SNR (dB)")
-    ax.set_ylabel("Accuracy")
-    ax.set_title("STFT SNR-Accuracy Curve")
-    ax.set_ylim(0.0, 1.0)
-    ax.grid(True, linestyle="--", alpha=0.4)
-    fig.tight_layout()
-    fig.savefig(output_path, dpi=300)
-    plt.close(fig)
 
 
 def evaluate_snr_accuracy(
@@ -192,33 +97,28 @@ def evaluate_snr_accuracy(
 ) -> list[dict[str, object]]:
     """Run SNR-wise evaluation and save CSV/PNG outputs."""
 
-    # 扫描原始 .mat 文件，按 sample_length 切成list[SampleRecord]
     sample_index = build_sample_index(
         data_dir,
         sample_length=sample_length,
         max_files=max_files,
         max_samples_per_file=max_samples_per_file,
     )
-    if len(sample_index) < 3 or (train_ratio <= 0.0 and val_ratio <= 0.0):
-        train_ds, val_ds = [], []
-        test_records = list(sample_index)
-    else:
-        train_ds, val_ds, test_ds = split_dataset(
-            sample_index,
-            train_ratio=train_ratio,
-            val_ratio=val_ratio,
-            seed=seed,
-        )
-        test_records = [test_ds[i] for i in range(len(test_ds))]
-    if max_samples is not None:
-        test_records = test_records[:max_samples]
+
+    test_records, train_count, val_count = prepare_test_records(
+        sample_index,
+        data_dir=data_dir,
+        max_samples=max_samples,
+        seed=seed,
+        train_ratio=train_ratio,
+        val_ratio=val_ratio,
+    )
 
     logger.info(
         "Loaded %d samples from %d files; split train=%d val=%d test=%d",
         len(sample_index),
         len(set(record.path for record in sample_index)),
-        len(train_ds),
-        len(val_ds),
+        train_count,
+        val_count,
         len(test_records),
     )
 
@@ -240,18 +140,12 @@ def evaluate_snr_accuracy(
             num_correct = 0     # 统计这个 SNR 下预测正确的样本数量
             num_samples = 0     # 统计这个 SNR 下测试的总样本数量
 
-            # 把 test_records 按 batch_size 切成批
-            test_loader = DataLoader(
-                test_records,
-                batch_size=batch_size,
-                shuffle=False,
-                collate_fn=lambda batch: batch, 
-            )
+            test_loader = make_record_loader(test_records, batch_size=batch_size)
 
             with torch.inference_mode():
-                # batch_records 是一个 SampleRecord 的列表，长度不超过 batch_size
                 for batch_records in tqdm(
                     test_loader,
+                    total=len(test_loader),
                     desc=f"SNR {snr_db} dB",
                     unit="batch",
                     leave=False,
@@ -288,8 +182,8 @@ def evaluate_snr_accuracy(
             )
             logger.info("SNR %s dB: %d/%d = %.4f", snr_db, num_correct, num_samples, accuracy)
 
-        _save_csv(rows, output_csv)
-        _save_plot(rows, output_png)
+        save_snr_accuracy_csv(rows, output_csv)
+        save_snr_accuracy_plot(rows, output_png, title="STFT SNR-Accuracy Curve")
         logger.info("Saved CSV to %s", output_csv)
         logger.info("Saved plot to %s", output_png)
         return rows

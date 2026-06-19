@@ -1,35 +1,44 @@
 """Evaluate CPP ResNet robustness under synthetic SNR levels.
 
 Usage:
+  # CLI — quick evaluation with defaults
   python scripts/eval_snr_accuracy_cpp.py
-  python scripts/eval_snr_accuracy_cpp.py --data-dir E:/dataSet/DroneRFa
-  python scripts/eval_snr_accuracy_cpp.py --model-path outputs/checkpoints/best_cpp_model.pth
-  python scripts/eval_snr_accuracy_cpp.py --snrs -10 0 10 --max-samples 20
+  python scripts/eval_snr_accuracy_cpp.py --data-dir E:/dataSet/DroneRFa --snrs -10 0 10 --max-samples 20
+
+  # API — import and call from other scripts
+  from scripts.eval_snr_accuracy_cpp import evaluate_snr_accuracy
+  rows = evaluate_snr_accuracy(
+      data_dir="E:/dataSet/DroneRFa",
+      model_path="outputs/checkpoints/best_cpp_model.pth",
+      snrs=[0, 10, 20],
+      max_samples=50,
+  )
 """
 
 from __future__ import annotations
 
 import argparse
-import csv
-import os
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 
-import h5py
-import matplotlib
 import numpy as np
 import torch
 from tqdm import tqdm
 
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from src.data.drone_rfa_io import count_iq_samples, default_raw_data_dir, parse_label, read_iq_batch
-from src.data.splits import split_dataset
+from src.data.drone_rfa_io import default_raw_data_dir, read_iq_batch
+from src.evaluation.snr_accuracy import (
+    H5FileCache,
+    SampleRecord,
+    add_awgn_for_snr,
+    build_sample_index,
+    make_record_loader,
+    prepare_test_records,
+    save_snr_accuracy_csv,
+    save_snr_accuracy_plot,
+)
 from src.models.resnet import DroneRFaResNet18
 from src.preprocess.cpp import compute_cpp
 from src.training.checkpoint import load_checkpoint
@@ -37,7 +46,7 @@ from src.utils.device import default_device
 from src.utils.logger import logger
 from src.utils.paths import checkpoint_dir, figures_dir, metrics_dir
 
-DEFAULT_SNRS = [-20, -15, -10, -5, 0, 5, 10, 15, 20, 25, 30]
+DEFAULT_SNRS = [-15, -10, -7.5, -5, -2.5, 0, 2.5, 5, 7.5, 10]
 DEFAULT_SAMPLE_LENGTH = 1_000_000
 DEFAULT_SEGMENT_SAMPLES = 262_144
 DEFAULT_SEGMENT_HOP_SAMPLES = None
@@ -54,80 +63,6 @@ DEFAULT_OUTPUT_CSV = metrics_dir() / "cpp_snr_accuracy.csv"
 DEFAULT_OUTPUT_PNG = figures_dir() / "cpp_snr_accuracy.png"
 
 
-@dataclass(frozen=True)
-class SampleRecord:
-    path: str
-    sample_idx: int
-    label: int
-
-
-class H5FileCache:
-    def __init__(self) -> None:
-        self._files: dict[str, h5py.File] = {}
-
-    def get(self, path: str) -> h5py.File:
-        if path not in self._files:
-            self._files[path] = h5py.File(path, "r", rdcc_nbytes=64 * 1024 * 1024)
-        return self._files[path]
-
-    def close(self) -> None:
-        for file_obj in self._files.values():
-            file_obj.close()
-        self._files.clear()
-
-
-def build_sample_index(
-    data_dir: str,
-    *,
-    sample_length: int = DEFAULT_SAMPLE_LENGTH,
-    max_files: int | None = None,
-    max_samples_per_file: int | None = None,
-) -> list[SampleRecord]:
-    """Scan raw .mat files and build a stable sample index."""
-
-    if not os.path.isdir(data_dir):
-        raise FileNotFoundError(f"Raw data directory does not exist: {data_dir}")
-
-    sample_index: list[SampleRecord] = []
-    mat_files = sorted(fname for fname in os.listdir(data_dir) if fname.endswith(".mat"))
-    if max_files is not None:
-        mat_files = mat_files[:max_files]
-
-    for fname in mat_files:
-        path = os.path.join(data_dir, fname)
-        label = parse_label(fname)
-        with h5py.File(path, "r") as src:
-            num_samples = count_iq_samples(
-                src,
-                sample_length=sample_length,
-                max_samples=max_samples_per_file,
-            )
-        for sample_idx in range(num_samples):
-            sample_index.append(SampleRecord(path=path, sample_idx=sample_idx, label=label))
-
-    return sample_index
-
-
-def add_awgn_for_snr(iq: np.ndarray, snr_db: float, rng: np.random.Generator) -> np.ndarray:
-    """Add complex AWGN to a dual-channel IQ sample at the requested SNR."""
-
-    iq = np.asarray(iq, dtype=np.complex64)
-    signal_power = float(np.mean(np.abs(iq) ** 2))
-    if signal_power <= 0.0:
-        return iq.copy()
-
-    noise_power = signal_power / (10.0 ** (snr_db / 10.0))
-    noise = np.sqrt(noise_power / 2.0) * (
-        rng.standard_normal(iq.shape) + 1j * rng.standard_normal(iq.shape)
-    )
-    return (iq + noise).astype(np.complex64, copy=False)
-
-
-def _records_to_batches(records: list[SampleRecord], batch_size: int):
-    for start in range(0, len(records), batch_size):
-        yield records[start:start + batch_size]
-
-
 def _load_dual_iq_sample(
     file_cache: H5FileCache,
     record: SampleRecord,
@@ -142,32 +77,6 @@ def _load_dual_iq_sample(
         end_idx=record.sample_idx + 1,
     )
     return iq_batch[0]
-
-
-def _save_csv(rows: list[dict[str, object]], output_csv: str | Path) -> None:
-    output_path = Path(output_csv)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=["snr_db", "num_samples", "num_correct", "accuracy"])
-        writer.writeheader()
-        writer.writerows(rows)
-
-
-def _save_plot(rows: list[dict[str, object]], output_png: str | Path) -> None:
-    output_path = Path(output_png)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    snrs = [int(row["snr_db"]) for row in rows]
-    accuracies = [float(row["accuracy"]) for row in rows]
-    fig, ax = plt.subplots(figsize=(7, 5))
-    ax.plot(snrs, accuracies, marker="o", linewidth=2)
-    ax.set_xlabel("SNR (dB)")
-    ax.set_ylabel("Accuracy")
-    ax.set_title("CPP SNR-Accuracy Curve")
-    ax.set_ylim(0.0, 1.0)
-    ax.grid(True, linestyle="--", alpha=0.4)
-    fig.tight_layout()
-    fig.savefig(output_path, dpi=300)
-    plt.close(fig)
 
 
 def evaluate_snr_accuracy(
@@ -201,32 +110,22 @@ def evaluate_snr_accuracy(
         max_files=max_files,
         max_samples_per_file=max_samples_per_file,
     )
-    if not sample_index:
-        raise ValueError(f"No .mat samples found in {data_dir}")
 
-    if len(sample_index) < 3:
-        train_ds, val_ds = [], []
-        test_records = list(sample_index)
-    else:
-        train_ds, val_ds, test_ds = split_dataset(
-            sample_index,
-            train_ratio=train_ratio,
-            val_ratio=val_ratio,
-            seed=seed,
-        )
-        test_records = [test_ds[i] for i in range(len(test_ds))]
-
-    if max_samples is not None:
-        test_records = test_records[:max_samples]
-    if not test_records:
-        raise ValueError("No test samples available after splitting and filtering")
+    test_records, train_count, val_count = prepare_test_records(
+        sample_index,
+        data_dir=data_dir,
+        max_samples=max_samples,
+        seed=seed,
+        train_ratio=train_ratio,
+        val_ratio=val_ratio,
+    )
 
     logger.info(
         "Loaded %d samples from %d files; split train=%d val=%d test=%d",
         len(sample_index),
         len(set(record.path for record in sample_index)),
-        len(train_ds),
-        len(val_ds),
+        train_count,
+        val_count,
         len(test_records),
     )
 
@@ -249,10 +148,10 @@ def evaluate_snr_accuracy(
             num_samples = 0
 
             with torch.inference_mode():
-                total_batches = (len(test_records) + batch_size - 1) // batch_size
+                test_loader = make_record_loader(test_records, batch_size=batch_size)
                 for batch_records in tqdm(
-                    _records_to_batches(test_records, batch_size),
-                    total=total_batches,
+                    test_loader,
+                    total=len(test_loader),
                     desc=f"SNR {snr_db} dB",
                     unit="batch",
                     leave=False,
@@ -294,8 +193,8 @@ def evaluate_snr_accuracy(
             )
             logger.info("SNR %s dB: %d/%d = %.4f", snr_db, num_correct, num_samples, accuracy)
 
-        _save_csv(rows, output_csv)
-        _save_plot(rows, output_png)
+        save_snr_accuracy_csv(rows, output_csv)
+        save_snr_accuracy_plot(rows, output_png, title="CPP SNR-Accuracy Curve")
         logger.info("Saved CSV to %s", output_csv)
         logger.info("Saved plot to %s", output_png)
         return rows
