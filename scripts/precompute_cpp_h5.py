@@ -30,10 +30,11 @@ from src.preprocess.cpp import (
 )
 from src.preprocess.h5_precompute import resolve_output_dir, run_precompute_batch, output_h5_path
 from src.utils.logger import logger
+from src.utils.device import default_device
 
 SAMPLE_LENGTH = 1_000_000
 F_BINS = 257
-ALPHA_BINS = 513
+ALPHA_BINS = 257
 
 
 def parse_args() -> argparse.Namespace:
@@ -56,7 +57,7 @@ def parse_args() -> argparse.Namespace:
                         help="Number of frequency bins in the CPP grid")
     parser.add_argument("--alpha-bins", type=int, default=ALPHA_BINS,
                         help="Number of cyclic-frequency bins in the CPP grid")
-    parser.add_argument("--device", type=str, default="cpu",
+    parser.add_argument("--device", type=str, default=default_device(),
                         help='FAM compute device: "cpu", "cuda", "cuda:0", or "mps"')
     parser.add_argument("--pair-chunk-size", type=int, default=8192,
                         help="Number of (k, l) channel pairs per torch batch")
@@ -123,6 +124,8 @@ def process_one_mat(
                     alpha_bins=alpha_bins,
                     device=device,
                     pair_chunk_size=pair_chunk_size,
+                    fam_nfft=256,
+                    fam_hop=256
                 )
                 h5f["cpp"][sample_idx] = cpp
                 h5f["labels"][sample_idx] = label

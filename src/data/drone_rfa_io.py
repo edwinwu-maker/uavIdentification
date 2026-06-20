@@ -19,7 +19,7 @@ def default_raw_data_dir() -> str:
     if os.name == "nt":
         return "E:/dataSet/DroneRFa"
     if sys.platform == "darwin":
-        return os.path.expanduser("/Volumes/PortableSSD/droneRFa")
+        return os.path.expanduser("~/Desktop/dataset/droneRFa")
     return "/mnt/data/wurixin/DroneRFa"
 
 

@@ -8,3 +8,4 @@ outputs/*
 *.out
 .pytest_cache/
 tests/
+docs
