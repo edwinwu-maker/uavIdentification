@@ -22,7 +22,7 @@ import numpy as np
 from tqdm import tqdm
 
 from src.data.drone_rfa_io import default_raw_data_dir
-from src.data.drone_rfa_io import count_iq_samples, iter_iq_pairs, parse_label
+from src.data.drone_rfa_io import count_iq_samples, parse_label, read_iq_batch
 from src.preprocess.cpp import (
     compute_cpp,
     DEFAULT_SEGMENT_SAMPLES,
@@ -108,15 +108,16 @@ def process_one_mat(
 
             f_axis = np.linspace(-0.5, 0.5, f_bins, dtype=np.float32)
             alpha_axis = np.linspace(-1.0, 1.0, alpha_bins, dtype=np.float32)
-            samples = iter_iq_pairs(
-                src,
-                sample_length=sample_length,
-                num_samples=num_samples,
-            )
-            for sample_idx, ch0, ch1 in tqdm(samples, total=num_samples, desc=f"  {mat_name}"):
+            for sample_idx in tqdm(range(num_samples), total=num_samples, desc=f"  {mat_name}"):
+                iq = read_iq_batch(
+                    src,
+                    sample_length=sample_length,
+                    start_idx=sample_idx,
+                    end_idx=sample_idx + 1,
+                )
                 cpp, f_axis, alpha_axis = compute_cpp(
-                    ch0,
-                    ch1,
+                    iq[0, 0, :],
+                    iq[0, 1, :],
                     segment_samples=segment_samples,
                     segment_hop_samples=segment_hop_samples,
                     fam_merge=fam_merge,

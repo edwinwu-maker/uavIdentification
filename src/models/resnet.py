@@ -3,9 +3,9 @@ from torchvision.models import resnet18
 
 
 class DroneRFaResNet18(nn.Module):
-    """ResNet-18 adapted for DroneRFa stft classification.
+    """ResNet-18 adapted for DroneRFa 2-channel input (CPP / STFT).
 
-    Input: (B, 2, 1024, 1024) — 2-channel stfts (RF0, RF1).
+    Input: (B, 2, H, W) — 2-channel feature maps (RF0, RF1).
     Output: (B, 25) — logits over 25 drone/background classes.
     """
 

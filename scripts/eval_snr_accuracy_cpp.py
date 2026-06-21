@@ -171,6 +171,8 @@ def evaluate_snr_accuracy(
                             alpha_bins=alpha_bins,
                             device=device,
                             pair_chunk_size=pair_chunk_size,
+                            fam_nfft=256,
+                            fam_hop=256,
                         )
                         cpp_batch.append(cpp)
                         labels.append(record.label)
