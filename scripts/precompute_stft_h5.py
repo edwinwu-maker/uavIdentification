@@ -5,7 +5,7 @@ Each .mat is converted independently to a same-named .h5 in the output
 directory.
 
 Output HDF5 structure (per file):
-  /stft  (N, 2, 1024, 1024) float32
+  /stft  (N, 2, 512, 512) float32
   /labels        (N,) int64
 
 Usage:
@@ -42,6 +42,8 @@ SAMPLE_LENGTH = 1_000_000
 N_FFT = 1024
 WIN_LENGTH = 1024
 SPEC_TIME_BINS = 1024
+OUTPUT_FREQ_BINS = 512
+OUTPUT_TIME_BINS = 512
 
 
 def parse_args() -> argparse.Namespace:
@@ -90,8 +92,8 @@ def process_one_mat(
 
         with h5py.File(out_path, "w") as h5f:
             h5f.create_dataset(
-                "stft", shape=(num_samples, 2, N_FFT, SPEC_TIME_BINS),
-                chunks=(1, 2, N_FFT, SPEC_TIME_BINS), dtype="f4",
+                "stft", shape=(num_samples, 2, OUTPUT_FREQ_BINS, OUTPUT_TIME_BINS),
+                chunks=(1, 2, OUTPUT_FREQ_BINS, OUTPUT_TIME_BINS), dtype="f4",
             )
             h5f.create_dataset(
                 "labels", shape=(num_samples,), chunks=None, dtype="i8",
@@ -113,6 +115,8 @@ def process_one_mat(
                     n_fft=N_FFT,
                     win_length=WIN_LENGTH,
                     spec_time_bins=SPEC_TIME_BINS,
+                    output_freq_bins=OUTPUT_FREQ_BINS,
+                    output_time_bins=OUTPUT_TIME_BINS,
                 ).cpu().numpy()
                 h5f["stft"][sample_idx:batch_end] = batch_stft
                 h5f["labels"][sample_idx:batch_end] = label

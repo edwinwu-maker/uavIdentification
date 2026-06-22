@@ -48,7 +48,7 @@ def _default_save_root() -> str:
 def plot_dual_channel(stft_sample, save_path, sample_idx, label=None):
     """Plot a dual-channel stft and save as PNG.
 
-    stft_sample: (2, 1024, 1024) float32, z-score normalized STFT.
+    stft_sample: (2, 512, 512) float32, z-score normalized STFT.
     """
     n_freqs, n_times = stft_sample.shape[1], stft_sample.shape[2]
     freqs = np.fft.fftshift(np.fft.fftfreq(n_freqs, 1.0 / FS))

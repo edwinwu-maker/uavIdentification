@@ -55,6 +55,8 @@ DEFAULT_SEED = 42
 DEFAULT_N_FFT = 1024
 DEFAULT_WIN_LENGTH = 1024
 DEFAULT_SPEC_TIME_BINS = 1024
+DEFAULT_OUTPUT_FREQ_BINS = 512
+DEFAULT_OUTPUT_TIME_BINS = 512
 DEFAULT_MODEL_NAME = "best_stft_model.pth"
 DEFAULT_OUTPUT_CSV = metrics_dir() / "stft_snr_accuracy.csv"
 DEFAULT_OUTPUT_PNG = figures_dir() / "stft_snr_accuracy.png"
@@ -164,6 +166,8 @@ def evaluate_snr_accuracy(
                         n_fft=DEFAULT_N_FFT,
                         win_length=DEFAULT_WIN_LENGTH,
                         spec_time_bins=DEFAULT_SPEC_TIME_BINS,
+                        output_freq_bins=DEFAULT_OUTPUT_FREQ_BINS,
+                        output_time_bins=DEFAULT_OUTPUT_TIME_BINS,
                     )
                     logits = model(stft_batch.to(torch_device))
                     preds = torch.argmax(logits, dim=1).cpu().numpy()
