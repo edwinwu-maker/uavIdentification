@@ -28,7 +28,7 @@ from src.preprocess.cpp import (
     DEFAULT_SEGMENT_SAMPLES,
     SUPPORTED_FAM_MERGE_MODES,
 )
-from src.preprocess.h5_precompute import resolve_output_dir, run_precompute_batch, output_h5_path
+from src.preprocess.h5_precompute import run_precompute_batch, output_h5_path
 from src.utils.logger import logger
 from src.utils.device import default_device
 
@@ -44,7 +44,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-dir", type=str, default=default_raw_data_dir(),
                         help="Directory containing .mat files")
     parser.add_argument("--output-dir", type=str, default=None,
-                        help="Directory for output .h5 files (default: <data-dir>/cpp_h5)")
+                        help="Directory for output .h5 files (default: <data-dir-parent>/DroneRFa_cpp_h5)")
     parser.add_argument("--sample-length", type=int, default=SAMPLE_LENGTH,
                         help="Number of IQ samples per output CPP sample")
     parser.add_argument("--segment-samples", type=int, default=DEFAULT_SEGMENT_SAMPLES,
@@ -143,7 +143,10 @@ def main() -> None:
 
     args = parse_args()
     data_dir = os.path.expanduser(args.data_dir)
-    output_dir = resolve_output_dir(data_dir, args.output_dir, "cpp_h5")
+    if args.output_dir:
+        output_dir = os.path.expanduser(args.output_dir)
+    else:
+        output_dir = str(Path(data_dir).parent / "DroneRFa_cpp_h5")
     os.makedirs(output_dir, exist_ok=True)
     run_precompute_batch(
         data_dir,

@@ -1,8 +1,8 @@
 """Train ResNet on pre-computed DroneRFa features.
 
 Usage:
-  python scripts/train.py --feature stft --data-dir ~/Desktop/dataset/droneRFa/stft_h5 --batch-size 64
-  python scripts/train.py --feature cpp --data-dir ~/Desktop/dataset/droneRFa/cpp_h5 --batch-size 64
+  python scripts/train.py --feature stft --data-dir ~/Desktop/dataset/DroneRFa_stft_h5 --batch-size 64
+  python scripts/train.py --feature cpp --data-dir ~/Desktop/dataset/DroneRFa_cpp_h5 --batch-size 64
   python scripts/train.py --config configs/stft.yaml
   python scripts/train.py --config configs/cpp.yaml --device mps
 

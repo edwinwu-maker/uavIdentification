@@ -32,7 +32,7 @@ import h5py
 from tqdm import tqdm
 
 from src.data.drone_rfa_io import count_iq_samples, default_raw_data_dir, parse_label, read_iq_batch
-from src.preprocess.h5_precompute import resolve_output_dir, run_precompute_batch, output_h5_path
+from src.preprocess.h5_precompute import run_precompute_batch, output_h5_path
 from src.preprocess.stft import compute_stft
 from src.utils.device import resolve_requested_device
 from src.utils.logger import logger
@@ -51,7 +51,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-dir", type=str, default=default_raw_data_dir(),
                         help="Directory containing .mat files")
     parser.add_argument("--output-dir", type=str, default=None,
-                        help="Directory for output .h5 files (default: <data-dir>/stft_h5)")
+                        help="Directory for output .h5 files (default: <data-dir-parent>/DroneRFa_stft_h5)")
     parser.add_argument("--sample-length", type=int, default=SAMPLE_LENGTH,
                         help="Number of IQ samples per output stft")
     parser.add_argument("--batch-size", type=int, default=8,
@@ -128,7 +128,10 @@ def process_one_mat(
 def main() -> None:
     args = parse_args()
     data_dir = os.path.expanduser(args.data_dir)
-    output_dir = resolve_output_dir(data_dir, args.output_dir, "stft_h5")
+    if args.output_dir:
+        output_dir = os.path.expanduser(args.output_dir)
+    else:
+        output_dir = str(Path(data_dir).parent / "DroneRFa_stft_h5")
     device = resolve_requested_device(args.device)
 
     logger.info("Using device: %s", device)

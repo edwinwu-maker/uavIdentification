@@ -10,11 +10,7 @@ from tqdm import tqdm
 
 from src.utils.logger import logger
 
-__all__ = ["resolve_output_dir", "output_h5_path", "run_precompute_batch"]
-
-
-def resolve_output_dir(data_dir: str, output_dir: str | None, default_subdir: str) -> str:
-    return os.path.expanduser(output_dir) if output_dir else os.path.join(data_dir, default_subdir)
+__all__ = ["output_h5_path", "run_precompute_batch"]
 
 
 def output_h5_path(mat_path: str, output_dir: str) -> str:
