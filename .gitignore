@@ -8,3 +8,5 @@ outputs/*
 *.out
 .pytest_cache/
 tests/
+.agents
+.codex

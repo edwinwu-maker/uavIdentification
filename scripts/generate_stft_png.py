@@ -24,7 +24,6 @@ import tqdm
 
 from src.utils.logger import logger
 from src.utils.feature_specs import get_feature_spec
-from src.utils.paths import figures_dir
 from src.visualization.h5_png_export import (
     limited_sample_count,
     list_h5_files,
@@ -41,8 +40,8 @@ def _default_h5_dir() -> str:
     return get_feature_spec("stft").default_data_dir
 
 
-def _default_save_root() -> str:
-    return str(figures_dir() / "stft_png")
+def _default_save_root(h5_dir: str) -> str:
+    return str(Path(h5_dir).parent / "stft_png")
 
 
 def plot_dual_channel(stft_sample, save_path, sample_idx, label=None):
@@ -114,7 +113,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--h5-dir", type=str, default=_default_h5_dir(),
                         help="Directory containing STFT .h5 files")
     parser.add_argument("--save-root", type=str, default=None,
-                        help="Directory for output PNG files (default: outputs/figures/stft_png)")
+                        help="Directory for output PNG files (default: sibling stft_png directory next to --h5-dir)")
     parser.add_argument("--max-files", type=int, default=None,
                         help="Process at most this many .h5 files")
     parser.add_argument("--max-samples-per-file", type=int, default=None,
@@ -128,7 +127,7 @@ def main() -> None:
     args = parse_args()
     h5_dir = os.path.expanduser(args.h5_dir)
     if args.save_root is None:
-        save_root = _default_save_root()
+        save_root = _default_save_root(h5_dir)
     else:
         save_root = os.path.expanduser(args.save_root)
     os.makedirs(save_root, exist_ok=True)
