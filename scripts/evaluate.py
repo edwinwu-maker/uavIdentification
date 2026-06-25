@@ -3,8 +3,6 @@
 Usage:
   python scripts/evaluate.py --feature stft --data-dir ~/Desktop/dataset/droneRFa/stft_h5 --model-path outputs/checkpoints/best_stft_model.pth
   python scripts/evaluate.py --feature cpp --data-dir ~/Desktop/dataset/droneRFa/cpp_h5 --model-path outputs/checkpoints/best_cpp_model.pth
-  python scripts/evaluate.py --config configs/stft.yaml
-  python scripts/evaluate.py --config configs/cpp.yaml --device mps
 
 """
 
@@ -27,7 +25,7 @@ from src.models.resnet import DroneRFaResNet18
 from src.training.checkpoint import load_checkpoint
 from src.training.evaluator import evaluate_with_predictions
 from src.training.metrics import compute_metrics, save_confusion_matrix_image
-from src.utils.config import expand_path, get_config_value, load_config
+
 from src.utils.device import default_device
 from src.utils.feature_specs import get_feature_spec
 from src.utils.logger import logger
@@ -40,19 +38,13 @@ VAL_RATIO = 0.2
 SPLIT_SEED = 42
 
 
-def build_parser(config=None):
+def build_parser():
     parser = argparse.ArgumentParser(description="Evaluate ResNet on pre-computed DroneRFa features")
-    parser.add_argument("--config", type=str, default=None, help="Path to YAML config")
-    parser.add_argument(
-        "--feature",
-        type=str,
-        default=get_config_value(config, "feature", "stft"),
-        choices=("stft", "cpp"),
-    )
+    parser.add_argument("--feature", type=str, default="stft", choices=("stft", "cpp"))
     parser.add_argument("--data-dir", type=str, default=None, help="Directory containing feature .h5 files")
     parser.add_argument("--model-path", type=str, default=None, help="Path to model checkpoint")
-    parser.add_argument("--batch-size", type=int, default=get_config_value(config, "batch_size", BATCH_SIZE))
-    parser.add_argument("--num-workers", type=int, default=get_config_value(config, "num_workers", 0),
+    parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
+    parser.add_argument("--num-workers", type=int, default=0,
                         help="DataLoader workers (0 = main process only)")
     parser.add_argument("--device", type=str, default=default_device(),
                         help="Device, e.g. 'cuda:0', 'cuda:1', 'mps', 'cpu'")
@@ -61,19 +53,14 @@ def build_parser(config=None):
 
 
 def parse_args(argv=None):
-    config_parser = argparse.ArgumentParser(add_help=False)
-    config_parser.add_argument("--config", type=str, default=None)
-    config_args, remaining = config_parser.parse_known_args(argv)
-    config = load_config(config_args.config)
-    parser = build_parser(config)
-    args = parser.parse_args(remaining)
-    args.config = config_args.config
+    parser = build_parser()
+    args = parser.parse_args(argv)
 
     spec = get_feature_spec(args.feature)
-    args.data_dir = expand_path(args.data_dir) if args.data_dir is not None else spec.default_data_dir
-    args.model_path = expand_path(args.model_path) if args.model_path is not None else spec.checkpoint_name
+    args.data_dir = os.path.expanduser(args.data_dir) if args.data_dir is not None else spec.default_data_dir
+    args.model_path = os.path.expanduser(args.model_path) if args.model_path is not None else spec.checkpoint_name
     args.cm_image_path = (
-        expand_path(args.cm_image_path)
+        os.path.expanduser(args.cm_image_path)
         if args.cm_image_path is not None
         else str(figures_dir() / spec.cm_image_name)
     )

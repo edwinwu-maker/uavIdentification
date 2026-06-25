@@ -22,7 +22,6 @@ import tqdm
 
 from src.utils.feature_specs import get_feature_spec
 from src.utils.logger import logger
-from src.utils.paths import figures_dir
 from src.visualization.h5_png_export import (
     limited_sample_count,
     list_h5_files,
@@ -33,6 +32,10 @@ from src.visualization.h5_png_export import (
 
 def _default_h5_dir() -> str:
     return get_feature_spec("cpp").default_data_dir
+
+
+def _default_save_root(h5_dir: str) -> str:
+    return str(Path(h5_dir).parent / "cpp_png")
 
 
 def plot_dual_channel_cpp(
@@ -114,7 +117,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--h5-dir", type=str, default=_default_h5_dir(),
                         help="Directory containing CPP .h5 files")
     parser.add_argument("--save-root", type=str, default=None,
-                        help="Directory for output PNG files (default: outputs/figures/cpp_png)")
+                        help="Directory for output PNG files (default: sibling cpp_png directory next to --h5-dir)")
     parser.add_argument("--max-files", type=int, default=None,
                         help="Process at most this many .h5 files")
     parser.add_argument("--max-samples-per-file", type=int, default=None,
@@ -128,7 +131,7 @@ def main() -> None:
     args = parse_args()
     h5_dir = os.path.expanduser(args.h5_dir)
     if args.save_root is None:
-        save_root = str(figures_dir() / "cpp_png")
+        save_root = _default_save_root(h5_dir)
     else:
         save_root = os.path.expanduser(args.save_root)
     os.makedirs(save_root, exist_ok=True)

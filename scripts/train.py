@@ -3,12 +3,11 @@
 Usage:
   python scripts/train.py --feature stft --data-dir ~/Desktop/dataset/DroneRFa_stft_h5 --batch-size 64
   python scripts/train.py --feature cpp --data-dir ~/Desktop/dataset/DroneRFa_cpp_h5 --batch-size 64
-  python scripts/train.py --config configs/stft.yaml
-  python scripts/train.py --config configs/cpp.yaml --device mps
 
 """
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -22,7 +21,7 @@ sys.path.insert(0, str(REPO_ROOT))
 from src.data.splits import split_dataset
 from src.models.resnet import DroneRFaResNet18
 from src.training.trainer import train_model
-from src.utils.config import expand_path, get_config_value, load_config
+
 from src.utils.device import default_device
 from src.utils.feature_specs import get_feature_spec
 from src.utils.logger import logger
@@ -36,17 +35,16 @@ PATIENCE = 10
 SPLIT_SEED = 42
 
 
-def build_parser(config=None):
+def build_parser():
     parser = argparse.ArgumentParser(description="Train ResNet on pre-computed DroneRFa features")
-    parser.add_argument("--config", type=str, default=None, help="Path to YAML config")
-    parser.add_argument("--feature", type=str, default=get_config_value(config, "feature", "stft"), choices=("stft", "cpp"))
+    parser.add_argument("--feature", type=str, default="stft", choices=("stft", "cpp"))
     parser.add_argument("--data-dir", type=str, default=None, help="Directory containing feature .h5 files")
-    parser.add_argument("--batch-size", type=int, default=get_config_value(config, "batch_size", BATCH_SIZE))
-    parser.add_argument("--lr", type=float, default=get_config_value(config, "learning_rate", LEARNING_RATE))
-    parser.add_argument("--num-workers", type=int, default=get_config_value(config, "num_workers", 0),
+    parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
+    parser.add_argument("--lr", type=float, default=LEARNING_RATE)
+    parser.add_argument("--num-workers", type=int, default=0,
                         help="DataLoader workers (0 = main process only)")
-    parser.add_argument("--epochs", type=int, default=get_config_value(config, "epochs", 200))
-    parser.add_argument("--patience", type=int, default=get_config_value(config, "patience", PATIENCE))
+    parser.add_argument("--epochs", type=int, default=200)
+    parser.add_argument("--patience", type=int, default=PATIENCE)
     parser.add_argument("--device", type=str, default=default_device(),
                         help="Device, e.g. 'cuda:0', 'cuda:1', 'mps', 'cpu'")
     parser.add_argument("--checkpoint-path", type=str, default=None, help="Checkpoint path or name")
@@ -54,18 +52,13 @@ def build_parser(config=None):
 
 
 def parse_args(argv=None):
-    config_parser = argparse.ArgumentParser(add_help=False)
-    config_parser.add_argument("--config", type=str, default=None)
-    config_args, remaining = config_parser.parse_known_args(argv)
-    config = load_config(config_args.config)
-    parser = build_parser(config)
-    args = parser.parse_args(remaining)
-    args.config = config_args.config
+    parser = build_parser()
+    args = parser.parse_args(argv)
 
     spec = get_feature_spec(args.feature)
-    args.data_dir = expand_path(args.data_dir) if args.data_dir is not None else spec.default_data_dir
+    args.data_dir = os.path.expanduser(args.data_dir) if args.data_dir is not None else spec.default_data_dir
     args.checkpoint_path = (
-        expand_path(args.checkpoint_path) if args.checkpoint_path is not None else spec.checkpoint_name
+        os.path.expanduser(args.checkpoint_path) if args.checkpoint_path is not None else spec.checkpoint_name
     )
     return args
 

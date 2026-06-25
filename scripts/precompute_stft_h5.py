@@ -34,7 +34,7 @@ from tqdm import tqdm
 from src.data.drone_rfa_io import count_iq_samples, default_raw_data_dir, parse_label, read_iq_batch
 from src.preprocess.h5_precompute import run_precompute_batch, output_h5_path
 from src.preprocess.stft import compute_stft
-from src.utils.device import resolve_requested_device
+from src.utils.device import default_device
 from src.utils.logger import logger
 
 # ── Paper parameters (match transforms.py) ──
@@ -56,8 +56,9 @@ def parse_args() -> argparse.Namespace:
                         help="Number of IQ samples per output stft")
     parser.add_argument("--batch-size", type=int, default=8,
                         help="STFT batch size")
-    parser.add_argument("--device", type=str, default="cpu",
-                        help='Torch device for STFT, e.g. "cpu", "cuda", "cuda:0", or "mps"')
+    parser.add_argument("--device", type=str, default=default_device(),
+                        help='Torch device for STFT, e.g. "cpu", "cuda", "cuda:0", or "mps" '
+                             '(default: auto-detect cuda/mps, fallback to cpu)')
     parser.add_argument("--max-files", type=int, default=None,
                         help="Process at most this many .mat files")
     parser.add_argument("--max-samples-per-file", type=int, default=None,
@@ -132,7 +133,7 @@ def main() -> None:
         output_dir = os.path.expanduser(args.output_dir)
     else:
         output_dir = str(Path(data_dir).parent / "DroneRFa_stft_h5")
-    device = resolve_requested_device(args.device)
+    device = "cuda:0" if args.device == "cuda" else args.device
 
     logger.info("Using device: %s", device)
 
