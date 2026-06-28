@@ -7,6 +7,7 @@ Usage:
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --max-samples-per-file 1
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --device mps
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --device cuda:0 --pair-chunk-size 4096
+  python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --use-rf-segmentation --rf-frame-len 10000
 """
 
 import argparse
@@ -19,6 +20,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 import h5py
 import numpy as np
+import torch
 from tqdm import tqdm
 
 from src.data.drone_rfa_io import default_raw_data_dir
@@ -29,12 +31,15 @@ from src.preprocess.cpp import (
     SUPPORTED_FAM_MERGE_MODES,
 )
 from src.preprocess.h5_precompute import run_precompute_batch, output_h5_path
+from src.preprocess.rf_segmentation import segment_predominant_rf
 from src.utils.logger import logger
 from src.utils.device import default_device
 
 SAMPLE_LENGTH = 1_000_000
 F_BINS = 257
 ALPHA_BINS = 257
+RF_FRAME_LEN = 10_000
+RF_TARGET_LEN = 100_000
 
 
 def parse_args() -> argparse.Namespace:
@@ -61,6 +66,14 @@ def parse_args() -> argparse.Namespace:
                         help='FAM compute device: "cpu", "cuda", "cuda:0", or "mps"')
     parser.add_argument("--pair-chunk-size", type=int, default=8192,
                         help="Number of (k, l) channel pairs per torch batch")
+    parser.add_argument("--use-rf-segmentation", action="store_true",
+                        help="Apply ST-ESER predominant segment selection before CPP extraction")
+    parser.add_argument("--rf-frame-len", type=int, default=RF_FRAME_LEN,
+                        help="RF segmentation frame length for ST-ESER")
+    parser.add_argument("--rf-target-len", type=int, default=RF_TARGET_LEN,
+                        help="Target IQ length after RF segmentation; ignored when --rf-top-k is set")
+    parser.add_argument("--rf-top-k", type=int, default=None,
+                        help="Number of RF frames to retain; overrides --rf-target-len")
     parser.add_argument("--max-files", type=int, default=None,
                         help="Process at most this many .mat files")
     parser.add_argument("--max-samples-per-file", type=int, default=None,
@@ -81,6 +94,10 @@ def process_one_mat(
     device: str,
     pair_chunk_size: int,
     max_samples_per_file: int | None,
+    use_rf_segmentation: bool = False,
+    rf_frame_len: int = RF_FRAME_LEN,
+    rf_target_len: int | None = RF_TARGET_LEN,
+    rf_top_k: int | None = None,
 ) -> tuple[str, int]:
     """Convert one DroneRFa .mat file into one CPP .h5 file."""
 
@@ -115,9 +132,28 @@ def process_one_mat(
                     start_idx=sample_idx,
                     end_idx=sample_idx + 1,
                 )
+                ch0 = iq[0, 0, :]
+                ch1 = iq[0, 1, :]
+                if use_rf_segmentation:
+                    ch0, _, _ = segment_predominant_rf(
+                        torch.as_tensor(ch0),
+                        frame_len=rf_frame_len,
+                        target_len=rf_target_len,
+                        top_k=rf_top_k,
+                        device=device,
+                    )
+                    ch0 = ch0.detach().cpu().numpy()
+                    ch1, _, _ = segment_predominant_rf(
+                        torch.as_tensor(ch1),
+                        frame_len=rf_frame_len,
+                        target_len=rf_target_len,
+                        top_k=rf_top_k,
+                        device=device,
+                    )
+                    ch1 = ch1.detach().cpu().numpy()
                 cpp, f_axis, alpha_axis = compute_cpp(
-                    iq[0, 0, :],
-                    iq[0, 1, :],
+                    ch0,
+                    ch1,
                     segment_samples=segment_samples,
                     segment_hop_samples=segment_hop_samples,
                     fam_merge=fam_merge,
@@ -162,6 +198,10 @@ def main() -> None:
             "device": args.device,
             "pair_chunk_size": args.pair_chunk_size,
             "max_samples_per_file": args.max_samples_per_file,
+            "use_rf_segmentation": args.use_rf_segmentation,
+            "rf_frame_len": args.rf_frame_len,
+            "rf_target_len": args.rf_target_len,
+            "rf_top_k": args.rf_top_k,
         },
         max_files=args.max_files,
         log_label="CPP samples",

@@ -41,6 +41,7 @@ from src.evaluation.snr_accuracy import (
 )
 from src.models.resnet import DroneRFaResNet18
 from src.preprocess.cpp import compute_cpp
+from src.preprocess.rf_segmentation import segment_predominant_rf
 from src.training.checkpoint import load_checkpoint
 from src.utils.device import default_device
 from src.utils.logger import logger
@@ -61,6 +62,8 @@ DEFAULT_SEED = 42
 DEFAULT_MODEL_NAME = "best_cpp_model.pth"
 DEFAULT_OUTPUT_CSV = metrics_dir() / "cpp_snr_accuracy.csv"
 DEFAULT_OUTPUT_PNG = figures_dir() / "cpp_snr_accuracy.png"
+DEFAULT_RF_FRAME_LEN = 10_000
+DEFAULT_RF_TARGET_LEN = 100_000
 
 
 def _load_dual_iq_sample(
@@ -101,6 +104,10 @@ def evaluate_snr_accuracy(
     seed: int = DEFAULT_SEED,
     train_ratio: float = DEFAULT_TRAIN_RATIO,
     val_ratio: float = DEFAULT_VAL_RATIO,
+    use_rf_segmentation: bool = False,
+    rf_frame_len: int = DEFAULT_RF_FRAME_LEN,
+    rf_target_len: int | None = DEFAULT_RF_TARGET_LEN,
+    rf_top_k: int | None = None,
 ) -> list[dict[str, object]]:
     """Run SNR-wise CPP evaluation and save CSV/PNG outputs."""
 
@@ -161,9 +168,28 @@ def evaluate_snr_accuracy(
                     for record in batch_records:
                         iq = _load_dual_iq_sample(file_cache, record, sample_length=sample_length)
                         noisy_iq = add_awgn_for_snr(iq, snr_db, rng)
+                        ch0 = noisy_iq[0]
+                        ch1 = noisy_iq[1]
+                        if use_rf_segmentation:
+                            ch0, _, _ = segment_predominant_rf(
+                                torch.as_tensor(ch0),
+                                frame_len=rf_frame_len,
+                                target_len=rf_target_len,
+                                top_k=rf_top_k,
+                                device=device,
+                            )
+                            ch0 = ch0.detach().cpu().numpy()
+                            ch1, _, _ = segment_predominant_rf(
+                                torch.as_tensor(ch1),
+                                frame_len=rf_frame_len,
+                                target_len=rf_target_len,
+                                top_k=rf_top_k,
+                                device=device,
+                            )
+                            ch1 = ch1.detach().cpu().numpy()
                         cpp, _, _ = compute_cpp(
-                            noisy_iq[0],
-                            noisy_iq[1],
+                            ch0,
+                            ch1,
                             segment_samples=segment_samples,
                             segment_hop_samples=segment_hop_samples,
                             fam_merge=fam_merge,
@@ -225,6 +251,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--f-bins", type=int, default=DEFAULT_F_BINS)
     parser.add_argument("--alpha-bins", type=int, default=DEFAULT_ALPHA_BINS)
     parser.add_argument("--pair-chunk-size", type=int, default=DEFAULT_PAIR_CHUNK_SIZE)
+    parser.add_argument("--use-rf-segmentation", action="store_true",
+                        help="Apply ST-ESER predominant segment selection after AWGN and before CPP")
+    parser.add_argument("--rf-frame-len", type=int, default=DEFAULT_RF_FRAME_LEN)
+    parser.add_argument("--rf-target-len", type=int, default=DEFAULT_RF_TARGET_LEN)
+    parser.add_argument("--rf-top-k", type=int, default=None)
     parser.add_argument("--max-files", type=int, default=None)
     parser.add_argument("--max-samples-per-file", type=int, default=None)
     parser.add_argument("--max-samples", type=int, default=None)
@@ -257,6 +288,10 @@ def main() -> None:
         max_samples_per_file=args.max_samples_per_file,
         max_samples=args.max_samples,
         seed=args.seed,
+        use_rf_segmentation=args.use_rf_segmentation,
+        rf_frame_len=args.rf_frame_len,
+        rf_target_len=args.rf_target_len,
+        rf_top_k=args.rf_top_k,
     )
 
 

@@ -101,6 +101,18 @@ python scripts/precompute_cpp_h5.py \
   --device mps
 ```
 
+开启 ST-ESER predominant segment 选择后再预计算 CPP/FAM：
+
+```bash
+python scripts/precompute_cpp_h5.py \
+  --data-dir ~/Desktop/dataset/droneRFa \
+  --output-dir ~/Desktop/dataset/droneRFa/cpp_rfseg_h5 \
+  --use-rf-segmentation \
+  --rf-frame-len 10000 \
+  --rf-target-len 100000 \
+  --device mps
+```
+
 ### 生成特征图片
 
 ```bash

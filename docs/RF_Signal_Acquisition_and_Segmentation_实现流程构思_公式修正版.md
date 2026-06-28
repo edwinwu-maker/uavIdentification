@@ -607,4 +607,21 @@ TASE-Net
 
 也就是说，这部分不输出类别，不参与训练反向传播也可以。它更像是一个 deterministic preprocessing module。虽然用 PyTorch 实现，但它主要是为了 GPU 加速和 batch 化处理，而不是为了学习参数。
 
+在当前项目中的第一版落点是：
+
+```text
+src/preprocess/rf_segmentation.py
+scripts/precompute_cpp_h5.py --use-rf-segmentation
+scripts/eval_snr_accuracy_cpp.py --use-rf-segmentation
+```
+
+默认工程参数为：
+
+```text
+rf_frame_len = 10000
+rf_target_len = 100000
+```
+
+需要注意，`rf_frame_len=10000` 来自论文中 `M=10^8`、`I=10^4` 的 RF segmentation 分帧设置；CPP/FAM 阶段的 `N=16384` 是另一个参数，不应混用。
+
 总体而言，先把这部分写成一个稳定的、可单元测试的预处理模块，再接 CPP 提取和 TASE-Net，会比直接把整篇论文端到端硬写出来更可靠。
