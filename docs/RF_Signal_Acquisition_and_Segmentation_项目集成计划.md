@@ -1,63 +1,45 @@
-# 集成 RF Signal Acquisition and Segmentation 到 CPP 预处理链路
+# RFSignalAcquisitionSegmentation 类封装与评估链路接入计划
 
 ## Summary
 
-将论文 Section II-A 的 ST-ESER predominant segment 选择实现为独立预处理模块，并接入现有 `scripts/precompute_cpp_h5.py` 与 SNR 评估链路。第一版默认使用固定输出长度 `target_len=100_000`，保证 H5 中 CPP 样本形状稳定；order-statistics 自适应 φ 先不作为训练默认路径。
+在 `src/preprocess/rf_segmentation.py` 中新增 `RFSignalAcquisitionSegmentation(nn.Module)`，保留现有 `segment_predominant_rf()` 函数作为兼容入口，并让 CPP 预计算与 SNR 评估脚本改用类实例。新增 `--rf-selection-mode`，支持当前稳定的 `target_len/top_k` 策略，以及用于分析的 `order_statistic` 策略；order-statistic 输出在脚本链路中截断或补零到 `target_len`，保证 CPP/H5 形状稳定。
 
 ## Key Changes
 
-- 新增 `src/preprocess/rf_segmentation.py`：
-  - 输入单通道或批量复数 IQ：`(..., L)`。
-  - 非重叠分帧：`frame_len`，不足一帧尾部截断。
-  - 计算 FFT power、谱概率、谱熵、ST-ESER。
-  - 按 ST-ESER 选择 `top_k` 或由 `target_len` 推导 `ceil(target_len / frame_len)` 个帧。
-  - 默认按原始时间顺序拼接，返回 `selected_signal, selected_indices, eser`。
-- 接入 CPP 预计算：
-  - 在 `scripts/precompute_cpp_h5.py` 增加参数：`--use-rf-segmentation`、`--rf-frame-len`、`--rf-target-len`、`--rf-top-k`。
-  - 开启后，对 RF0/RF1 两个通道分别分段选择，再把选出的信号传入现有 `compute_cpp`。
-  - 默认关闭，保持当前 CPP 预计算行为完全不变。
-- 接入 SNR CPP 评估：
-  - `scripts/eval_snr_accuracy_cpp.py` 增加同名参数。
-  - 顺序为：读取 IQ -> 加噪声 -> RF segmentation -> CPP -> 模型预测。
-- 文档同步：
-  - 在 `readme.md` 增加一个“带 RF segmentation 的 CPP 预计算”命令示例。
-  - 在现有构思文档中补充本项目落点：模块文件、CLI 参数、默认策略。
-
-## Interfaces
-
-推荐函数接口：
-
-```python
-segment_predominant_rf(
-    x: np.ndarray | torch.Tensor,
-    *,
-    frame_len: int,
-    target_len: int | None = 100_000,
-    top_k: int | None = None,
-    sort_by_time: bool = True,
-    eps: float = 1e-12,
-    device: str = "cpu",
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]
-```
-
-- `top_k` 优先级高于 `target_len`；两者都为空时报错。
-- 输出信号长度固定为 `selected_frames * frame_len`，不额外 padding；后续 FAM 的 padding 继续由现有 `compute_fam_grid_segmented` 负责。
+- `src/preprocess/rf_segmentation.py`
+  - 新增 `RFSignalAcquisitionSegmentation(nn.Module)`。
+  - 构造参数：`frame_len=10000`、`target_len=100000`、`top_k=None`、`selection_mode="target_len"`、`sort_by_time=True`、`eps=1e-12`、`device=None`、`confidence=0.95`、`mode_bins=64`。
+  - `forward(x)` 返回 `(selected, indices, eser)`，其中 `x` 支持 `[M]` 和 `[B, M]`，保持一维输入返回一维 `selected/indices/eser` 的现有习惯。
+  - 保留 `segment_predominant_rf(...)`，内部实例化 `RFSignalAcquisitionSegmentation` 后调用，避免破坏现有导入。
+- 选择策略
+  - `selection_mode="target_len"`：按 `ceil(target_len / frame_len)` 推导保留帧数；若传入 `top_k`，仍优先使用 `top_k`，兼容当前行为。
+  - `selection_mode="top_k"`：必须提供 `top_k`，直接选择 ESER 最大的 `top_k` 帧。
+  - `selection_mode="order_statistic"`：每个样本单独计算 ESER 分布，使用 histogram 估计众数 `e_bar`，基于 `confidence=0.95` 搜索满足条件的 `iota`，得到 `phi = I - iota + 1` 后选 top-`phi`。
+  - order-statistic 输出拼接后统一处理到 `target_len`：超过则截断，不足则右侧补零；`indices` 保留真实选中帧索引，不为 padding 伪造索引。
+- 脚本接入
+  - `scripts/precompute_cpp_h5.py` 和 `scripts/eval_snr_accuracy_cpp.py` 改为创建一个 `RFSignalAcquisitionSegmentation` 实例，然后对 RF0/RF1 分别调用。
+  - 两个脚本新增同名 CLI 参数：`--rf-selection-mode {target_len,top_k,order_statistic}`、`--rf-confidence`、`--rf-mode-bins`。
+  - 默认仍为 `target_len`，不开启 `--use-rf-segmentation` 时行为完全不变。
+  - SNR 评估顺序保持：读取 clean IQ -> 加 AWGN -> RF segmentation -> CPP -> 模型预测。
 
 ## Test Plan
 
-- 新增 `tests/test_rf_segmentation.py`：
-  - 合成高能片段信号，验证 top-k 能选中对应帧。
-  - 验证 `target_len` 正确推导帧数。
-  - 验证复数 IQ 输入输出长度、dtype 和 shape。
-  - 验证零信号不会产生 NaN/Inf。
-- 轻量集成验证：
-  - 用小数组直接调用 `compute_cpp` 前的 segmentation 路径，确认 RF0/RF1 输出可进入现有 CPP 函数。
-  - 运行 `pytest tests/test_rf_segmentation.py tests/test_generate_stft_png.py`。
-- 不在单测中跑完整 `.mat -> .h5`，避免依赖本地大数据集和长时间 FAM 计算。
+- 新增 `tests/test_rf_segmentation.py`。
+  - 验证 `RFSignalAcquisitionSegmentation` 与 `segment_predominant_rf()` 在默认 `target_len/top_k` 路径输出一致。
+  - 验证高能低熵合成 frame 会被选中。
+  - 验证 `[M]` 和 `[B, M]` 输入的输出维度。
+  - 验证 complex IQ 输入保持 complex dtype，零信号不会产生 NaN/Inf。
+  - 验证 `order_statistic` 模式输出长度等于 `target_len`，且 `indices` 只包含真实 frame 下标。
+  - 验证 `sort_by_time=True` 时 selected 按原始 frame 顺序拼接。
+- 轻量脚本验证
+  - 运行 `python -m pytest tests/test_rf_segmentation.py`。
+  - 用 `--max-files 1 --max-samples-per-file 1 --use-rf-segmentation --rf-selection-mode target_len` 验证 CPP 预计算仍能写出固定 H5。
+  - 用 `--max-samples 1 --snrs 0 --use-rf-segmentation --rf-selection-mode order_statistic` 验证 SNR 评估链路可运行。
 
 ## Assumptions
 
-- 当前项目最自然的落点是 CPP/FAM 前置预处理，不新增 `--feature rf_segmentation` 训练类型。
-- 第一版不实现论文 order-statistics φ，因为现有 H5/DataLoader/ResNet 流程需要固定特征形状；该模式可后续作为分析工具加入。
-- PDF 当前环境缺少可用文本抽取工具；本计划依据仓库中的公式修正版构思文档和现有代码结构制定。实施时若能安装/使用 PDF 文本抽取工具，应再核对论文参数描述。
-- 工作区已有大量未提交改动，实施时只触碰上述相关文件，不整理无关 diff。
+- 类封装是主接口，函数保留为兼容层，不删除现有函数名。
+- order-statistic 是分析选项，不作为默认训练/预计算策略。
+- `target_len=100000` 是脚本链路中的固定输出长度目标；order-statistic 变长结果必须截断/补零到该长度。
+- 当前仓库没有现成 `tests/` 目录，实施时会新增该目录和 focused 单测。
+- 不改 CPP/FAM 计算逻辑，不新增训练 feature 类型。
