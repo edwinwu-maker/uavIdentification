@@ -24,3 +24,7 @@
 - T0001 DJI Phantom 3
 - T0100 DJI MATRICE 100
 - T1001 DJI Mini 2
+
+## 提供脚本将 outputs/metrics/*.csv 绘制到一张图中
+
+## 确认 segment 后的 cpp 图是否会符合预期
