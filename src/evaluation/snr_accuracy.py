@@ -154,7 +154,7 @@ def save_snr_accuracy_plot(
 ) -> None:
     output_path = Path(output_png)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    snrs = [int(row["snr_db"]) for row in rows]
+    snrs = [float(row["snr_db"]) for row in rows]
     accuracies = [float(row["accuracy"]) for row in rows]
     fig, ax = plt.subplots(figsize=(7, 5))
     ax.plot(snrs, accuracies, marker="o", linewidth=2)

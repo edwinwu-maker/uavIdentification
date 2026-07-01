@@ -88,7 +88,7 @@ def evaluate_snr_accuracy(
     output_png: str | Path = DEFAULT_OUTPUT_PNG,
     device: str = default_device(),
     batch_size: int = DEFAULT_BATCH_SIZE,
-    snrs: list[int] | tuple[int, ...] = DEFAULT_SNRS,
+    snrs: list[float] | tuple[float, ...] = DEFAULT_SNRS,
     sample_length: int = DEFAULT_SAMPLE_LENGTH,
     max_files: int | None = None,
     max_samples_per_file: int | None = None,
@@ -178,7 +178,7 @@ def evaluate_snr_accuracy(
             accuracy = float(num_correct / num_samples) if num_samples else 0.0
             rows.append(
                 {
-                    "snr_db": int(snr_db),
+                    "snr_db": float(snr_db),
                     "num_samples": int(num_samples),
                     "num_correct": int(num_correct),
                     "accuracy": accuracy,
@@ -208,7 +208,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device", type=str, default=default_device(),
                         help="Device, e.g. 'cuda:0', 'mps', or 'cpu'")
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
-    parser.add_argument("--snrs", type=int, nargs="+", default=DEFAULT_SNRS)
+    parser.add_argument("--snrs", type=float, nargs="+", default=DEFAULT_SNRS)
     parser.add_argument("--sample-length", type=int, default=DEFAULT_SAMPLE_LENGTH)
     parser.add_argument("--max-files", type=int, default=None)
     parser.add_argument("--max-samples-per-file", type=int, default=None)
