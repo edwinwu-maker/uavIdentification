@@ -88,10 +88,10 @@ def process_one_mat(
     batch_size: int,
     device: str,
     max_samples_per_file: int | None,
-    random_snr: bool,
-    snr_min: float,
-    snr_max: float,
-    noise_seed: int,
+    random_snr: bool = False,
+    snr_min: float = -5.0,
+    snr_max: float = 15.0,
+    noise_seed: int = 42,
 ) -> tuple[str, int]:
     """Convert one DroneRFa .mat file into one STFT .h5 file."""
 
@@ -135,6 +135,7 @@ def process_one_mat(
                         snr_min=snr_min,
                         snr_max=snr_max,
                         noise_seed=noise_seed,
+                        device=device,
                     )
 
                 batch_stft = compute_stft(

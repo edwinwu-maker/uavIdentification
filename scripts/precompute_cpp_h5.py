@@ -112,10 +112,10 @@ def process_one_mat(
     rf_frame_len: int = RF_FRAME_LEN,
     rf_target_len: int | None = RF_TARGET_LEN,
     rf_top_k: int | None = None,
-    random_snr: bool,
-    snr_min: float,
-    snr_max: float,
-    noise_seed: int,
+    random_snr: bool = False,
+    snr_min: float = -5.0,
+    snr_max: float = 15.0,
+    noise_seed: int = 42,
 ) -> tuple[str, int]:
     """Convert one DroneRFa .mat file into one CPP .h5 file."""
 
@@ -158,7 +158,9 @@ def process_one_mat(
                         snr_min=snr_min,
                         snr_max=snr_max,
                         noise_seed=noise_seed,
+                        device=device,
                     )
+                    iq = iq.detach().cpu().numpy()
                 ch0 = iq[0, 0, :]
                 ch1 = iq[0, 1, :]
                 if use_rf_segmentation:

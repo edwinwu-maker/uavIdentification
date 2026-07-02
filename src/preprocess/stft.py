@@ -24,7 +24,7 @@ def _get_window(device: str, win_length: int) -> torch.Tensor:
     return _WINDOW
 
 def compute_stft(
-    iq_batch: np.ndarray,
+    iq_batch: np.ndarray | torch.Tensor,
     device: str = "cpu",
     *,
     n_fft: int = 1024,
@@ -46,7 +46,10 @@ def compute_stft(
     out_t = output_time_bins or spec_time_bins
     window = _get_window(device, win_length)
     with torch.no_grad():
-        sig = torch.from_numpy(iq_batch.reshape(B * C, L)).to(device)
+        if isinstance(iq_batch, torch.Tensor):
+            sig = iq_batch.reshape(B * C, L).to(device=device, dtype=torch.complex64)
+        else:
+            sig = torch.from_numpy(iq_batch.reshape(B * C, L)).to(device)
         Zxx = torch.stft(
             sig,
             n_fft=n_fft,
