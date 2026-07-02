@@ -18,6 +18,7 @@ Usage:
   python scripts/precompute_stft_h5.py --data-dir ... --device mps
   python scripts/precompute_stft_h5.py --data-dir ... --max-files 1
   python scripts/precompute_stft_h5.py --data-dir ... --max-samples-per-file 1
+  python scripts/precompute_stft_h5.py --data-dir ... --random-snr --snr-min -5 --snr-max 15 --noise-seed 42
 """
 
 import argparse
@@ -33,6 +34,7 @@ from tqdm import tqdm
 
 from src.data.drone_rfa_io import count_iq_samples, default_raw_data_dir, parse_label, read_iq_batch
 from src.preprocess.h5_precompute import run_precompute_batch, output_h5_path
+from src.preprocess.random_snr_awgn import add_random_snr_awgn
 from src.preprocess.stft import compute_stft
 from src.utils.device import default_device
 from src.utils.logger import logger
@@ -51,7 +53,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-dir", type=str, default=default_raw_data_dir(),
                         help="Directory containing .mat files")
     parser.add_argument("--output-dir", type=str, default=None,
-                        help="Directory for output .h5 files (default: <data-dir-parent>/DroneRFa_stft_h5)")
+                        help="Directory for output .h5 files (default: <data-dir-parent>/DroneRFa_stft_h5, "
+                             "or DroneRFa_stft_awgn_random_h5 with --random-snr)")
     parser.add_argument("--sample-length", type=int, default=SAMPLE_LENGTH,
                         help="Number of IQ samples per output stft")
     parser.add_argument("--batch-size", type=int, default=8,
@@ -63,7 +66,18 @@ def parse_args() -> argparse.Namespace:
                         help="Process at most this many .mat files")
     parser.add_argument("--max-samples-per-file", type=int, default=None,
                         help="Process at most this many samples from each .mat file")
-    return parser.parse_args()
+    parser.add_argument("--random-snr", action="store_true",
+                        help="Add random-SNR AWGN on raw IQ before STFT precompute")
+    parser.add_argument("--snr-min", type=float, default=-5.0,
+                        help="Minimum SNR in dB for --random-snr")
+    parser.add_argument("--snr-max", type=float, default=15.0,
+                        help="Maximum SNR in dB for --random-snr")
+    parser.add_argument("--noise-seed", type=int, default=42,
+                        help="Seed for deterministic random-SNR AWGN")
+    args = parser.parse_args()
+    if args.snr_min > args.snr_max:
+        parser.error("--snr-min must be <= --snr-max")
+    return args
 
 
 def process_one_mat(
@@ -73,7 +87,11 @@ def process_one_mat(
     sample_length: int,
     batch_size: int,
     device: str,
-    max_samples_per_file: int | None = None,
+    max_samples_per_file: int | None,
+    random_snr: bool,
+    snr_min: float,
+    snr_max: float,
+    noise_seed: int,
 ) -> tuple[str, int]:
     """Convert one DroneRFa .mat file into one STFT .h5 file."""
 
@@ -109,6 +127,15 @@ def process_one_mat(
                     start_idx=sample_idx,
                     end_idx=batch_end,
                 )
+                if random_snr:
+                    chunk_iq = add_random_snr_awgn(
+                        chunk_iq,
+                        file_id=mat_file,
+                        start_idx=sample_idx,
+                        snr_min=snr_min,
+                        snr_max=snr_max,
+                        noise_seed=noise_seed,
+                    )
 
                 batch_stft = compute_stft(
                     chunk_iq,
@@ -131,6 +158,8 @@ def main() -> None:
     data_dir = os.path.expanduser(args.data_dir)
     if args.output_dir:
         output_dir = os.path.expanduser(args.output_dir)
+    elif args.random_snr:
+        output_dir = str(Path(data_dir).parent / "DroneRFa_stft_awgn_random_h5")
     else:
         output_dir = str(Path(data_dir).parent / "DroneRFa_stft_h5")
     device = "cuda:0" if args.device == "cuda" else args.device
@@ -147,6 +176,10 @@ def main() -> None:
             "batch_size": args.batch_size,
             "device": device,
             "max_samples_per_file": args.max_samples_per_file,
+            "random_snr": args.random_snr,
+            "snr_min": args.snr_min,
+            "snr_max": args.snr_max,
+            "noise_seed": args.noise_seed,
         },
         max_files=args.max_files,
         log_label="stfts",

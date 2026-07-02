@@ -21,7 +21,7 @@
 - H5 结构保持训练兼容：
   - STFT：`/stft`、`/labels`
   - CPP：`/cpp`、`/labels`
-  - 新增可选记录：`/snr_db`
+  - 不额外写入 `/snr_db`，避免改变下游 H5 数据结构预期。
 - 输出目录建议区分 clean 与 noisy：
   - `DroneRFa_stft_awgn_random_h5`
   - `DroneRFa_cpp_awgn_random_h5`
@@ -80,12 +80,11 @@ python scripts/precompute_stft_h5.py \
 检查 H5：
 
 - `/stft` 或 `/cpp` 样本数不膨胀。
-- `/labels` 与 `/snr_db` 长度一致。
-- `/snr_db` 值全部落在 `[snr_min, snr_max]`。
+- H5 仅包含训练需要的数据集，不新增 `/snr_db`。
 
 复现性验证：
 
-- 相同参数和 `noise_seed` 生成两次，小样本 `/snr_db` 完全一致。
+- 相同参数和 `noise_seed` 生成两次，小样本特征数据完全一致。
 
 训练验证：
 

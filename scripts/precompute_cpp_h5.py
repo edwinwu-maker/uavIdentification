@@ -8,6 +8,7 @@ Usage:
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --device mps
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --device cuda:0 --pair-chunk-size 4096
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --use-rf-segmentation --rf-frame-len 10000
+  python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --random-snr --snr-min -5 --snr-max 15 --noise-seed 42
 """
 
 import argparse
@@ -31,6 +32,7 @@ from src.preprocess.cpp import (
     SUPPORTED_FAM_MERGE_MODES,
 )
 from src.preprocess.h5_precompute import run_precompute_batch, output_h5_path
+from src.preprocess.random_snr_awgn import add_random_snr_awgn
 from src.preprocess.rf_segmentation import segment_predominant_rf
 from src.utils.logger import logger
 from src.utils.device import default_device
@@ -49,7 +51,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-dir", type=str, default=default_raw_data_dir(),
                         help="Directory containing .mat files")
     parser.add_argument("--output-dir", type=str, default=None,
-                        help="Directory for output .h5 files (default: <data-dir-parent>/DroneRFa_cpp_h5)")
+                        help="Directory for output .h5 files (default: <data-dir-parent>/DroneRFa_cpp_h5, "
+                             "or DroneRFa_cpp_awgn_random_h5 with --random-snr)")
     parser.add_argument("--sample-length", type=int, default=SAMPLE_LENGTH,
                         help="Number of IQ samples per output CPP sample")
     parser.add_argument("--segment-samples", type=int, default=DEFAULT_SEGMENT_SAMPLES,
@@ -78,7 +81,18 @@ def parse_args() -> argparse.Namespace:
                         help="Process at most this many .mat files")
     parser.add_argument("--max-samples-per-file", type=int, default=None,
                         help="Process at most this many samples from each .mat file")
-    return parser.parse_args()
+    parser.add_argument("--random-snr", action="store_true",
+                        help="Add random-SNR AWGN on raw IQ before CPP precompute")
+    parser.add_argument("--snr-min", type=float, default=-5.0,
+                        help="Minimum SNR in dB for --random-snr")
+    parser.add_argument("--snr-max", type=float, default=15.0,
+                        help="Maximum SNR in dB for --random-snr")
+    parser.add_argument("--noise-seed", type=int, default=42,
+                        help="Seed for deterministic random-SNR AWGN")
+    args = parser.parse_args()
+    if args.snr_min > args.snr_max:
+        parser.error("--snr-min must be <= --snr-max")
+    return args
 
 
 def process_one_mat(
@@ -98,6 +112,10 @@ def process_one_mat(
     rf_frame_len: int = RF_FRAME_LEN,
     rf_target_len: int | None = RF_TARGET_LEN,
     rf_top_k: int | None = None,
+    random_snr: bool,
+    snr_min: float,
+    snr_max: float,
+    noise_seed: int,
 ) -> tuple[str, int]:
     """Convert one DroneRFa .mat file into one CPP .h5 file."""
 
@@ -132,6 +150,15 @@ def process_one_mat(
                     start_idx=sample_idx,
                     end_idx=sample_idx + 1,
                 )
+                if random_snr:
+                    iq = add_random_snr_awgn(
+                        iq,
+                        file_id=mat_name,
+                        start_idx=sample_idx,
+                        snr_min=snr_min,
+                        snr_max=snr_max,
+                        noise_seed=noise_seed,
+                    )
                 ch0 = iq[0, 0, :]
                 ch1 = iq[0, 1, :]
                 if use_rf_segmentation:
@@ -181,6 +208,8 @@ def main() -> None:
     data_dir = os.path.expanduser(args.data_dir)
     if args.output_dir:
         output_dir = os.path.expanduser(args.output_dir)
+    elif args.random_snr:
+        output_dir = str(Path(data_dir).parent / "DroneRFa_cpp_awgn_random_h5")
     else:
         output_dir = str(Path(data_dir).parent / "DroneRFa_cpp_h5")
     os.makedirs(output_dir, exist_ok=True)
@@ -202,6 +231,10 @@ def main() -> None:
             "rf_frame_len": args.rf_frame_len,
             "rf_target_len": args.rf_target_len,
             "rf_top_k": args.rf_top_k,
+            "random_snr": args.random_snr,
+            "snr_min": args.snr_min,
+            "snr_max": args.snr_max,
+            "noise_seed": args.noise_seed,
         },
         max_files=args.max_files,
         log_label="CPP samples",
