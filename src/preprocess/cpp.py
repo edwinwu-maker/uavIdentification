@@ -5,8 +5,8 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 import numpy as np
+import torch
 
-from src.preprocess.fam import fam_scf_grid
 from src.preprocess.fam_constants import FAM_ALPHA_RANGE, FAM_F_RANGE
 from src.preprocess.fam_torch import fam_scf_grid_torch
 
@@ -15,7 +15,7 @@ DEFAULT_SEGMENT_SAMPLES = 262144
 
 
 def compute_fam_grid(
-    x: np.ndarray,
+    x: torch.Tensor,
     *,
     f_bins: int = 257,
     alpha_bins: int = 513,
@@ -29,29 +29,19 @@ def compute_fam_grid(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Compute FAM points and aggregate them into a normalized |SCF| grid."""
 
-    if not device.lower().startswith("cpu"):
-        # GPU/MPS 路径直接在 torch device 上聚合，避免先生成大量稀疏点再拷贝。
-        return fam_scf_grid_torch(
-            x,
-            nfft=fam_nfft,
-            hop=fam_hop,
-            window="hann",
-            keep_principal_domain=True,
-            device=device,
-            pair_chunk_size=pair_chunk_size,
-            f_bins=f_bins,
-            alpha_bins=alpha_bins,
-            f_range=f_range,
-            alpha_range=alpha_range,
-            normalize=normalize,
-        )
+    if not isinstance(x, torch.Tensor):
+        raise TypeError("x must be a torch.Tensor")
 
-    return fam_scf_grid(
+    # CPU/GPU/MPS 统一使用 torch FAM 路径，避免维护两套算法实现。
+    return fam_scf_grid_torch(
         x,
         nfft=fam_nfft,
         hop=fam_hop,
         window="hann",
         keep_principal_domain=True,
+        device=device,
+        dtype=torch.complex64,
+        pair_chunk_size=pair_chunk_size,
         f_bins=f_bins,
         alpha_bins=alpha_bins,
         f_range=f_range,
@@ -61,7 +51,7 @@ def compute_fam_grid(
 
 
 def compute_fam_grid_segmented(
-    x: np.ndarray,
+    x: torch.Tensor,
     *,
     segment_samples: int = DEFAULT_SEGMENT_SAMPLES,
     segment_hop_samples: int | None = None,
@@ -77,6 +67,8 @@ def compute_fam_grid_segmented(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Compute segmented FAM grids and merge them into one |SCF| grid."""
 
+    if not isinstance(x, torch.Tensor):
+        raise TypeError("x must be a torch.Tensor")
     if segment_samples <= 0:
         raise ValueError("segment_samples must be positive")
     if segment_hop_samples is None:
@@ -86,7 +78,6 @@ def compute_fam_grid_segmented(
     if merge not in SUPPORTED_FAM_MERGE_MODES:
         raise ValueError(f"unsupported merge mode: {merge}")
 
-    x = np.asarray(x, dtype=np.complex128)
     if x.ndim != 1:
         raise ValueError("x must be a one-dimensional complex IQ sequence")
 
@@ -130,25 +121,33 @@ def compute_fam_grid_segmented(
 
 
 def _iter_padded_segments(
-    x: np.ndarray,
+    x: torch.Tensor,
     *,
     segment_samples: int,
     segment_hop_samples: int,
-) -> Iterator[np.ndarray]:
+) -> Iterator[torch.Tensor]:
     """Yield fixed-length IQ segments, padding the last segment with zeros."""
 
-    for start in range(0, len(x), segment_hop_samples):
+    if not isinstance(x, torch.Tensor):
+        raise TypeError("x must be a torch.Tensor")
+
+    for start in range(0, x.numel(), segment_hop_samples):
         segment = x[start : start + segment_samples]
-        if len(segment) == 0:
+        if segment.numel() == 0:
             continue
-        if len(segment) < segment_samples:
-            segment = np.pad(segment, (0, segment_samples - len(segment)))
+        if segment.numel() < segment_samples:
+            pad = torch.zeros(
+                segment_samples - segment.numel(),
+                dtype=segment.dtype,
+                device=segment.device,
+            )
+            segment = torch.cat((segment, pad))
         yield segment
 
 
 def compute_cpp(
-    ch0: np.ndarray,
-    ch1: np.ndarray,
+    ch0: torch.Tensor,
+    ch1: torch.Tensor,
     *,
     segment_samples: int,
     segment_hop_samples: int | None,
@@ -161,6 +160,11 @@ def compute_cpp(
     fam_hop: int = 64,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Compute one dual-channel CPP matrix and its axes from RF0/RF1 IQ arrays."""
+
+    if not isinstance(ch0, torch.Tensor):
+        raise TypeError("ch0 must be a torch.Tensor")
+    if not isinstance(ch1, torch.Tensor):
+        raise TypeError("ch1 must be a torch.Tensor")
 
     image0, f_axis, alpha_axis = compute_fam_grid_segmented(
         ch0,

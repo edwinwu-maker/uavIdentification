@@ -168,25 +168,24 @@ def evaluate_snr_accuracy(
                     for record in batch_records:
                         iq = _load_dual_iq_sample(file_cache, record, sample_length=sample_length)
                         noisy_iq = add_awgn_for_snr(iq, snr_db, rng)
+                        noisy_iq = torch.as_tensor(noisy_iq, dtype=torch.complex64, device=device)
                         ch0 = noisy_iq[0]
                         ch1 = noisy_iq[1]
                         if use_rf_segmentation:
                             ch0, _, _ = segment_predominant_rf(
-                                torch.as_tensor(ch0),
+                                ch0,
                                 frame_len=rf_frame_len,
                                 target_len=rf_target_len,
                                 top_k=rf_top_k,
                                 device=device,
                             )
-                            ch0 = ch0.detach().cpu().numpy()
                             ch1, _, _ = segment_predominant_rf(
-                                torch.as_tensor(ch1),
+                                ch1,
                                 frame_len=rf_frame_len,
                                 target_len=rf_target_len,
                                 top_k=rf_top_k,
                                 device=device,
                             )
-                            ch1 = ch1.detach().cpu().numpy()
                         cpp, _, _ = compute_cpp(
                             ch0,
                             ch1,

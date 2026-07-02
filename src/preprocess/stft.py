@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import numpy as np
 import torch
 import torch.nn.functional as F
 
@@ -24,7 +23,7 @@ def _get_window(device: str, win_length: int) -> torch.Tensor:
     return _WINDOW
 
 def compute_stft(
-    iq_batch: np.ndarray | torch.Tensor,
+    iq_batch: torch.Tensor,
     device: str = "cpu",
     *,
     n_fft: int = 1024,
@@ -40,16 +39,16 @@ def compute_stft(
              z-score normalized per channel
     B: batch size, 2: channels, output_freq_bins: freq bins, output_time_bins: time bins
     """
+    if not isinstance(iq_batch, torch.Tensor):
+        raise TypeError("iq_batch must be a torch.Tensor")
+
     B, C, L = iq_batch.shape
     hop_length = L // (spec_time_bins - 1)
     out_f = output_freq_bins or n_fft
     out_t = output_time_bins or spec_time_bins
     window = _get_window(device, win_length)
     with torch.no_grad():
-        if isinstance(iq_batch, torch.Tensor):
-            sig = iq_batch.reshape(B * C, L).to(device=device, dtype=torch.complex64)
-        else:
-            sig = torch.from_numpy(iq_batch.reshape(B * C, L)).to(device)
+        sig = iq_batch.reshape(B * C, L).to(device=device, dtype=torch.complex64)
         Zxx = torch.stft(
             sig,
             n_fft=n_fft,

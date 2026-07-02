@@ -117,7 +117,7 @@ def _channelize(
 
 
 def _iter_fam_point_batches_torch(
-    x: np.ndarray,
+    x: torch.Tensor,
     *,
     nfft: int,
     hop: int,
@@ -129,12 +129,14 @@ def _iter_fam_point_batches_torch(
     dtype: torch.dtype,
     pair_chunk_size: int,
 ) -> Iterator[tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
+    if not isinstance(x, torch.Tensor):
+        raise TypeError("x must be a torch.Tensor")
     if pair_chunk_size <= 0:
         raise ValueError("pair_chunk_size must be positive")
 
     resolved_device = _resolve_device(device)
     real_dtype = _real_dtype(dtype)
-    x_tensor = torch.as_tensor(np.asarray(x), dtype=dtype, device=resolved_device)
+    x_tensor = x.to(device=resolved_device, dtype=dtype)
     x_tilde, freqs, window_energy = _channelize(
         x_tensor,
         nfft=nfft,
@@ -204,7 +206,7 @@ def _iter_fam_point_batches_torch(
 
 
 def fam_scf_grid_torch(
-    x: np.ndarray,
+    x: torch.Tensor,
     *,
     nfft: int = 256,
     hop: int = 64,
@@ -222,6 +224,9 @@ def fam_scf_grid_torch(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Estimate FAM and aggregate |SCF| directly into a grid on the torch device."""
 
+    if not isinstance(x, torch.Tensor):
+        raise TypeError("x must be a torch.Tensor")
+
     resolved_device = _resolve_device(device)
     real_dtype = _real_dtype(dtype)
     grid_size = alpha_bins * f_bins
@@ -229,9 +234,10 @@ def fam_scf_grid_torch(
     image_count = torch.zeros(grid_size, device=resolved_device, dtype=real_dtype)
     f_min, f_max = f_range
     alpha_min, alpha_max = alpha_range
+    x_tensor = x.to(device=resolved_device, dtype=dtype)
 
     for f, alpha, value in _iter_fam_point_batches_torch(
-        x,
+        x_tensor,
         nfft=nfft,
         hop=hop,
         n_blocks=n_blocks,

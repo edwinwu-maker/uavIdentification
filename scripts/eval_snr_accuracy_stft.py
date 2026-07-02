@@ -160,8 +160,13 @@ def evaluate_snr_accuracy(
                         iq_batch.append(noisy_iq)
                         labels.append(record.label)
 
-                    stft_batch = compute_stft(
+                    iq_tensor = torch.as_tensor(
                         np.stack(iq_batch, axis=0),
+                        dtype=torch.complex64,
+                        device=device,
+                    )
+                    stft_batch = compute_stft(
+                        iq_tensor,
                         device=device,
                         n_fft=DEFAULT_N_FFT,
                         win_length=DEFAULT_WIN_LENGTH,

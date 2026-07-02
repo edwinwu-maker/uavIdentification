@@ -150,6 +150,7 @@ def process_one_mat(
                     start_idx=sample_idx,
                     end_idx=sample_idx + 1,
                 )
+                iq = torch.as_tensor(iq, dtype=torch.complex64, device=device)
                 if random_snr:
                     iq = add_random_snr_awgn(
                         iq,
@@ -160,26 +161,23 @@ def process_one_mat(
                         noise_seed=noise_seed,
                         device=device,
                     )
-                    iq = iq.detach().cpu().numpy()
                 ch0 = iq[0, 0, :]
                 ch1 = iq[0, 1, :]
                 if use_rf_segmentation:
                     ch0, _, _ = segment_predominant_rf(
-                        torch.as_tensor(ch0),
+                        ch0,
                         frame_len=rf_frame_len,
                         target_len=rf_target_len,
                         top_k=rf_top_k,
                         device=device,
                     )
-                    ch0 = ch0.detach().cpu().numpy()
                     ch1, _, _ = segment_predominant_rf(
-                        torch.as_tensor(ch1),
+                        ch1,
                         frame_len=rf_frame_len,
                         target_len=rf_target_len,
                         top_k=rf_top_k,
                         device=device,
                     )
-                    ch1 = ch1.detach().cpu().numpy()
                 cpp, f_axis, alpha_axis = compute_cpp(
                     ch0,
                     ch1,

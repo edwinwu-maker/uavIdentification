@@ -50,10 +50,9 @@ python <script-or-command>
 │   ├── models/
 │   │   └── resnet.py                 # 适配双通道特征输入的 ResNet-18
 │   ├── preprocess/
-│   │   ├── fam.py                    # CPU/NumPy 版本 FAM/SCF 计算工具
 │   │   ├── fam_constants.py          # FAM 相关常量与边界定义
 │   │   ├── cpp.py                    # CPP/FAM 网格生成与双通道 CPP 特征组装
-│   │   └── fam_torch.py              # PyTorch 版本 FAM/SCF 计算工具
+│   │   └── fam_torch.py              # PyTorch FAM/SCF 计算工具，支持 CPU/CUDA/MPS
 │   ├── signal/
 │   │   └── synthetic_signal.py       # FAM 示例使用的合成信号生成器
 │   ├── visualization/

@@ -30,6 +30,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 import h5py
+import torch
 from tqdm import tqdm
 
 from src.data.drone_rfa_io import count_iq_samples, default_raw_data_dir, parse_label, read_iq_batch
@@ -127,6 +128,7 @@ def process_one_mat(
                     start_idx=sample_idx,
                     end_idx=batch_end,
                 )
+                chunk_iq = torch.as_tensor(chunk_iq, dtype=torch.complex64, device=device)
                 if random_snr:
                     chunk_iq = add_random_snr_awgn(
                         chunk_iq,

@@ -15,6 +15,8 @@ import argparse
 import sys
 from pathlib import Path
 
+import torch
+
 # Allow this script to import project modules when run from the repository root.
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
@@ -124,12 +126,13 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    x = generate_signal(
+    x_np = generate_signal(
         args.signal,
         num_symbols=args.num_symbols,
         samples_per_symbol=DEFAULT_SAMPLES_PER_SYMBOL,
         snr_db=args.snr_db,
     )
+    x = torch.as_tensor(x_np, dtype=torch.complex64, device=args.device)
     if args.full_fam:
         image, f_axis, alpha_axis = compute_fam_grid(
             x,
@@ -147,7 +150,7 @@ def main() -> None:
         )
 
     time_path, frequency_path = plot_signal_time_frequency(
-        x,
+        x_np,
         time_path=DEFAULT_TIME_DOMAIN_IMAGE_PATH,
         frequency_path=DEFAULT_FREQUENCY_DOMAIN_IMAGE_PATH,
         show=not args.no_show,

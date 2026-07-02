@@ -55,7 +55,7 @@ def _randn(
 
 
 def add_random_snr_awgn(
-    iq_batch: np.ndarray | torch.Tensor,
+    iq_batch: torch.Tensor,
     *,
     file_id: str,
     start_idx: int,
@@ -66,8 +66,11 @@ def add_random_snr_awgn(
 ) -> torch.Tensor:
     """对 batch 内 IQ 批量添加随机 SNR AWGN，返回 torch.complex64 Tensor。"""
 
+    if not isinstance(iq_batch, torch.Tensor):
+        raise TypeError("iq_batch must be a torch.Tensor")
+
     target_device = torch.device(device)
-    iq = torch.as_tensor(iq_batch, dtype=torch.complex64, device=target_device)
+    iq = iq_batch.to(device=target_device, dtype=torch.complex64)
     generator, generator_device = _make_generator(target_device, _batch_seed(noise_seed, file_id, start_idx))
 
     batch_size = iq.shape[0]
