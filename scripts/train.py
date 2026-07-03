@@ -19,14 +19,13 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from src.data.splits import split_dataset
-from src.models.resnet import DroneRFaResNet18
+from src.models.resnet import NUM_CLASSES, DroneRFaResNet18
 from src.training.trainer import train_model
 
 from src.utils.device import default_device
 from src.utils.feature_specs import get_feature_spec
 from src.utils.logger import logger
 
-NUM_CLASSES = 25
 BATCH_SIZE = 64
 LEARNING_RATE = 0.001
 TRAIN_RATIO = 0.6

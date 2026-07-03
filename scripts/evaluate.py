@@ -21,7 +21,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from src.data.splits import split_dataset
-from src.models.resnet import DroneRFaResNet18
+from src.models.resnet import NUM_CLASSES, DroneRFaResNet18
 from src.training.checkpoint import load_checkpoint
 from src.training.evaluator import evaluate_with_predictions
 from src.training.metrics import compute_metrics, save_confusion_matrix_image
@@ -31,7 +31,6 @@ from src.utils.feature_specs import get_feature_spec
 from src.utils.logger import logger
 from src.utils.paths import figures_dir, metrics_dir
 
-NUM_CLASSES = 25
 BATCH_SIZE = 64
 TRAIN_RATIO = 0.6
 VAL_RATIO = 0.2
@@ -121,7 +120,7 @@ def evaluate(args):
         logger.info("  Test Loss: %.4f", test_loss)
         logger.info("=" * 55)
 
-        cm = confusion_matrix(labels, preds)
+        cm = confusion_matrix(labels, preds, labels=range(NUM_CLASSES))
         metric_path = metrics_dir()
         os.makedirs(metric_path, exist_ok=True)
         cm_path = metric_path / spec.cm_array_name

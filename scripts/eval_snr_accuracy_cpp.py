@@ -39,7 +39,7 @@ from src.evaluation.snr_accuracy import (
     save_snr_accuracy_csv,
     save_snr_accuracy_plot,
 )
-from src.models.resnet import DroneRFaResNet18
+from src.models.resnet import NUM_CLASSES, DroneRFaResNet18
 from src.preprocess.cpp import compute_cpp
 from src.preprocess.rf_segmentation import segment_predominant_rf
 from src.training.checkpoint import load_checkpoint
@@ -140,7 +140,7 @@ def evaluate_snr_accuracy(
     if torch_device.type == "cuda":
         torch.cuda.set_device(torch_device)
 
-    model = DroneRFaResNet18(num_classes=25).to(torch_device)
+    model = DroneRFaResNet18(num_classes=NUM_CLASSES).to(torch_device)
     logger.info("Loading model from %s", model_path)
     state_dict = load_checkpoint(model_path, map_location=torch_device)
     model.load_state_dict(state_dict)
