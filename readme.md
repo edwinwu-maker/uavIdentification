@@ -38,45 +38,60 @@ python <script-or-command>
 ├── scripts/
 │   ├── train.py                      # 统一训练入口，支持 --feature stft|cpp
 │   ├── evaluate.py                   # 统一评估入口，支持 --feature stft|cpp
+│   ├── eval_snr_accuracy_stft.py     # 评估 STFT 模型在不同 SNR 下的准确率
+│   ├── eval_snr_accuracy_cpp.py      # 评估 CPP/FAM 模型在不同 SNR 下的准确率
 │   ├── precompute_stft_h5.py         # 将原始 .mat IQ 数据预计算为 STFT .h5
 │   ├── precompute_cpp_h5.py          # 将原始 .mat IQ 数据预计算为 CPP/FAM .h5
 │   ├── generate_stft_png.py          # 从 STFT .h5 生成双通道频谱图 PNG
-│   ├── generate_cpp_png.py           # 从 CPP/FAM .h5 生成双通道 CPP/FAM PNG
-│   └── plot_fam_demo.py              # 生成合成信号的时域、频域和 FAM 可视化示例
+│   └── generate_cpp_png.py           # 从 CPP/FAM .h5 生成双通道 CPP/FAM PNG
 ├── src/
 │   ├── data/
+│   │   ├── drone_rfa_io.py           # DroneRFa 原始 .mat 数据读取工具
+│   │   ├── h5_dataset.py             # STFT/CPP .h5 数据集通用加载基类
+│   │   ├── splits.py                 # 数据集划分工具
 │   │   ├── stft_dataset.py           # 按样本索引懒加载 STFT .h5 数据
 │   │   └── cpp_dataset.py            # 按样本索引懒加载 CPP/FAM .h5 数据
+│   ├── evaluation/
+│   │   └── snr_accuracy.py           # 不同 SNR 条件下的准确率评估工具
 │   ├── models/
 │   │   └── resnet.py                 # 适配双通道特征输入的 ResNet-18
 │   ├── preprocess/
+│   │   ├── h5_precompute.py          # STFT/CPP .h5 预计算通用流程
+│   │   ├── random_snr_awgn.py        # 随机 SNR 加性高斯白噪声增强
+│   │   ├── rf_segmentation.py        # RF 片段选择与截取工具
+│   │   ├── stft.py                   # STFT 频谱图特征生成
 │   │   ├── fam_constants.py          # FAM 相关常量与边界定义
 │   │   ├── cpp.py                    # CPP/FAM 网格生成与双通道 CPP 特征组装
 │   │   └── fam_torch.py              # PyTorch FAM/SCF 计算工具，支持 CPU/CUDA/MPS
-│   ├── signal/
-│   │   └── synthetic_signal.py       # FAM 示例使用的合成信号生成器
+│   ├── training/
+│   │   ├── checkpoint.py             # 模型 checkpoint 保存与加载
+│   │   ├── evaluator.py              # 验证/测试循环
+│   │   ├── metrics.py                # 训练评估指标计算
+│   │   └── trainer.py                # 模型训练循环
 │   ├── visualization/
-│   │   ├── fam_plot.py               # FAM/CPP 热力图、三维曲面和时频图绘制工具
+│   │   ├── h5_png_export.py          # 从 .h5 样本批量导出 PNG 的通用工具
 │   │   └── plot_utils.py             # 通用时域、频域和 STFT 可视化工具
 │   └── utils/
 │       ├── logger.py                 # 全局日志工具
 │       ├── feature_specs.py          # STFT/CPP 特征配置定义
-│       ├── config.py                 # 轻量 YAML 配置解析
 │       ├── device.py                 # 设备选择辅助函数
 │       └── paths.py                  # 输出目录路径约定
 ├── docs/
-│   ├── project_structure_optimization.md
-│   ├── snr_accuracy_curve_implementation_plan.md
+│   ├── TODO.md
+│   ├── random_snr_awgn_training_plan.md
+│   ├── Yan 等 - 2025 - TASE-Net A Novel Robust Deep-Learning Network for Open-Set Few-Shot UAV Recognition.pdf
 │   └── DroneRFa：用于侦测低空无人机的大规模无人机射频信号数据集.pdf
-├── outputs/
-│   └── README.md                       # 统一实验输出目录规划
-├── checkpoints/                      # 旧 checkpoint 输出目录，已由 .gitignore 忽略
-└── logs/                             # 旧日志目录，已由 .gitignore 忽略
+└── outputs/
+    ├── README.md                     # 统一实验输出目录规划
+    ├── checkpoints/                  # 模型 checkpoint 输出目录
+    ├── figures/                      # 图片和曲线输出目录
+    ├── logs/                         # 训练与评估日志输出目录
+    └── metrics/                      # 指标、曲线数据和混淆矩阵输出目录
 ```
 
 `outputs/` 是统一实验输出目录。日志默认写入 `outputs/logs/`，模型 checkpoint 默认写入 `outputs/checkpoints/`，图片默认写入 `outputs/figures/`，指标和混淆矩阵数组默认写入 `outputs/metrics/`。
 
-仓库内代码默认使用 `src.*` 导入路径，不使用 `drone_rfa.*` 别名。合成信号和 FAM 相关实现分别位于 `src.signal` 和 `src.preprocess`，绘图工具位于 `src.visualization`。
+仓库内代码默认使用 `src.*` 导入路径，不使用 `drone_rfa.*` 别名。FAM 相关实现位于 `src.preprocess`，绘图工具位于 `src.visualization`。
 
 ## 常用命令
 
