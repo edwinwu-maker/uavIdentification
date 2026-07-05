@@ -7,7 +7,7 @@ Usage:
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --max-samples-per-file 1
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --device mps
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --device cuda:0 --pair-chunk-size 4096
-  python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --classes T0000 T0010 --files-per-class 1 --max-samples-per-file 2 --cpp-normalization log-zscore-sample --fam-nfft 64 --fam-hop 64
+  python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --files-per-class 1 --cpp-normalization log-zscore-sample --fam-nfft 64 --fam-hop 64
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --use-rf-segmentation --rf-frame-len 10000
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --random-snr --snr-min -5 --snr-max 15 --noise-seed 42
 """
@@ -87,8 +87,6 @@ def parse_args() -> argparse.Namespace:
                         help="Number of RF frames to retain; overrides --rf-target-len")
     parser.add_argument("--max-files", type=int, default=None,
                         help="Process at most this many .mat files")
-    parser.add_argument("--classes", nargs="+", default=None,
-                        help="DroneRFa class codes to process, e.g. T0000 T0010")
     parser.add_argument("--files-per-class", type=int, default=None,
                         help="Process at most this many .mat files per selected class")
     parser.add_argument("--max-samples-per-file", type=int, default=None,
@@ -104,6 +102,8 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if args.snr_min > args.snr_max:
         parser.error("--snr-min must be <= --snr-max")
+    if args.files_per_class is not None and args.max_samples_per_file is not None:
+        parser.error("--max-samples-per-file cannot be used with --files-per-class")
     return args
 
 
@@ -255,7 +255,6 @@ def main() -> None:
             "noise_seed": args.noise_seed,
         },
         max_files=args.max_files,
-        classes=args.classes,
         files_per_class=args.files_per_class,
         log_label="CPP samples",
     )

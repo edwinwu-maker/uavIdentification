@@ -28,6 +28,7 @@ def parse_label(mat_file: str) -> int:
 def group_mat_files_by_class(mat_files: list[str]) -> dict[str, list[str]]:
     """按 DroneRFa 类别代码分组 .mat 文件，并保持每组文件名排序稳定。"""
 
+    # 这里循环遍历的是字典的 keys："T0000", "T0010", ..., "T10000"
     grouped = {class_code: [] for class_code in LABEL_MAPPING}
     for mat_file in sorted(mat_files):
         class_code = os.path.basename(mat_file).split("_")[0]
