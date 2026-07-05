@@ -17,6 +17,7 @@ Usage:
   python scripts/precompute_stft_h5.py --data-dir ... --sample-length 1000000
   python scripts/precompute_stft_h5.py --data-dir ... --device mps
   python scripts/precompute_stft_h5.py --data-dir ... --max-files 1
+  python scripts/precompute_stft_h5.py --data-dir ... --classes T0000 T0010 --files-per-class 1
   python scripts/precompute_stft_h5.py --data-dir ... --max-samples-per-file 1
   python scripts/precompute_stft_h5.py --data-dir ... --random-snr --snr-min -5 --snr-max 15 --noise-seed 42
 """
@@ -65,6 +66,10 @@ def parse_args() -> argparse.Namespace:
                              '(default: auto-detect cuda/mps, fallback to cpu)')
     parser.add_argument("--max-files", type=int, default=None,
                         help="Process at most this many .mat files")
+    parser.add_argument("--classes", nargs="+", default=None,
+                        help="DroneRFa class codes to process, e.g. T0000 T0010")
+    parser.add_argument("--files-per-class", type=int, default=None,
+                        help="Process at most this many .mat files per selected class")
     parser.add_argument("--max-samples-per-file", type=int, default=None,
                         help="Process at most this many samples from each .mat file")
     parser.add_argument("--random-snr", action="store_true",
@@ -185,6 +190,8 @@ def main() -> None:
             "noise_seed": args.noise_seed,
         },
         max_files=args.max_files,
+        classes=args.classes,
+        files_per_class=args.files_per_class,
         log_label="stfts",
     )
 

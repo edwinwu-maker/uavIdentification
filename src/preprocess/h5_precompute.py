@@ -8,9 +8,10 @@ from typing import Any
 
 from tqdm import tqdm
 
+from src.data.drone_rfa_io import LABEL_MAPPING, group_mat_files_by_class
 from src.utils.logger import logger
 
-__all__ = ["output_h5_path", "run_precompute_batch"]
+__all__ = ["output_h5_path", "run_precompute_batch", "select_mat_files"]
 
 
 def output_h5_path(mat_path: str, output_dir: str) -> str:
@@ -25,6 +26,8 @@ def run_precompute_batch(
     process_one_mat: Callable[..., tuple[str, int]],
     process_kwargs: dict[str, Any] | None = None,
     max_files: int | None = None,
+    classes: list[str] | None = None,
+    files_per_class: int | None = None,
     log_label: str,
 ) -> tuple[int, int]:
     """
@@ -35,9 +38,12 @@ def run_precompute_batch(
     log_label:日志文案后缀
     """
 
-    mat_files = _list_mat_files(data_dir)
-    if max_files is not None:
-        mat_files = mat_files[:max_files]
+    mat_files = select_mat_files(
+        data_dir,
+        max_files=max_files,
+        classes=classes,
+        files_per_class=files_per_class,
+    )
     logger.info("Found %d .mat files in %s", len(mat_files), data_dir)
     logger.info("Output directory: %s", output_dir)
 
@@ -58,3 +64,34 @@ def run_precompute_batch(
 def _list_mat_files(data_dir: str) -> list[str]:
     mat_files = sorted(filename for filename in os.listdir(data_dir) if filename.endswith(".mat"))
     return mat_files
+
+
+def select_mat_files(
+    data_dir: str,
+    *,
+    max_files: int | None = None,
+    classes: list[str] | None = None,
+    files_per_class: int | None = None,
+) -> list[str]:
+    """选择待处理 .mat 文件；传入类别参数时优先执行按类别均衡抽样。"""
+
+    mat_files = _list_mat_files(data_dir)
+    if classes is None and files_per_class is None:
+        return mat_files[:max_files] if max_files is not None else mat_files
+
+    if files_per_class is not None and files_per_class <= 0:
+        raise ValueError("files_per_class must be positive")
+
+    selected_classes = classes if classes is not None else list(LABEL_MAPPING)
+    unknown_classes = [class_code for class_code in selected_classes if class_code not in LABEL_MAPPING]
+    if unknown_classes:
+        raise ValueError(f"Unknown class code(s): {', '.join(unknown_classes)}")
+
+    grouped = group_mat_files_by_class(mat_files)
+    selected: list[str] = []
+    for class_code in selected_classes:
+        class_files = grouped[class_code]
+        if files_per_class is not None:
+            class_files = class_files[:files_per_class]
+        selected.extend(class_files)
+    return selected

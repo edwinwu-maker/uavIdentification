@@ -2,7 +2,7 @@
 
 Usage:
   python scripts/train.py --feature stft --data-dir ~/Desktop/dataset/DroneRFa_stft_h5 --batch-size 64
-  python scripts/train.py --feature cpp --data-dir ~/Desktop/dataset/DroneRFa_cpp_h5 --batch-size 64
+  python scripts/train.py --feature cpp --data-dir ~/Desktop/dataset/DroneRFa_cpp_h5 --model resnet18-small-stem --batch-size 64
 
 """
 
@@ -19,7 +19,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from src.data.splits import split_dataset
-from src.models.resnet import NUM_CLASSES, DroneRFaResNet18
+from src.models.resnet import NUM_CLASSES, build_model
 from src.training.trainer import train_model
 
 from src.utils.device import default_device
@@ -37,6 +37,7 @@ SPLIT_SEED = 42
 def build_parser():
     parser = argparse.ArgumentParser(description="Train ResNet on pre-computed DroneRFa features")
     parser.add_argument("--feature", type=str, default="stft", choices=("stft", "cpp"))
+    parser.add_argument("--model", type=str, default="resnet18", choices=("resnet18", "resnet18-small-stem"))
     parser.add_argument("--data-dir", type=str, default=None, help="Directory containing feature .h5 files")
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
     parser.add_argument("--lr", type=float, default=LEARNING_RATE)
@@ -99,7 +100,7 @@ def train(args):
         train_loader = DataLoader(train_ds, shuffle=True, **loader_kwargs)
         val_loader = DataLoader(val_ds, shuffle=False, **loader_kwargs)
 
-        model = DroneRFaResNet18(num_classes=NUM_CLASSES).to(device)
+        model = build_model(args.model, num_classes=NUM_CLASSES).to(device)
         optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
         criterion = nn.CrossEntropyLoss()
 

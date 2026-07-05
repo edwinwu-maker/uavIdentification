@@ -7,6 +7,7 @@ Usage:
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --max-samples-per-file 1
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --device mps
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --device cuda:0 --pair-chunk-size 4096
+  python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --classes T0000 T0010 --files-per-class 1 --max-samples-per-file 2 --cpp-normalization log-zscore-sample --fam-nfft 64 --fam-hop 64
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --use-rf-segmentation --rf-frame-len 10000
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --random-snr --snr-min -5 --snr-max 15 --noise-seed 42
 """
@@ -31,6 +32,7 @@ from src.preprocess.cpp import (
     DEFAULT_SEGMENT_SAMPLES,
     SUPPORTED_FAM_MERGE_MODES,
 )
+from src.preprocess.cpp_normalization import normalize_cpp
 from src.preprocess.h5_precompute import run_precompute_batch, output_h5_path
 from src.preprocess.random_snr_awgn import add_random_snr_awgn
 from src.preprocess.rf_segmentation import segment_predominant_rf
@@ -61,6 +63,12 @@ def parse_args() -> argparse.Namespace:
                         help="Hop size between internal FAM segments. Defaults to --segment-samples")
     parser.add_argument("--fam-merge", choices=SUPPORTED_FAM_MERGE_MODES, default="mean",
                         help="How to merge segmented FAM grids: mean or max")
+    parser.add_argument("--fam-nfft", type=int, default=256,
+                        help="FAM FFT size")
+    parser.add_argument("--fam-hop", type=int, default=256,
+                        help="FAM hop size")
+    parser.add_argument("--cpp-normalization", choices=("max", "log-zscore-sample"), default="max",
+                        help="CPP normalization mode")
     parser.add_argument("--f-bins", type=int, default=F_BINS,
                         help="Number of frequency bins in the CPP grid")
     parser.add_argument("--alpha-bins", type=int, default=ALPHA_BINS,
@@ -79,6 +87,10 @@ def parse_args() -> argparse.Namespace:
                         help="Number of RF frames to retain; overrides --rf-target-len")
     parser.add_argument("--max-files", type=int, default=None,
                         help="Process at most this many .mat files")
+    parser.add_argument("--classes", nargs="+", default=None,
+                        help="DroneRFa class codes to process, e.g. T0000 T0010")
+    parser.add_argument("--files-per-class", type=int, default=None,
+                        help="Process at most this many .mat files per selected class")
     parser.add_argument("--max-samples-per-file", type=int, default=None,
                         help="Process at most this many samples from each .mat file")
     parser.add_argument("--random-snr", action="store_true",
@@ -108,6 +120,9 @@ def process_one_mat(
     device: str,
     pair_chunk_size: int,
     max_samples_per_file: int | None,
+    cpp_normalization: str = "max",
+    fam_nfft: int = 256,
+    fam_hop: int = 256,
     use_rf_segmentation: bool = False,
     rf_frame_len: int = RF_FRAME_LEN,
     rf_target_len: int | None = RF_TARGET_LEN,
@@ -188,10 +203,10 @@ def process_one_mat(
                     alpha_bins=alpha_bins,
                     device=device,
                     pair_chunk_size=pair_chunk_size,
-                    fam_nfft=256,
-                    fam_hop=256
+                    fam_nfft=fam_nfft,
+                    fam_hop=fam_hop,
                 )
-                h5f["cpp"][sample_idx] = cpp
+                h5f["cpp"][sample_idx] = normalize_cpp(cpp, mode=cpp_normalization)
                 h5f["labels"][sample_idx] = label
 
             h5f.create_dataset("f_axis", data=f_axis)
@@ -224,6 +239,9 @@ def main() -> None:
             "fam_merge": args.fam_merge,
             "f_bins": args.f_bins,
             "alpha_bins": args.alpha_bins,
+            "cpp_normalization": args.cpp_normalization,
+            "fam_nfft": args.fam_nfft,
+            "fam_hop": args.fam_hop,
             "device": args.device,
             "pair_chunk_size": args.pair_chunk_size,
             "max_samples_per_file": args.max_samples_per_file,
@@ -237,6 +255,8 @@ def main() -> None:
             "noise_seed": args.noise_seed,
         },
         max_files=args.max_files,
+        classes=args.classes,
+        files_per_class=args.files_per_class,
         log_label="CPP samples",
     )
 

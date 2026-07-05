@@ -2,7 +2,7 @@
 
 Usage:
   python scripts/evaluate.py --feature stft --data-dir ~/Desktop/dataset/droneRFa/stft_h5 --model-path outputs/checkpoints/best_stft_model.pth
-  python scripts/evaluate.py --feature cpp --data-dir ~/Desktop/dataset/droneRFa/cpp_h5 --model-path outputs/checkpoints/best_cpp_model.pth
+  python scripts/evaluate.py --feature cpp --data-dir ~/Desktop/dataset/droneRFa/cpp_h5 --model resnet18-small-stem --model-path outputs/checkpoints/best_cpp_model.pth
 
 """
 
@@ -21,7 +21,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from src.data.splits import split_dataset
-from src.models.resnet import NUM_CLASSES, DroneRFaResNet18
+from src.models.resnet import NUM_CLASSES, build_model
 from src.training.checkpoint import load_checkpoint
 from src.training.evaluator import evaluate_with_predictions
 from src.training.metrics import compute_metrics, save_confusion_matrix_image
@@ -40,6 +40,7 @@ SPLIT_SEED = 42
 def build_parser():
     parser = argparse.ArgumentParser(description="Evaluate ResNet on pre-computed DroneRFa features")
     parser.add_argument("--feature", type=str, default="stft", choices=("stft", "cpp"))
+    parser.add_argument("--model", type=str, default="resnet18", choices=("resnet18", "resnet18-small-stem"))
     parser.add_argument("--data-dir", type=str, default=None, help="Directory containing feature .h5 files")
     parser.add_argument("--model-path", type=str, default=None, help="Path to model checkpoint")
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
@@ -100,7 +101,7 @@ def evaluate(args):
 
         test_loader = DataLoader(test_ds, **loader_kwargs)
 
-        model = DroneRFaResNet18(num_classes=NUM_CLASSES).to(device)
+        model = build_model(args.model, num_classes=NUM_CLASSES).to(device)
         logger.info("Loading model from %s", args.model_path)
         state_dict = load_checkpoint(args.model_path, map_location=device)
         model.load_state_dict(state_dict)

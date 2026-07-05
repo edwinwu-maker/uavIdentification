@@ -36,6 +36,7 @@ Project guidance for coding agents working in this repository.
 - Do not refactor, reformat, or clean up unrelated code.
 - Remove only unused imports, variables, or files introduced by your own change.
 - If unrelated dead code or suspicious behavior is found, mention it instead of editing it.
+- Do not add production `src/` APIs only because ignored or local-only tests import them. First verify the function is required by real application code or the requested feature; otherwise fix the test, skip the ignored test, or report the mismatch.
 
 ## Verification
 
@@ -44,6 +45,7 @@ Project guidance for coding agents working in this repository.
 - For new behavior, add or run focused tests when the repository supports it.
 - Run verification inside the `droneRFa` conda environment.
 - On macOS, run verification with `~/Desktop/venv`.
+- If tests under an ignored directory fail because they expect non-existent production APIs, do not make production code satisfy those tests unless the API is part of the actual task requirements.
 - If verification cannot be run, explain exactly why.
 
 ## Planning

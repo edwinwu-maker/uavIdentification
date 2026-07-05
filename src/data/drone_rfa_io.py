@@ -25,6 +25,18 @@ def parse_label(mat_file: str) -> int:
     return LABEL_MAPPING[drone_code]
 
 
+def group_mat_files_by_class(mat_files: list[str]) -> dict[str, list[str]]:
+    """按 DroneRFa 类别代码分组 .mat 文件，并保持每组文件名排序稳定。"""
+
+    grouped = {class_code: [] for class_code in LABEL_MAPPING}
+    for mat_file in sorted(mat_files):
+        class_code = os.path.basename(mat_file).split("_")[0]
+        if class_code not in LABEL_MAPPING:
+            raise ValueError(f"Unknown class code in .mat file: {class_code}")
+        grouped[class_code].append(mat_file)
+    return grouped
+
+
 def count_iq_samples(src: h5py.File, *, sample_length: int, max_samples: int | None = None) -> int:
     """根据 HDF5 文件(原始.mat)里的总点数，计算能切出多少个固定长度的 IQ 样本"""
     total_points = int(src["RF0_I"].shape[1])
