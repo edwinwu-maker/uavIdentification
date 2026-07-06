@@ -4,6 +4,7 @@ Usage:
   # CLI — quick evaluation with defaults
   python scripts/eval_snr_accuracy_cpp.py
   python scripts/eval_snr_accuracy_cpp.py --data-dir E:/dataSet/DroneRFa --snrs -10 0 10 --max-samples 20
+  python scripts/eval_snr_accuracy_cpp.py --data-dir E:/dataSet/DroneRFa --files-per-class 1 --model resnet18-small-stem
 
   # API — import and call from other scripts
   from scripts.eval_snr_accuracy_cpp import evaluate_snr_accuracy
@@ -39,8 +40,9 @@ from src.evaluation.snr_accuracy import (
     save_snr_accuracy_csv,
     save_snr_accuracy_plot,
 )
-from src.models.resnet import NUM_CLASSES, DroneRFaResNet18
+from src.models.resnet import NUM_CLASSES, build_model
 from src.preprocess.cpp import compute_cpp
+from src.preprocess.cpp_normalization import normalize_cpp
 from src.preprocess.rf_segmentation import segment_predominant_rf
 from src.training.checkpoint import load_checkpoint
 from src.utils.device import default_device
@@ -89,6 +91,7 @@ def evaluate_snr_accuracy(
     output_csv: str | Path = DEFAULT_OUTPUT_CSV,
     output_png: str | Path = DEFAULT_OUTPUT_PNG,
     device: str = default_device(),
+    model_name: str = "resnet18-small-stem",
     batch_size: int = DEFAULT_BATCH_SIZE,
     snrs: list[float] | tuple[float, ...] = DEFAULT_SNRS,
     sample_length: int = DEFAULT_SAMPLE_LENGTH,
@@ -98,7 +101,11 @@ def evaluate_snr_accuracy(
     f_bins: int = DEFAULT_F_BINS,
     alpha_bins: int = DEFAULT_ALPHA_BINS,
     pair_chunk_size: int = DEFAULT_PAIR_CHUNK_SIZE,
+    fam_nfft: int = 256,
+    fam_hop: int = 256,
+    cpp_normalization: str = "max",
     max_files: int | None = None,
+    files_per_class: int | None = None,
     max_samples_per_file: int | None = None,
     max_samples: int | None = None,
     seed: int = DEFAULT_SEED,
@@ -115,6 +122,7 @@ def evaluate_snr_accuracy(
         data_dir,
         sample_length=sample_length,
         max_files=max_files,
+        files_per_class=files_per_class,
         max_samples_per_file=max_samples_per_file,
     )
 
@@ -140,7 +148,7 @@ def evaluate_snr_accuracy(
     if torch_device.type == "cuda":
         torch.cuda.set_device(torch_device)
 
-    model = DroneRFaResNet18(num_classes=NUM_CLASSES).to(torch_device)
+    model = build_model(model_name, num_classes=NUM_CLASSES).to(torch_device)
     logger.info("Loading model from %s", model_path)
     state_dict = load_checkpoint(model_path, map_location=torch_device)
     model.load_state_dict(state_dict)
@@ -196,10 +204,10 @@ def evaluate_snr_accuracy(
                             alpha_bins=alpha_bins,
                             device=device,
                             pair_chunk_size=pair_chunk_size,
-                            fam_nfft=256,
-                            fam_hop=256,
+                            fam_nfft=fam_nfft,
+                            fam_hop=fam_hop,
                         )
-                        cpp_batch.append(cpp)
+                        cpp_batch.append(normalize_cpp(cpp, mode=cpp_normalization))
                         labels.append(record.label)
 
                     inputs = torch.from_numpy(np.stack(cpp_batch, axis=0)).to(torch_device)
@@ -235,6 +243,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Directory containing raw .mat files")
     parser.add_argument("--model-path", type=str, default=str(checkpoint_dir() / DEFAULT_MODEL_NAME),
                         help="Path to the trained CPP checkpoint")
+    parser.add_argument("--model", type=str, default="resnet18-small-stem", choices=("resnet18", "resnet18-small-stem"),
+                        help="Model architecture used by the CPP checkpoint")
     parser.add_argument("--output-csv", type=str, default=str(DEFAULT_OUTPUT_CSV),
                         help="CSV path for SNR results")
     parser.add_argument("--output-png", type=str, default=str(DEFAULT_OUTPUT_PNG),
@@ -250,12 +260,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--f-bins", type=int, default=DEFAULT_F_BINS)
     parser.add_argument("--alpha-bins", type=int, default=DEFAULT_ALPHA_BINS)
     parser.add_argument("--pair-chunk-size", type=int, default=DEFAULT_PAIR_CHUNK_SIZE)
+    parser.add_argument("--fam-nfft", type=int, default=256)
+    parser.add_argument("--fam-hop", type=int, default=256)
+    parser.add_argument("--cpp-normalization", choices=("max", "log-zscore-sample"), default="max")
     parser.add_argument("--use-rf-segmentation", action="store_true",
                         help="Apply ST-ESER predominant segment selection after AWGN and before CPP")
     parser.add_argument("--rf-frame-len", type=int, default=DEFAULT_RF_FRAME_LEN)
     parser.add_argument("--rf-target-len", type=int, default=DEFAULT_RF_TARGET_LEN)
     parser.add_argument("--rf-top-k", type=int, default=None)
     parser.add_argument("--max-files", type=int, default=None)
+    parser.add_argument("--files-per-class", type=int, default=None)
     parser.add_argument("--max-samples-per-file", type=int, default=None)
     parser.add_argument("--max-samples", type=int, default=None)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
@@ -274,6 +288,7 @@ def main() -> None:
         output_csv=args.output_csv,
         output_png=args.output_png,
         device=args.device,
+        model_name=args.model,
         batch_size=args.batch_size,
         snrs=args.snrs,
         sample_length=args.sample_length,
@@ -283,7 +298,11 @@ def main() -> None:
         f_bins=args.f_bins,
         alpha_bins=args.alpha_bins,
         pair_chunk_size=args.pair_chunk_size,
+        fam_nfft=args.fam_nfft,
+        fam_hop=args.fam_hop,
+        cpp_normalization=args.cpp_normalization,
         max_files=args.max_files,
+        files_per_class=args.files_per_class,
         max_samples_per_file=args.max_samples_per_file,
         max_samples=args.max_samples,
         seed=args.seed,

@@ -4,6 +4,7 @@ Usage:
   # CLI — quick evaluation with defaults
   python scripts/eval_snr_accuracy_stft.py
   python scripts/eval_snr_accuracy_stft.py --data-dir E:/dataSet/DroneRFa --snrs -10 0 10 --max-samples 20
+  python scripts/eval_snr_accuracy_stft.py --data-dir E:/dataSet/DroneRFa --files-per-class 1
 
   # API — import and call from other scripts
   from scripts.eval_snr_accuracy_stft import evaluate_snr_accuracy
@@ -91,6 +92,7 @@ def evaluate_snr_accuracy(
     snrs: list[float] | tuple[float, ...] = DEFAULT_SNRS,
     sample_length: int = DEFAULT_SAMPLE_LENGTH,
     max_files: int | None = None,
+    files_per_class: int | None = None,
     max_samples_per_file: int | None = None,
     max_samples: int | None = None,
     seed: int = DEFAULT_SEED,
@@ -103,6 +105,7 @@ def evaluate_snr_accuracy(
         data_dir,
         sample_length=sample_length,
         max_files=max_files,
+        files_per_class=files_per_class,
         max_samples_per_file=max_samples_per_file,
     )
 
@@ -216,6 +219,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--snrs", type=float, nargs="+", default=DEFAULT_SNRS)
     parser.add_argument("--sample-length", type=int, default=DEFAULT_SAMPLE_LENGTH)
     parser.add_argument("--max-files", type=int, default=None)
+    parser.add_argument("--files-per-class", type=int, default=None)
     parser.add_argument("--max-samples-per-file", type=int, default=None)
     parser.add_argument("--max-samples", type=int, default=None)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
@@ -238,6 +242,7 @@ def main() -> None:
         snrs=args.snrs,
         sample_length=args.sample_length,
         max_files=args.max_files,
+        files_per_class=args.files_per_class,
         max_samples_per_file=args.max_samples_per_file,
         max_samples=args.max_samples,
         seed=args.seed,

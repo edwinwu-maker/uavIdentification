@@ -13,7 +13,12 @@ from torch.utils.data import DataLoader
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from src.data.drone_rfa_io import count_iq_samples, parse_label
+from src.data.drone_rfa_io import (
+    LABEL_MAPPING,
+    count_iq_samples,
+    group_mat_files_by_class,
+    parse_label,
+)
 from src.data.splits import split_dataset
 
 
@@ -46,6 +51,7 @@ def build_sample_index(
     *,
     sample_length: int,
     max_files: int | None = None,
+    files_per_class: int | None = None,
     max_samples_per_file: int | None = None,
 ) -> list[SampleRecord]:
     """扫描原始 .mat 文件，生成稳定的样本索引。"""
@@ -55,7 +61,14 @@ def build_sample_index(
 
     sample_index: list[SampleRecord] = []
     mat_files = sorted(fname for fname in os.listdir(data_dir) if fname.endswith(".mat"))
-    if max_files is not None:
+    if files_per_class is not None:
+        if files_per_class <= 0:
+            raise ValueError("files_per_class must be positive")
+        grouped = group_mat_files_by_class(mat_files)
+        mat_files = []
+        for class_code in LABEL_MAPPING:
+            mat_files.extend(grouped[class_code][:files_per_class])
+    elif max_files is not None:
         mat_files = mat_files[:max_files]
 
     for fname in mat_files:

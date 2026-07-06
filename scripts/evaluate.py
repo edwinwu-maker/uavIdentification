@@ -35,12 +35,17 @@ BATCH_SIZE = 64
 TRAIN_RATIO = 0.6
 VAL_RATIO = 0.2
 SPLIT_SEED = 42
+DEFAULT_MODEL_BY_FEATURE = {
+    "stft": "resnet18",
+    "cpp": "resnet18-small-stem",
+}
 
 
 def build_parser():
     parser = argparse.ArgumentParser(description="Evaluate ResNet on pre-computed DroneRFa features")
     parser.add_argument("--feature", type=str, default="stft", choices=("stft", "cpp"))
-    parser.add_argument("--model", type=str, default="resnet18", choices=("resnet18", "resnet18-small-stem"))
+    parser.add_argument("--model", type=str, default=None, choices=("resnet18", "resnet18-small-stem"),
+                        help="Model architecture (default: resnet18 for STFT, resnet18-small-stem for CPP)")
     parser.add_argument("--data-dir", type=str, default=None, help="Directory containing feature .h5 files")
     parser.add_argument("--model-path", type=str, default=None, help="Path to model checkpoint")
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
@@ -57,6 +62,7 @@ def parse_args(argv=None):
     args = parser.parse_args(argv)
 
     spec = get_feature_spec(args.feature)
+    args.model = args.model if args.model is not None else DEFAULT_MODEL_BY_FEATURE[args.feature]
     args.data_dir = os.path.expanduser(args.data_dir) if args.data_dir is not None else spec.default_data_dir
     args.model_path = os.path.expanduser(args.model_path) if args.model_path is not None else spec.checkpoint_name
     args.cm_image_path = (
