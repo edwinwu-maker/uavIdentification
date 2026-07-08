@@ -1,4 +1,10 @@
-# CPP Full SNR 低于 STFT 的下一步排查方向
+# CPP Full 极低 SNR 低于 STFT 的下一步排查方向
+
+## 最新结论
+
+截至 `2026-07-08 22:28:16` 的 full SNR 评估日志，CPP 在 `-15 dB` 和 `-10 dB` 明显低于 STFT，`-7.5 dB` 基本接近 STFT；从 `-5 dB` 和 `-2.5 dB` 开始，CPP 已经略高于 STFT。
+
+因此，当前问题不应表述为“CPP full 数据整体不如 STFT”，而应表述为“在 STFT 和 CPP 都使用 `[-5, 15] dB` random-SNR 训练时，CPP 在训练分布外的极低 SNR 区间外推鲁棒性弱于 STFT”。下一步优先确认 CPP/STFT 训练 H5 的 random-SNR 范围确实一致，再验证 CPP 是否能通过扩展训练 SNR 范围补回 `-15 dB` 和 `-10 dB` 的差距。
 
 ## 1. 当前现象
 
@@ -17,8 +23,10 @@
 | `-15 dB` | `0.3187` | `0.4627` | `-0.1440` |
 | `-10 dB` | `0.6761` | `0.7375` | `-0.0614` |
 | `-7.5 dB` | `0.8466` | `0.8528` | `-0.0062` |
+| `-5 dB` | `0.9324` | `0.9257` | `+0.0067` |
+| `-2.5 dB` | `0.9670` | `0.9618` | `+0.0052` |
 
-从当前已完成点看，CPP 不是在所有 SNR 区间都明显弱于 STFT，而是主要输在 `-15 dB` 和 `-10 dB` 这类极低 SNR 区间。到 `-7.5 dB` 时，CPP 与 STFT 已经非常接近。
+从当前已完成点看，CPP 不是在所有 SNR 区间都明显弱于 STFT，而是主要输在 `-15 dB` 和 `-10 dB` 这类极低 SNR 区间。到 `-7.5 dB` 时，CPP 与 STFT 已经非常接近；从 `-5 dB` 开始，CPP 已经略高于 STFT。
 
 因此，后续排查不应笼统判断为“CPP full 整体不如 STFT”，而应优先定位“CPP 极低 SNR 鲁棒性不足”的原因。
 
@@ -49,11 +57,11 @@ Loading model from outputs/checkpoints/cpp_norm_logz_mean.pth
 
 ### 3.1 等 CPP 全部 SNR 点跑完并保存结果
 
-当前只看到 `-15 dB`、`-10 dB`、`-7.5 dB` 三个点。需要等 CPP 全部 SNR 点跑完，再和 STFT 曲线完整比较。
+当前已经看到 `-15 dB` 到 `-2.5 dB` 的结果。需要等 CPP 全部 SNR 点跑完，再和 STFT 曲线完整比较。
 
 重点确认：
 
-- `-5 dB` 及以上是否基本追平 STFT。
+- `0 dB` 及以上是否继续追平或超过 STFT。
 - 高 SNR 区间是否存在明显下降。
 - CPP 与 STFT 的差距是否只集中在 `-15 dB` 和 `-10 dB`。
 
@@ -75,12 +83,12 @@ python scripts/eval_snr_accuracy_cpp.py \
   --output-png outputs/figures/cpp_norm_logz_mean_full_snr_accuracy.png
 ```
 
-### 3.2 确认 CPP 训练集的随机 SNR 范围
+### 3.2 确认 CPP/STFT 训练集的随机 SNR 范围是否一致
 
-重点回查 `cpp_norm_logz_mean.pth` 的训练来源：
+重点回查 `cpp_norm_logz_mean.pth` 和 STFT baseline checkpoint 的训练来源：
 
 - 训练命令使用的 `--data-dir` 是哪个 H5 目录。
-- 该 H5 目录是否由 `scripts/precompute_cpp_h5.py` 生成。
+- 对应 H5 目录是否分别由 `scripts/precompute_cpp_h5.py` 和 `scripts/precompute_stft_h5.py` 生成。
 - 预计算时是否传入了 `--clean`。
 - 预计算时是否显式传入了 `--snr-min` 和 `--snr-max`。
 
@@ -90,7 +98,9 @@ python scripts/eval_snr_accuracy_cpp.py \
 - 默认 `--snr-min -5`。
 - 默认 `--snr-max 15`。
 
-也就是说，如果 `cpp_norm_logz_mean.pth` 对应的训练 H5 使用默认 random-SNR 设置，那么训练数据只覆盖 `[-5, 15] dB`。此时评估中的 `-15 dB` 和 `-10 dB` 属于训练分布之外，CPP 在这些点明显低于 STFT 是合理的分布外退化现象。
+`scripts/precompute_stft_h5.py` 也使用相同的默认 random-SNR 范围。因此，如果 CPP 和 STFT 训练 H5 都使用默认 random-SNR 设置，那么二者训练数据都只覆盖 `[-5, 15] dB`。此时评估中的 `-15 dB` 和 `-10 dB` 对两者都属于训练分布之外。
+
+这意味着：训练 SNR 范围不足不是 CPP 相比 STFT 落后的唯一解释。更准确的判断是，在相同 `[-5, 15] dB` 训练范围下，STFT 对 `-15 dB` 和 `-10 dB` 的分布外泛化更强，而 CPP 在极低 SNR 下退化更明显。
 
 ### 3.3 检查 small 与 full 实验是否只改变了数据规模
 
@@ -116,7 +126,9 @@ small 数据集下 CPP SNR 曲线优于 STFT，但 full 数据集下 CPP 在极�
 
 ## 4. 单变量对照实验：只改训练 SNR 范围
 
-如果确认当前 CPP full checkpoint 的训练 random-SNR 范围是默认 `[-5, 15]`，下一步最优先的单变量实验是：只把 CPP 训练集 random-SNR 改为 `[-15, 15]`，其他参数全部保持不变。
+如果确认当前 CPP 和 STFT full checkpoint 的训练 random-SNR 范围都是默认 `[-5, 15]`，下一步最优先的单变量实验是：只把 CPP 训练集 random-SNR 改为 `[-15, 15]`，其他参数全部保持不变。
+
+这个实验的目的不是证明 CPP/STFT 使用了不同训练范围，而是验证：CPP 的极低 SNR 短板能否通过把 `-15 dB` 和 `-10 dB` 纳入训练分布来补回。
 
 固定参数：
 
@@ -184,7 +196,7 @@ python scripts/eval_snr_accuracy_cpp.py \
 - `-5 dB`
 - `0 dB` 及以上
 
-如果新 CPP 在 `-15 dB` 和 `-10 dB` 明显提升，同时 `0 dB` 以上没有明显下降，则可以认为主要问题是训练 SNR 覆盖不足。
+如果新 CPP 在 `-15 dB` 和 `-10 dB` 明显提升，同时 `0 dB` 以上没有明显下降，则可以认为 CPP 的极低 SNR 短板主要可以通过训练 SNR 覆盖补偿。
 
 如果极低 SNR 提升，但中高 SNR 明显下降，则说明简单扩大到 `[-15, 15]` 会引入训练目标冲突，后续可以考虑非均匀 SNR 采样、分段采样或混合 clean/noisy 训练集。
 
@@ -256,9 +268,9 @@ python scripts/eval_snr_accuracy_cpp.py \
 
 ## 7. 判定标准
 
-### 7.1 支持“训练 SNR 覆盖不足”的证据
+### 7.1 支持“CPP 可通过扩展训练 SNR 覆盖补偿”的证据
 
-满足以下条件时，可以认为训练 SNR 范围是主要问题：
+满足以下条件时，可以认为 CPP 的极低 SNR 短板主要来自训练分布覆盖不足，且可以通过扩展训练 SNR 范围补偿：
 
 - `[-15, 15]` 训练后，`-15 dB` 和 `-10 dB` 明显提升。
 - `-7.5 dB` 到 `10 dB` 不明显低于当前 CPP。
@@ -285,6 +297,6 @@ python scripts/eval_snr_accuracy_cpp.py \
 
 当前最可能的方向是：
 
-CPP full 不是整体不如 STFT，而是极低 SNR 鲁棒性不足。优先验证 `cpp_norm_logz_mean.pth` 的训练 random-SNR 范围是否覆盖了评估中的 `-15 dB` 和 `-10 dB`。
+CPP full 不是整体不如 STFT，而是在相同 `[-5, 15] dB` random-SNR 训练条件下，CPP 对 `-15 dB` 和 `-10 dB` 的分布外泛化弱于 STFT。
 
-如果当前训练集确实只覆盖默认 `[-5, 15] dB`，那么下一步应先做 `[-15, 15] dB` random-SNR 训练对照，而不是立刻修改 FAM 参数或模型结构。
+如果当前 CPP 和 STFT 训练集都只覆盖默认 `[-5, 15] dB`，那么下一步应先做 CPP 的 `[-15, 15] dB` random-SNR 训练对照，而不是立刻修改 FAM 参数或模型结构。当前 `-5 dB` 和 `-2.5 dB` 已经超过 STFT，这进一步说明排查重点应放在训练范围外的 `-15 dB` 和 `-10 dB`，并验证 CPP 是否能通过训练覆盖补回这两个点。
