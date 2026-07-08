@@ -15,6 +15,7 @@
 - 划分方式：`train=35388`、`val=11796`、`test=11796`。
 - CPP checkpoint：`outputs/checkpoints/cpp_norm_logz_mean.pth`。
 - CPP 评估参数已显式使用：`--cpp-normalization log-zscore-sample`。
+- CPP 训练数据：`[-5, 15] dB` random-SNR 数据集。
 
 目前已经观察到的 CPP full SNR accuracy：
 
@@ -30,7 +31,43 @@
 
 因此，后续排查不应笼统判断为“CPP full 整体不如 STFT”，而应优先定位“CPP 极低 SNR 鲁棒性不足”的原因。
 
-## 2. 已确认与暂时排除的因素
+## 2. CPP 训练日志证据
+
+当前 CPP `[-5, 15] dB` random-SNR 数据集训练日志显示，模型在训练分布内收敛正常：
+
+| Epoch | train_loss | val_loss | val_acc | 说明 |
+| ---: | ---: | ---: | ---: | --- |
+| `1` | `1.2096` | `0.6906` | `0.7623` | 初始收敛正常 |
+| `4` | `0.1576` | `0.1437` | `0.9498` | 前几轮快速提升 |
+| `20` | `0.0262` | `0.0913` | `0.9722` | 验证集已较稳定 |
+| `33` | `0.0130` | `0.0893` | `0.9771` | 继续缓慢提升 |
+| `44` | `0.0029` | `0.0923` | `0.9794` | 高位波动 |
+| `47` | `0.0058` | `0.0777` | `0.9806` | 接近最佳 |
+| `49` | `0.0071` | `0.0802` | `0.9825` | 当前日志中最佳 val_acc |
+| `59` | `0.0087` | `0.0942` | `0.9784` | early stopping |
+
+训练在 epoch 59 early stop，说明当前 `cpp_norm_logz_mean.pth` 对应训练过程不是明显欠拟合。结合 SNR 评估结果，当前更像是：CPP 在 `[-5, 15] dB` 训练分布内表现已经足够好，但对 `-15 dB` 和 `-10 dB` 的训练分布外泛化弱于 STFT。
+
+### 2.1 过拟合判断
+
+当前训练日志存在轻到中度过拟合迹象：
+
+- 后期 `train_loss` 已经很低，多次达到 `0.0018 ~ 0.01` 量级。
+- epoch 20 之后 `val_acc` 主要在 `0.972 ~ 0.9825` 区间波动，提升幅度变小。
+- 最佳 `val_acc=0.9825` 出现在 epoch 49，之后没有继续稳定提升。
+- epoch 59 触发 early stopping，说明后续验证集收益不足。
+
+因此，CPP 模型可能已经把 `[-5, 15] dB` 训练分布学得很充分，甚至学到了一些只对该 SNR 范围有效的细节。这种过拟合可能会加剧 `-15 dB` 和 `-10 dB` 的分布外泛化下降。
+
+但从当前证据看，过拟合更像是加剧因素，而不是唯一主因：
+
+- STFT 也使用 `[-5, 15] dB` random-SNR 训练，但在 `-15 dB` 和 `-10 dB` 的外推表现更好。
+- CPP 在 `-5 dB` 和 `-2.5 dB` 已经超过 STFT，说明训练分布内性能没有明显问题。
+- 明显差距主要集中在训练范围外的极低 SNR。
+
+更准确的判断是：CPP 模型可能对 `[-5, 15] dB` 训练分布存在轻到中度过拟合，从而削弱 `-15 dB` 和 `-10 dB` 的外推泛化；同时，CPP 特征本身在极低 SNR 下也可能比 STFT 更容易被噪声破坏。
+
+## 3. 已确认与暂时排除的因素
 
 服务器上运行的 CPP SNR 评估命令为：
 
@@ -53,9 +90,9 @@ Loading model from outputs/checkpoints/cpp_norm_logz_mean.pth
 
 后续仍需确认的是：`cpp_norm_logz_mean.pth` 对应的训练 H5 是否也确实由 `log-zscore-sample + fam-merge mean + fam-nfft 256 + fam-hop 256` 生成。如果训练 H5 和评估参数不匹配，仍可能导致性能偏差。
 
-## 3. 优先排查方向
+## 4. 优先排查方向
 
-### 3.1 等 CPP 全部 SNR 点跑完并保存结果
+### 4.1 等 CPP 全部 SNR 点跑完并保存结果
 
 当前已经看到 `-15 dB` 到 `-2.5 dB` 的结果。需要等 CPP 全部 SNR 点跑完，再和 STFT 曲线完整比较。
 
@@ -83,7 +120,7 @@ python scripts/eval_snr_accuracy_cpp.py \
   --output-png outputs/figures/cpp_norm_logz_mean_full_snr_accuracy.png
 ```
 
-### 3.2 确认 CPP/STFT 训练集的随机 SNR 范围是否一致
+### 4.2 确认 CPP/STFT 训练集的随机 SNR 范围是否一致
 
 重点回查 `cpp_norm_logz_mean.pth` 和 STFT baseline checkpoint 的训练来源：
 
@@ -102,7 +139,7 @@ python scripts/eval_snr_accuracy_cpp.py \
 
 这意味着：训练 SNR 范围不足不是 CPP 相比 STFT 落后的唯一解释。更准确的判断是，在相同 `[-5, 15] dB` 训练范围下，STFT 对 `-15 dB` 和 `-10 dB` 的分布外泛化更强，而 CPP 在极低 SNR 下退化更明显。
 
-### 3.3 检查 small 与 full 实验是否只改变了数据规模
+### 4.3 检查 small 与 full 实验是否只改变了数据规模
 
 small 数据集下 CPP SNR 曲线优于 STFT，但 full 数据集下 CPP 在极低 SNR 落后。需要确认 small/full 对比时是否只改变了数据规模。
 
@@ -124,7 +161,7 @@ small 数据集下 CPP SNR 曲线优于 STFT，但 full 数据集下 CPP 在极�
 
 如果 small 使用 clean 数据或不同 random-SNR 范围，而 full 使用 `[-5, 15]` random-SNR，则不能直接把差异归因于数据规模。
 
-## 4. 单变量对照实验：只改训练 SNR 范围
+## 5. 单变量对照实验：只改训练 SNR 范围
 
 如果确认当前 CPP 和 STFT full checkpoint 的训练 random-SNR 范围都是默认 `[-5, 15]`，下一步最优先的单变量实验是：只把 CPP 训练集 random-SNR 改为 `[-15, 15]`，其他参数全部保持不变。
 
@@ -139,7 +176,7 @@ small 数据集下 CPP SNR 曲线优于 STFT，但 full 数据集下 CPP 在极�
 - 不启用 RF segmentation
 - 训练、验证、测试 split seed 保持默认 `42`
 
-### 4.1 生成 `[-15, 15]` CPP 训练 H5
+### 5.1 生成 `[-15, 15]` CPP 训练 H5
 
 注意：输出路径使用新目录，避免覆盖现有 full CPP H5。
 
@@ -157,7 +194,7 @@ python scripts/precompute_cpp_h5.py \
   --device cuda:1
 ```
 
-### 4.2 训练新的 CPP checkpoint
+### 5.2 训练新的 CPP checkpoint
 
 ```bash
 python scripts/train.py \
@@ -169,7 +206,7 @@ python scripts/train.py \
   --device cuda:1
 ```
 
-### 4.3 用同一 SNR 评估脚本测试
+### 5.3 用同一 SNR 评估脚本测试
 
 ```bash
 python scripts/eval_snr_accuracy_cpp.py \
@@ -180,7 +217,7 @@ python scripts/eval_snr_accuracy_cpp.py \
   --output-png outputs/figures/cpp_norm_logz_mean_awgn_m15_15_snr_accuracy.png
 ```
 
-### 4.4 对比对象
+### 5.4 对比对象
 
 至少比较三条曲线：
 
@@ -202,7 +239,28 @@ python scripts/eval_snr_accuracy_cpp.py \
 
 如果极低 SNR 没有明显提升，则应转向 CPP 特征参数和模型结构排查。
 
-## 5. Per-class 低 SNR 诊断
+### 5.5 过拟合验证对照
+
+为判断过拟合是否损害 `-15 dB` 和 `-10 dB` 泛化，建议增加两个低成本对照。
+
+第一，评估较早 epoch 的 checkpoint：
+
+- 如果训练过程中保存了 epoch 20、33、49 等 checkpoint，分别跑同一 SNR 评估。
+- 如果较早 checkpoint 在 `-15 dB` 和 `-10 dB` 更好，但 `-5 dB` 以上略差，说明后期训练确实牺牲了分布外泛化。
+- 如果较早 checkpoint 低 SNR 也不如当前 best checkpoint，说明过拟合不是主要原因。
+
+第二，增加轻量正则化训练：
+
+- 在 CPP 训练中加入 `weight_decay=1e-4` 或 `5e-4`。
+- 或将 early stopping `patience` 从 `10` 降到 `5`。
+- 其他参数保持不变，避免和 `[-15, 15]` 训练范围实验混在一起。
+
+判定方式：
+
+- 如果正则化后 `-15 dB` 和 `-10 dB` 提升，而 `-5 dB` 以上保持接近，说明过拟合是重要因素。
+- 如果正则化后低 SNR 没有改善，则优先继续验证 `[-15, 15]` 训练范围或 CPP 特征参数。
+
+## 6. Per-class 低 SNR 诊断
 
 只看整体 accuracy 不足以判断 CPP 的问题来源。下一步应在低 SNR 点输出每类准确率和混淆矩阵。
 
@@ -224,13 +282,13 @@ python scripts/eval_snr_accuracy_cpp.py \
 - 如果所有类别都普遍下降，说明问题更可能来自 CPP 特征在极低 SNR 下整体信号结构被噪声破坏，或者当前训练策略没有学到足够鲁棒的 CPP 表征。
 - 如果 CPP 在低 SNR 下集中预测为某几个类别，需要重点检查类别不均衡、训练 split、以及这些类别的随机噪声增强后特征是否过于相似。
 
-## 6. 后续才考虑的方向
+## 7. 后续才考虑的方向
 
 在完成训练 SNR 范围对照之前，不建议直接扩大 CPP 参数搜索。否则变量过多，难以判断改进来自哪里。
 
 如果 `[-15, 15]` random-SNR 训练后，CPP 在 `-15 dB` 和 `-10 dB` 仍明显低于 STFT，再进入以下排查。
 
-### 6.1 比较 segment 合并方式
+### 7.1 比较 segment 合并方式
 
 比较：
 
@@ -242,7 +300,7 @@ python scripts/eval_snr_accuracy_cpp.py \
 - `mean` 合并可能稀释短时有效循环平稳峰值。
 - `max` 合并可能更保留局部显著峰值，但也可能更容易放大噪声峰值。
 
-### 6.2 比较 FAM 参数
+### 7.2 比较 FAM 参数
 
 比较：
 
@@ -254,7 +312,7 @@ python scripts/eval_snr_accuracy_cpp.py \
 - `256/256` 频率分辨率更高，但低 SNR 下估计可能更稀疏、更不稳定。
 - `64/64` 频率分辨率更低，但统计上可能更平滑，低 SNR 下可能更稳。
 
-### 6.3 检查模型结构
+### 7.3 检查模型结构
 
 当前 CPP 使用 `resnet18-small-stem`，已经比标准 ResNet-18 更适合小尺寸 CPP 图。
 
@@ -266,9 +324,9 @@ python scripts/eval_snr_accuracy_cpp.py \
 
 不建议过早引入复杂模型。应先确认 CPP 特征和训练数据分布没有明显问题。
 
-## 7. 判定标准
+## 8. 判定标准
 
-### 7.1 支持“CPP 可通过扩展训练 SNR 覆盖补偿”的证据
+### 8.1 支持“CPP 可通过扩展训练 SNR 覆盖补偿”的证据
 
 满足以下条件时，可以认为 CPP 的极低 SNR 短板主要来自训练分布覆盖不足，且可以通过扩展训练 SNR 范围补偿：
 
@@ -277,7 +335,15 @@ python scripts/eval_snr_accuracy_cpp.py \
 - full SNR 曲线整体更接近 STFT。
 - per-class 结果显示大多数类别低 SNR 都有改善。
 
-### 7.2 支持“CPP 特征参数不足”的证据
+### 8.2 支持“过拟合削弱 CPP 分布外泛化”的证据
+
+满足以下条件时，可以认为过拟合是 CPP 极低 SNR 外推弱的重要因素：
+
+- 较早 epoch checkpoint 在 `-15 dB` 和 `-10 dB` 明显优于当前 best-val checkpoint。
+- 加入 `weight_decay` 或缩短 early stopping 后，低 SNR 提升且中高 SNR 不明显下降。
+- 训练集 loss 继续下降，但 val accuracy 和低 SNR accuracy 不再提升。
+
+### 8.3 支持“CPP 特征参数不足”的证据
 
 满足以下条件时，应转向 FAM 参数和合并方式：
 
@@ -285,7 +351,7 @@ python scripts/eval_snr_accuracy_cpp.py \
 - CPP 在低 SNR 下仍明显低于 STFT。
 - per-class 结果显示大多数类别普遍下降，而不是个别类别问题。
 
-### 7.3 支持“类别或数据分布问题”的证据
+### 8.4 支持“类别或数据分布问题”的证据
 
 满足以下条件时，应优先做类别级分析：
 
@@ -293,7 +359,7 @@ python scripts/eval_snr_accuracy_cpp.py \
 - 混淆矩阵显示错误集中在固定类别对之间。
 - small 数据集表现好，但 full 数据集中新增文件导致某些类别显著退化。
 
-## 8. 当前最可能方向
+## 9. 当前最可能方向
 
 当前最可能的方向是：
 
