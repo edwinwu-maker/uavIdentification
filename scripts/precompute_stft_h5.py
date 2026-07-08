@@ -19,7 +19,8 @@ Usage:
   python scripts/precompute_stft_h5.py --data-dir ... --max-files 1
   python scripts/precompute_stft_h5.py --data-dir ... --files-per-class 1
   python scripts/precompute_stft_h5.py --data-dir ... --max-samples-per-file 1
-  python scripts/precompute_stft_h5.py --data-dir ... --random-snr --snr-min -5 --snr-max 15 --noise-seed 42
+  python scripts/precompute_stft_h5.py --data-dir ... --snr-min -5 --snr-max 15 --noise-seed 42
+  python scripts/precompute_stft_h5.py --data-dir ... --clean
 """
 
 import argparse
@@ -55,8 +56,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-dir", type=str, default=default_raw_data_dir(),
                         help="Directory containing .mat files")
     parser.add_argument("--output-dir", type=str, default=None,
-                        help="Directory for output .h5 files (default: <data-dir-parent>/DroneRFa_stft_h5, "
-                             "or DroneRFa_stft_awgn_random_h5 with --random-snr)")
+                        help="Directory for output .h5 files (default: <data-dir-parent>/DroneRFa_stft_awgn_random_h5, "
+                             "or DroneRFa_stft_h5 with --clean)")
     parser.add_argument("--sample-length", type=int, default=SAMPLE_LENGTH,
                         help="Number of IQ samples per output stft")
     parser.add_argument("--batch-size", type=int, default=8,
@@ -70,14 +71,14 @@ def parse_args() -> argparse.Namespace:
                         help="Process at most this many .mat files per selected class")
     parser.add_argument("--max-samples-per-file", type=int, default=None,
                         help="Process at most this many samples from each .mat file")
-    parser.add_argument("--random-snr", action="store_true",
-                        help="Add random-SNR AWGN on raw IQ before STFT precompute")
+    parser.add_argument("--clean", action="store_true",
+                        help="Skip AWGN noise; use clean IQ data for STFT precompute")
     parser.add_argument("--snr-min", type=float, default=-5.0,
-                        help="Minimum SNR in dB for --random-snr")
+                        help="Minimum SNR in dB for AWGN")
     parser.add_argument("--snr-max", type=float, default=15.0,
-                        help="Maximum SNR in dB for --random-snr")
+                        help="Maximum SNR in dB for AWGN")
     parser.add_argument("--noise-seed", type=int, default=42,
-                        help="Seed for deterministic random-SNR AWGN")
+                        help="Seed for deterministic AWGN")
     args = parser.parse_args()
     if args.snr_min > args.snr_max:
         parser.error("--snr-min must be <= --snr-max")
@@ -94,7 +95,7 @@ def process_one_mat(
     batch_size: int,
     device: str,
     max_samples_per_file: int | None,
-    random_snr: bool = False,
+    random_snr: bool = True,
     snr_min: float = -5.0,
     snr_max: float = 15.0,
     noise_seed: int = 42,
@@ -166,10 +167,10 @@ def main() -> None:
     data_dir = os.path.expanduser(args.data_dir)
     if args.output_dir:
         output_dir = os.path.expanduser(args.output_dir)
-    elif args.random_snr:
-        output_dir = str(Path(data_dir).parent / "DroneRFa_stft_awgn_random_h5")
-    else:
+    elif args.clean:
         output_dir = str(Path(data_dir).parent / "DroneRFa_stft_h5")
+    else:
+        output_dir = str(Path(data_dir).parent / "DroneRFa_stft_awgn_random_h5")
     device = "cuda:0" if args.device == "cuda" else args.device
 
     logger.info("Using device: %s", device)
@@ -184,7 +185,7 @@ def main() -> None:
             "batch_size": args.batch_size,
             "device": device,
             "max_samples_per_file": args.max_samples_per_file,
-            "random_snr": args.random_snr,
+            "random_snr": not args.clean,
             "snr_min": args.snr_min,
             "snr_max": args.snr_max,
             "noise_seed": args.noise_seed,
