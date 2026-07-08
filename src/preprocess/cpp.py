@@ -7,50 +7,43 @@ from collections.abc import Iterator
 import numpy as np
 import torch
 
-from src.preprocess.fam_constants import FAM_ALPHA_RANGE, FAM_F_RANGE
-from src.preprocess.fam_torch import fam_scf_grid_torch
+from src.preprocess.fam_defaults import FAM_ALPHA_RANGE, FAM_F_RANGE
+from src.preprocess.fam_torch import fam_grid_torch
 
 SUPPORTED_FAM_MERGE_MODES = ("mean", "max")
+SUPPORTED_CPP_NORMALIZATION_MODES = (
+    "max",
+    "log-zscore-sample",
+    "log_zscore_sample",
+    "log-zscore-dataset",
+    "log_zscore_dataset",
+)
 DEFAULT_SEGMENT_SAMPLES = 262144
 
 
-def compute_fam_grid(
-    x: torch.Tensor,
-    *,
-    f_bins: int = 257,
-    alpha_bins: int = 513,
-    f_range: tuple[float, float] = FAM_F_RANGE,
-    alpha_range: tuple[float, float] = FAM_ALPHA_RANGE,
-    normalize: bool = True,
-    device: str = "cpu",
-    pair_chunk_size: int = 8192,
-    fam_nfft: int = 64,
-    fam_hop: int = 64,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Compute FAM points and aggregate them into a normalized |SCF| grid."""
+def normalize_cpp(cpp: np.ndarray, *, mode: str = "max", eps: float = 1e-6) -> np.ndarray:
+    """对单个 CPP 样本执行归一化，输入形状为 (C, H, W)。"""
 
-    if not isinstance(x, torch.Tensor):
-        raise TypeError("x must be a torch.Tensor")
-
-    # CPU/GPU/MPS 统一使用 torch FAM 路径，避免维护两套算法实现。
-    return fam_scf_grid_torch(
-        x,
-        nfft=fam_nfft,
-        hop=fam_hop,
-        window="hann",
-        keep_principal_domain=True,
-        device=device,
-        dtype=torch.complex64,
-        pair_chunk_size=pair_chunk_size,
-        f_bins=f_bins,
-        alpha_bins=alpha_bins,
-        f_range=f_range,
-        alpha_range=alpha_range,
-        normalize=normalize,
-    )
+    cpp = np.asarray(cpp, dtype=np.float32)
+    if mode == "max":
+        max_value = float(np.max(cpp)) if cpp.size else 0.0
+        if max_value > 0:
+            return (cpp / max_value).astype(np.float32)
+        return cpp.astype(np.float32, copy=True)
+    if mode in ("log-zscore-sample", "log_zscore_sample"):
+        logged = np.log1p(cpp).astype(np.float32)
+        mean = logged.mean(axis=(1, 2), keepdims=True)
+        std = logged.std(axis=(1, 2), keepdims=True)
+        centered = logged - mean
+        denominator = np.where(std > eps, std, 1.0)
+        normalized = np.where(std > eps, centered / denominator, 0.0)
+        return normalized.astype(np.float32)
+    if mode in ("log-zscore-dataset", "log_zscore_dataset"):
+        raise NotImplementedError("log_zscore_dataset requires dataset-level statistics and is not implemented here")
+    raise ValueError(f"Unsupported CPP normalization mode: {mode}")
 
 
-def compute_fam_grid_segmented(
+def compute_segmented_fam_grid(
     x: torch.Tensor,
     *,
     segment_samples: int = DEFAULT_SEGMENT_SAMPLES,
@@ -65,7 +58,7 @@ def compute_fam_grid_segmented(
     fam_nfft: int = 64,
     fam_hop: int = 64,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Compute segmented FAM grids and merge them into one |SCF| grid."""
+    """Compute FAM grids over IQ segments and merge them into one |SCF| grid."""
 
     if not isinstance(x, torch.Tensor):
         raise TypeError("x must be a torch.Tensor")
@@ -89,17 +82,20 @@ def compute_fam_grid_segmented(
         segment_samples=segment_samples,
         segment_hop_samples=segment_hop_samples,
     ):
-        image, f_axis, alpha_axis = compute_fam_grid(
+        # CPU/GPU/MPS 统一使用 torch FAM 路径，避免维护两套算法实现。
+        image, f_axis, alpha_axis = fam_grid_torch(
             segment,
+            nfft=fam_nfft,
+            hop=fam_hop,
             f_bins=f_bins,
             alpha_bins=alpha_bins,
+            window="hann",
+            keep_principal_domain=True,
+            device=device,
+            dtype=torch.complex64,
+            pair_chunk_size=pair_chunk_size,
             f_range=f_range,
             alpha_range=alpha_range,
-            normalize=False,
-            device=device,
-            pair_chunk_size=pair_chunk_size,
-            fam_nfft=fam_nfft,
-            fam_hop=fam_hop,
         )
 
         if merge == "max":
@@ -166,7 +162,7 @@ def compute_cpp(
     if not isinstance(ch1, torch.Tensor):
         raise TypeError("ch1 must be a torch.Tensor")
 
-    image0, f_axis, alpha_axis = compute_fam_grid_segmented(
+    image0, f_axis, alpha_axis = compute_segmented_fam_grid(
         ch0,
         segment_samples=segment_samples,
         segment_hop_samples=segment_hop_samples,
@@ -178,7 +174,7 @@ def compute_cpp(
         fam_nfft=fam_nfft,
         fam_hop=fam_hop,
     )
-    image1, _, _ = compute_fam_grid_segmented(
+    image1, _, _ = compute_segmented_fam_grid(
         ch1,
         segment_samples=segment_samples,
         segment_hop_samples=segment_hop_samples,

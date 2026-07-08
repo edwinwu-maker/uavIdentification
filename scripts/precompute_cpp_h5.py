@@ -31,9 +31,9 @@ from src.data.drone_rfa_io import count_iq_samples, parse_label, read_iq_batch
 from src.preprocess.cpp import (
     compute_cpp,
     DEFAULT_SEGMENT_SAMPLES,
+    normalize_cpp,
     SUPPORTED_FAM_MERGE_MODES,
 )
-from src.preprocess.cpp_normalization import normalize_cpp
 from src.preprocess.h5_precompute import run_precompute_batch, output_h5_path
 from src.preprocess.random_snr_awgn import add_random_snr_awgn
 from src.preprocess.rf_segmentation import segment_predominant_rf

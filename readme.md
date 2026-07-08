@@ -60,7 +60,7 @@ python <script-or-command>
 │   │   ├── random_snr_awgn.py        # 随机 SNR 加性高斯白噪声增强
 │   │   ├── rf_segmentation.py        # RF 片段选择与截取工具
 │   │   ├── stft.py                   # STFT 频谱图特征生成
-│   │   ├── fam_constants.py          # FAM 相关常量与边界定义
+│   │   ├── fam_defaults.py           # FAM 默认坐标范围
 │   │   ├── cpp.py                    # CPP/FAM 网格生成与双通道 CPP 特征组装
 │   │   └── fam_torch.py              # PyTorch FAM/SCF 计算工具，支持 CPU/CUDA/MPS
 │   ├── training/

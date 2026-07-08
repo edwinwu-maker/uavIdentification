@@ -41,8 +41,7 @@ from src.evaluation.snr_accuracy import (
     save_snr_accuracy_plot,
 )
 from src.models.resnet import NUM_CLASSES, build_model
-from src.preprocess.cpp import compute_cpp
-from src.preprocess.cpp_normalization import normalize_cpp
+from src.preprocess.cpp import compute_cpp, normalize_cpp
 from src.preprocess.rf_segmentation import segment_predominant_rf
 from src.training.checkpoint import load_checkpoint
 from src.utils.device import default_device

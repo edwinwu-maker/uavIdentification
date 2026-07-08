@@ -1,22 +1,25 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from typing import Optional
+from typing import Final, Optional
 
 import numpy as np
 import torch
 
-from src.preprocess.fam_constants import (
+from src.preprocess.fam_defaults import (
     FAM_ALPHA_RANGE,
     FAM_F_RANGE,
-    FAM_NYQUIST_BIN,
-    PRINCIPAL_DOMAIN_BOUNDARY,
-    SUPPORTED_FAM_WINDOWS,
 )
 
 
 # 声明模块的公开接口，IDE 和静态检查工具依此识别公开 API。
-__all__ = ["fam_scf_grid_torch"]
+__all__ = ["fam_grid_torch"]
+
+_FAM_HAMMING_WINDOWS: Final[tuple[str, ...]] = ("hamming", "hamm")
+_FAM_HANN_WINDOWS: Final[tuple[str, ...]] = ("hann", "hanning")
+_FAM_RECT_WINDOWS: Final[tuple[str, ...]] = ("rect", "boxcar", "rectangle")
+_PRINCIPAL_DOMAIN_BOUNDARY: Final[float] = 0.5
+_FAM_NYQUIST_BIN: Final[float] = -0.5
 
 
 def _resolve_device(device: str | torch.device) -> torch.device:
@@ -44,12 +47,12 @@ def _window(
     dtype: torch.dtype,
 ) -> torch.Tensor:
     name = name.lower()
-    if name in SUPPORTED_FAM_WINDOWS[:2]:
+    if name in _FAM_HAMMING_WINDOWS:
         # Match NumPy's np.hamming/np.hanning definitions used by the CPU FAM path.
         return torch.hamming_window(nfft, periodic=False, device=device, dtype=dtype)
-    if name in SUPPORTED_FAM_WINDOWS[2:4]:
+    if name in _FAM_HANN_WINDOWS:
         return torch.hann_window(nfft, periodic=False, device=device, dtype=dtype)
-    if name in SUPPORTED_FAM_WINDOWS[4:]:
+    if name in _FAM_RECT_WINDOWS:
         return torch.ones(nfft, device=device, dtype=dtype)
     raise ValueError(f"unsupported window: {name}")
 
@@ -167,7 +170,7 @@ def _iter_fam_point_batches_torch(
 
     # Keep the same Nyquist-bin convention as the CPU FAM path to avoid asymmetric
     # edge artifacts near the principal-domain boundary.
-    nyquist = torch.tensor(FAM_NYQUIST_BIN, device=resolved_device, dtype=real_dtype)
+    nyquist = torch.tensor(_FAM_NYQUIST_BIN, device=resolved_device, dtype=real_dtype)
     valid = (~torch.isclose(freqs[k_all], nyquist)) & (
         ~torch.isclose(freqs[l_all], nyquist)
     )
@@ -197,7 +200,7 @@ def _iter_fam_point_batches_torch(
         # f[mask], alpha[mask], and z[mask] have shape [kept_point_count]:
         # principal domain 内保留下来的展平 FAM 点。
         if keep_principal_domain:
-            mask = torch.abs(f) + 0.5 * torch.abs(alpha) < PRINCIPAL_DOMAIN_BOUNDARY
+            mask = torch.abs(f) + 0.5 * torch.abs(alpha) < _PRINCIPAL_DOMAIN_BOUNDARY
             if not torch.any(mask):
                 continue
             yield f[mask], alpha[mask], z[mask]
@@ -205,24 +208,25 @@ def _iter_fam_point_batches_torch(
             yield f.reshape(-1), alpha.reshape(-1), z.reshape(-1)
 
 
-def fam_scf_grid_torch(
+def fam_grid_torch(
     x: torch.Tensor,
     *,
-    nfft: int = 256,
-    hop: int = 64,
+    nfft: int,
+    hop: int,
+    f_bins: int,
+    alpha_bins: int,
     n_blocks: Optional[int] = None,
     window: str = "hamming",
     keep_principal_domain: bool = True,
-    normalize: bool = True,
     device: str | torch.device = "cuda",
     dtype: torch.dtype = torch.complex64,
     pair_chunk_size: int = 8192,
-    f_bins: int = 257,
-    alpha_bins: int = 513,
     f_range: tuple[float, float] = FAM_F_RANGE,
     alpha_range: tuple[float, float] = FAM_ALPHA_RANGE,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Estimate FAM and aggregate |SCF| directly into a grid on the torch device."""
+    """
+    Use FAM to estimate |SCF| and aggregate it into a grid on the torch device.
+    """
 
     if not isinstance(x, torch.Tensor):
         raise TypeError("x must be a torch.Tensor")
@@ -267,9 +271,6 @@ def fam_scf_grid_torch(
     count_mask = image_count > 0
     image[count_mask] = image_sum[count_mask] / image_count[count_mask]
     image = image.reshape(alpha_bins, f_bins)
-
-    if normalize and torch.max(image) > 0:
-        image = image / torch.max(image)
 
     f_axis = np.linspace(f_range[0], f_range[1], f_bins)
     alpha_axis = np.linspace(alpha_range[0], alpha_range[1], alpha_bins)
