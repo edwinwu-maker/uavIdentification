@@ -217,7 +217,7 @@ def evaluate_snr_accuracy(
                         cpp_batch.append(normalize_cpp(cpp, mode=cpp_normalization))
                         labels.append(record.label)
 
-                    inputs = torch.from_numpy(np.stack(cpp_batch, axis=0)).to(torch_device)
+                    inputs = torch.stack(cpp_batch, dim=0).to(torch_device)
                     logits = model(inputs)
                     preds = torch.argmax(logits, dim=1).cpu().numpy()
                     labels_np = np.asarray(labels, dtype=np.int64)

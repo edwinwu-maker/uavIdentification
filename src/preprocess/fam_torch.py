@@ -223,7 +223,7 @@ def fam_grid_torch(
     pair_chunk_size: int = 8192,
     f_range: tuple[float, float] = FAM_F_RANGE,
     alpha_range: tuple[float, float] = FAM_ALPHA_RANGE,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[torch.Tensor, np.ndarray, np.ndarray]:
     """
     Use FAM to estimate |SCF| and aggregate it into a grid on the torch device.
     """
@@ -274,4 +274,4 @@ def fam_grid_torch(
 
     f_axis = np.linspace(f_range[0], f_range[1], f_bins)
     alpha_axis = np.linspace(alpha_range[0], alpha_range[1], alpha_bins)
-    return image.detach().cpu().numpy(), f_axis, alpha_axis
+    return image, f_axis, alpha_axis

@@ -21,23 +21,24 @@ SUPPORTED_CPP_NORMALIZATION_MODES = (
 DEFAULT_SEGMENT_SAMPLES = 262144
 
 
-def normalize_cpp(cpp: np.ndarray, *, mode: str = "max", eps: float = 1e-6) -> np.ndarray:
+def normalize_cpp(cpp: torch.Tensor, *, mode: str = "max", eps: float = 1e-6) -> torch.Tensor:
     """对单个 CPP 样本执行归一化，输入形状为 (C, H, W)。"""
 
-    cpp = np.asarray(cpp, dtype=np.float32)
+    if not isinstance(cpp, torch.Tensor):
+        raise TypeError("cpp must be a torch.Tensor")
+
+    cpp = cpp.to(dtype=torch.float32)
     if mode == "max":
-        max_value = float(np.max(cpp)) if cpp.size else 0.0
+        max_value = float(torch.max(cpp)) if cpp.numel() else 0.0
         if max_value > 0:
-            return (cpp / max_value).astype(np.float32)
-        return cpp.astype(np.float32, copy=True)
+            return cpp / max_value
+        return cpp.clone()
     if mode in ("log-zscore-sample", "log_zscore_sample"):
-        logged = np.log1p(cpp).astype(np.float32)
-        mean = logged.mean(axis=(1, 2), keepdims=True)
-        std = logged.std(axis=(1, 2), keepdims=True)
+        logged = torch.log1p(cpp)
+        std, mean = torch.std_mean(logged, dim=(1, 2), keepdim=True, unbiased=False)
         centered = logged - mean
-        denominator = np.where(std > eps, std, 1.0)
-        normalized = np.where(std > eps, centered / denominator, 0.0)
-        return normalized.astype(np.float32)
+        denominator = torch.where(std > eps, std, torch.ones_like(std))
+        return torch.where(std > eps, centered / denominator, torch.zeros_like(centered))
     if mode in ("log-zscore-dataset", "log_zscore_dataset"):
         raise NotImplementedError("log_zscore_dataset requires dataset-level statistics and is not implemented here")
     raise ValueError(f"Unsupported CPP normalization mode: {mode}")
@@ -57,7 +58,7 @@ def compute_segmented_fam_grid(
     pair_chunk_size: int = 8192,
     fam_nfft: int = 64,
     fam_hop: int = 64,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[torch.Tensor, np.ndarray, np.ndarray]:
     """Compute FAM grids over IQ segments and merge them into one |SCF| grid."""
 
     if not isinstance(x, torch.Tensor):
@@ -74,8 +75,10 @@ def compute_segmented_fam_grid(
     if x.ndim != 1:
         raise ValueError("x must be a one-dimensional complex IQ sequence")
 
-    merged = np.zeros((alpha_bins, f_bins), dtype=float)
+    merged: torch.Tensor | None = None
     segment_count = 0
+    f_axis: np.ndarray | None = None
+    alpha_axis: np.ndarray | None = None
 
     for segment in _iter_padded_segments(
         x,
@@ -98,20 +101,24 @@ def compute_segmented_fam_grid(
             alpha_range=alpha_range,
         )
 
+        if merged is None:
+            merged = image.clone() if merge == "max" else torch.zeros_like(image)
+
         if merge == "max":
-            merged = np.maximum(merged, image)
+            merged = torch.maximum(merged, image)
         else:
             merged += image
         segment_count += 1
 
-    if segment_count == 0:
+    if segment_count == 0 or merged is None or f_axis is None or alpha_axis is None:
         raise ValueError("input signal is empty")
 
     if merge == "mean":
         merged = merged / segment_count
 
-    if merged.max() > 0:
-        merged = merged / merged.max()
+    max_value = float(torch.max(merged)) if merged.numel() else 0.0
+    if max_value > 0:
+        merged = merged / max_value
 
     return merged, f_axis, alpha_axis
 
@@ -154,7 +161,7 @@ def compute_cpp(
     pair_chunk_size: int,
     fam_nfft: int = 64,
     fam_hop: int = 64,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[torch.Tensor, np.ndarray, np.ndarray]:
     """Compute one dual-channel CPP matrix and its axes from RF0/RF1 IQ arrays."""
 
     if not isinstance(ch0, torch.Tensor):
@@ -186,5 +193,5 @@ def compute_cpp(
         fam_nfft=fam_nfft,
         fam_hop=fam_hop,
     )
-    cpp = np.stack([image0, image1], axis=0).astype(np.float32)
+    cpp = torch.stack([image0, image1], dim=0).to(dtype=torch.float32)
     return cpp, f_axis.astype(np.float32), alpha_axis.astype(np.float32)

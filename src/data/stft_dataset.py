@@ -29,9 +29,6 @@ class StftDataset(H5FeatureDataset):
         super().__init__(cache_dir, feature_key="stft", dataset_name="Stft")
 
 
-SpectrogramDataset = StftDataset
-
-
 if __name__ == "__main__":
     if os.name == "nt":
         h5_dir = "E:/dataSet/DroneRFa/stft_h5"

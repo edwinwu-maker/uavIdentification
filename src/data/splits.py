@@ -1,8 +1,9 @@
 import torch
 from torch.utils.data import Dataset, Subset, random_split
 
+__all__ = ["split_dataset"]
 
-def split_lengths(
+def _split_lengths(
     total_size: int,
     *,
     train_ratio: float = 0.6,
@@ -23,6 +24,6 @@ def split_dataset(
 ) -> tuple[Subset, Subset, Subset]:
     return random_split(
         dataset,
-        split_lengths(len(dataset), train_ratio=train_ratio, val_ratio=val_ratio),
+        _split_lengths(len(dataset), train_ratio=train_ratio, val_ratio=val_ratio),
         generator=torch.Generator().manual_seed(seed),
     )

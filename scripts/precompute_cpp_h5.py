@@ -208,7 +208,10 @@ def process_one_mat(
                     fam_nfft=fam_nfft,
                     fam_hop=fam_hop,
                 )
-                h5f["cpp"][sample_idx] = normalize_cpp(cpp, mode=cpp_normalization)
+                h5f["cpp"][sample_idx] = normalize_cpp(
+                    cpp,
+                    mode=cpp_normalization,
+                ).detach().cpu().numpy()
                 h5f["labels"][sample_idx] = label
 
             h5f.create_dataset("f_axis", data=f_axis)
