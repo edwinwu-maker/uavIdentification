@@ -26,6 +26,7 @@ from src.training.checkpoint import load_checkpoint
 from src.training.evaluator import evaluate_with_predictions
 from src.training.metrics import compute_metrics, save_confusion_matrix_image
 
+from src.utils.cli import log_current_command
 from src.utils.device import default_device
 from src.utils.feature_specs import get_feature_spec
 from src.utils.logger import logger
@@ -144,7 +145,9 @@ def evaluate(args):
 
 
 def main():
-    evaluate(parse_args())
+    args = parse_args()
+    log_current_command(logger)
+    evaluate(args)
 
 
 if __name__ == "__main__":

@@ -47,6 +47,7 @@ from src.models.resnet import NUM_CLASSES, build_model
 from src.preprocess.cpp import compute_cpp, normalize_cpp
 from src.preprocess.rf_segmentation import segment_predominant_rf
 from src.training.checkpoint import load_checkpoint
+from src.utils.cli import log_current_command
 from src.utils.device import default_device
 from src.utils.logger import logger
 from src.utils.paths import checkpoint_dir, figures_dir, metrics_dir
@@ -303,6 +304,7 @@ def parse_args(argv=None):
 
 def main() -> None:
     args = parse_args()
+    log_current_command(logger)
     evaluate_snr_accuracy(
         data_dir=args.data_dir,
         model_path=args.model_path,

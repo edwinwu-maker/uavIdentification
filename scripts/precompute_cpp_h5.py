@@ -37,6 +37,7 @@ from src.preprocess.cpp import (
 from src.preprocess.h5_precompute import run_precompute_batch, output_h5_path
 from src.preprocess.random_snr_awgn import add_random_snr_awgn
 from src.preprocess.rf_segmentation import segment_predominant_rf
+from src.utils.cli import log_current_command
 from src.utils.logger import logger
 from src.utils.device import default_device
 
@@ -221,6 +222,7 @@ def main() -> None:
     """Run batch conversion from DroneRFa .mat files to CPP .h5 files."""
 
     args = parse_args()
+    log_current_command(logger)
     data_dir = os.path.expanduser(args.data_dir)
     if args.output_dir:
         output_dir = os.path.expanduser(args.output_dir)

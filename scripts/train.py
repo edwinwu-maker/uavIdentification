@@ -22,6 +22,7 @@ from src.data.splits import split_dataset
 from src.models.resnet import NUM_CLASSES, build_model
 from src.training.trainer import train_model
 
+from src.utils.cli import log_current_command
 from src.utils.device import default_device
 from src.utils.feature_specs import get_feature_spec
 from src.utils.logger import logger
@@ -131,7 +132,9 @@ def train(args):
 
 
 def main():
-    train(parse_args())
+    args = parse_args()
+    log_current_command(logger)
+    train(args)
 
 
 if __name__ == "__main__":

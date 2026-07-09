@@ -20,6 +20,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import tqdm
 
+from src.utils.cli import log_current_command
 from src.utils.feature_specs import get_feature_spec
 from src.utils.logger import logger
 from src.visualization.h5_png_export import (
@@ -129,6 +130,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    log_current_command(logger)
     h5_dir = os.path.expanduser(args.h5_dir)
     if args.save_root is None:
         save_root = _default_save_root(h5_dir)
