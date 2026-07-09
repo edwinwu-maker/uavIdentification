@@ -159,6 +159,45 @@ def save_snr_accuracy_csv(rows: list[dict[str, object]], output_csv: str | Path)
         writer.writerows(rows)
 
 
+def format_snr_for_filename(snr_db: float) -> str:
+    """把 SNR 数值转换成稳定、安全的文件名片段。"""
+
+    snr = float(snr_db)
+    if snr < 0:
+        prefix = "m"
+    elif snr > 0:
+        prefix = "p"
+    else:
+        prefix = ""
+
+    value = abs(snr)
+    if value.is_integer():
+        value_text = str(int(value))
+    else:
+        value_text = f"{value:g}".replace(".", "p")
+    return f"{prefix}{value_text}"
+
+
+def save_snr_confusion_matrix(
+    cm: np.ndarray,
+    output_npy: str | Path,
+    output_png: str | Path,
+    *,
+    title: str,
+) -> None:
+    """保存单个 SNR 点的混淆矩阵数组和图片。"""
+
+    npy_path = Path(output_npy)
+    png_path = Path(output_png)
+    npy_path.parent.mkdir(parents=True, exist_ok=True)
+    png_path.parent.mkdir(parents=True, exist_ok=True)
+    np.save(npy_path, cm)
+
+    from src.training.metrics import save_confusion_matrix_image
+
+    save_confusion_matrix_image(cm, png_path, title=title)
+
+
 def save_snr_accuracy_plot(
     rows: list[dict[str, object]],
     output_png: str | Path,

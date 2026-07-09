@@ -24,6 +24,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from sklearn.metrics import confusion_matrix
 from tqdm import tqdm
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -35,10 +36,12 @@ from src.evaluation.snr_accuracy import (
     SampleRecord,
     add_awgn_for_snr,
     build_sample_index,
+    format_snr_for_filename,
     make_record_loader,
     prepare_test_records,
     save_snr_accuracy_csv,
     save_snr_accuracy_plot,
+    save_snr_confusion_matrix,
 )
 from src.models.resnet import NUM_CLASSES, build_model
 from src.preprocess.cpp import compute_cpp, normalize_cpp
@@ -63,6 +66,7 @@ DEFAULT_SEED = 42
 DEFAULT_MODEL_NAME = "best_cpp_model.pth"
 DEFAULT_OUTPUT_CSV = metrics_dir() / "cpp_snr_accuracy.csv"
 DEFAULT_OUTPUT_PNG = figures_dir() / "cpp_snr_accuracy.png"
+DEFAULT_OUTPUT_CM_PREFIX = "cpp_snr_confusion_matrix"
 DEFAULT_RF_FRAME_LEN = 10_000
 DEFAULT_RF_TARGET_LEN = 100_000
 
@@ -89,6 +93,7 @@ def evaluate_snr_accuracy(
     model_path: str,
     output_csv: str | Path = DEFAULT_OUTPUT_CSV,
     output_png: str | Path = DEFAULT_OUTPUT_PNG,
+    output_cm_prefix: str = DEFAULT_OUTPUT_CM_PREFIX,
     device: str = default_device(),
     model_name: str = "resnet18-small-stem",
     batch_size: int = DEFAULT_BATCH_SIZE,
@@ -160,6 +165,8 @@ def evaluate_snr_accuracy(
             rng = np.random.default_rng(seed)
             num_correct = 0
             num_samples = 0
+            all_labels: list[int] = []
+            all_preds: list[int] = []
 
             with torch.inference_mode():
                 test_loader = make_record_loader(test_records, batch_size=batch_size)
@@ -215,8 +222,20 @@ def evaluate_snr_accuracy(
                     labels_np = np.asarray(labels, dtype=np.int64)
                     num_correct += int(np.sum(preds == labels_np))
                     num_samples += len(labels_np)
+                    all_labels.extend(labels_np.tolist())
+                    all_preds.extend(preds.tolist())
 
             accuracy = float(num_correct / num_samples) if num_samples else 0.0
+            snr_name = format_snr_for_filename(float(snr_db))
+            cm = confusion_matrix(all_labels, all_preds, labels=range(NUM_CLASSES))
+            cm_npy = metrics_dir() / f"{output_cm_prefix}_snr_{snr_name}.npy"
+            cm_png = figures_dir() / f"{output_cm_prefix}_snr_{snr_name}.png"
+            save_snr_confusion_matrix(
+                cm,
+                cm_npy,
+                cm_png,
+                title=f"CPP Confusion Matrix ({snr_db:g} dB)",
+            )
             rows.append(
                 {
                     "snr_db": float(snr_db),
@@ -226,6 +245,7 @@ def evaluate_snr_accuracy(
                 }
             )
             logger.info("SNR %s dB: %d/%d = %.4f", snr_db, num_correct, num_samples, accuracy)
+            logger.info("SNR %s dB confusion matrix saved to %s and %s", snr_db, cm_npy, cm_png)
 
         save_snr_accuracy_csv(rows, output_csv)
         save_snr_accuracy_plot(rows, output_png, title="CPP SNR-Accuracy Curve")
@@ -248,6 +268,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="CSV path for SNR results")
     parser.add_argument("--output-png", type=str, default=str(DEFAULT_OUTPUT_PNG),
                         help="PNG path for SNR curve")
+    parser.add_argument("--output-cm-prefix", type=str, default=DEFAULT_OUTPUT_CM_PREFIX,
+                        help="Filename prefix for per-SNR confusion matrices in outputs/metrics and outputs/figures")
     parser.add_argument("--device", type=str, default=default_device(),
                         help="Device, e.g. 'cuda:0', 'mps', or 'cpu'")
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
@@ -286,6 +308,7 @@ def main() -> None:
         model_path=args.model_path,
         output_csv=args.output_csv,
         output_png=args.output_png,
+        output_cm_prefix=args.output_cm_prefix,
         device=args.device,
         model_name=args.model,
         batch_size=args.batch_size,
