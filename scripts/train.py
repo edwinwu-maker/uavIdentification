@@ -3,6 +3,7 @@
 Usage:
   python scripts/train.py --feature stft --data-dir ~/Desktop/dataset/DroneRFa_stft_h5 --batch-size 64
   python scripts/train.py --feature cpp --data-dir ~/Desktop/dataset/DroneRFa_cpp_h5 --model resnet18-small-stem --batch-size 64
+  python scripts/train.py --feature cpp --data-dir ... --files-per-class 12 --split-manifest outputs/splits/random12_seed42.csv
 
 """
 
@@ -18,7 +19,7 @@ from torch.utils.data import DataLoader
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from src.data.splits import split_dataset
+from src.data.splits import split_dataset_by_file
 from src.models.resnet import NUM_CLASSES, build_model
 from src.training.trainer import train_model
 
@@ -54,6 +55,10 @@ def build_parser():
     parser.add_argument("--device", type=str, default=default_device(),
                         help="Device, e.g. 'cuda:0', 'cuda:1', 'mps', 'cpu'")
     parser.add_argument("--checkpoint-path", type=str, default=None, help="Checkpoint path or name")
+    parser.add_argument("--files-per-class", type=int, default=None,
+                        help="Randomly select this many source files per class before file-level splitting")
+    parser.add_argument("--split-manifest", type=str, required=True,
+                        help="Shared CSV manifest for file-level train/val/test splitting")
     return parser
 
 
@@ -67,6 +72,7 @@ def parse_args(argv=None):
     args.checkpoint_path = (
         os.path.expanduser(args.checkpoint_path) if args.checkpoint_path is not None else spec.checkpoint_name
     )
+    args.split_manifest = os.path.expanduser(args.split_manifest)
     return args
 
 
@@ -86,14 +92,25 @@ def train(args):
         logger.info("Loaded %d %s samples from %d .h5 files in %s",
                     len(dataset), spec.name, len(set(s[0] for s in dataset.index)), args.data_dir)
 
-        train_ds, val_ds, _test_ds = split_dataset(
+        train_ds, val_ds, _test_ds = split_dataset_by_file(
             dataset,
+            manifest_path=args.split_manifest,
             train_ratio=TRAIN_RATIO,
             val_ratio=VAL_RATIO,
             seed=SPLIT_SEED,
+            files_per_class=args.files_per_class,
         )
         train_size, val_size, test_size = len(train_ds), len(val_ds), len(_test_ds)
         logger.info("Split - train: %d, val: %d, test: %d", train_size, val_size, test_size)
+        split_file_counts = [
+            len({dataset.index[index][0] for index in subset.indices})
+            for subset in (train_ds, val_ds, _test_ds)
+        ]
+        logger.info(
+            "Selected %d files - train: %d, val: %d, test: %d",
+            sum(split_file_counts),
+            *split_file_counts,
+        )
 
         loader_kwargs = dict(
             batch_size=args.batch_size,

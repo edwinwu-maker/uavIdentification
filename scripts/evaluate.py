@@ -1,8 +1,8 @@
 """Evaluate ResNet on pre-computed DroneRFa features.
 
 Usage:
-  python scripts/evaluate.py --feature stft --data-dir ~/Desktop/dataset/droneRFa/stft_h5 --model-path outputs/checkpoints/best_stft_model.pth
-  python scripts/evaluate.py --feature cpp --data-dir ~/Desktop/dataset/droneRFa/cpp_h5 --model resnet18-small-stem --model-path outputs/checkpoints/best_cpp_model.pth
+  python scripts/evaluate.py --feature stft --data-dir ~/Desktop/dataset/droneRFa/stft_h5 --model-path outputs/checkpoints/best_stft_model.pth --files-per-class 12 --split-manifest outputs/splits/random12_seed42.csv
+  python scripts/evaluate.py --feature cpp --data-dir ~/Desktop/dataset/droneRFa/cpp_h5 --model resnet18-small-stem --model-path outputs/checkpoints/best_cpp_model.pth --files-per-class 12 --split-manifest outputs/splits/random12_seed42.csv
 
 """
 
@@ -20,7 +20,7 @@ from torch.utils.data import DataLoader
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from src.data.splits import split_dataset
+from src.data.splits import split_dataset_by_file
 from src.models.resnet import NUM_CLASSES, build_model
 from src.training.checkpoint import load_checkpoint
 from src.training.evaluator import evaluate_with_predictions
@@ -55,6 +55,10 @@ def build_parser():
     parser.add_argument("--device", type=str, default=default_device(),
                         help="Device, e.g. 'cuda:0', 'cuda:1', 'mps', 'cpu'")
     parser.add_argument("--cm-image-path", type=str, default=None, help="Path to save confusion matrix image")
+    parser.add_argument("--files-per-class", type=int, default=None,
+                        help="Validate the number of selected files per class in the split manifest")
+    parser.add_argument("--split-manifest", type=str, required=True,
+                        help="Shared CSV manifest for file-level train/val/test splitting")
     return parser
 
 
@@ -71,6 +75,7 @@ def parse_args(argv=None):
         if args.cm_image_path is not None
         else str(figures_dir() / spec.cm_image_name)
     )
+    args.split_manifest = os.path.expanduser(args.split_manifest)
     return args
 
 
@@ -89,11 +94,13 @@ def evaluate(args):
         logger.info("Loaded %d %s samples from %d .h5 files in %s",
                     len(dataset), spec.name, len(set(s[0] for s in dataset.index)), args.data_dir)
 
-        _, _, test_ds = split_dataset(
+        _, _, test_ds = split_dataset_by_file(
             dataset,
+            manifest_path=args.split_manifest,
             train_ratio=TRAIN_RATIO,
             val_ratio=VAL_RATIO,
             seed=SPLIT_SEED,
+            files_per_class=args.files_per_class,
         )
         logger.info("Test set size: %d", len(test_ds))
 

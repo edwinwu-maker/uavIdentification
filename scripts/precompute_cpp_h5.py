@@ -69,7 +69,8 @@ def parse_args() -> argparse.Namespace:
                         help="FAM FFT size")
     parser.add_argument("--fam-hop", type=int, default=256,
                         help="FAM hop size")
-    parser.add_argument("--cpp-normalization", choices=("max", "log-zscore-sample"), default="max",
+    parser.add_argument("--cpp-normalization", choices=("max", "log-zscore-sample"),
+                        default="log-zscore-sample",
                         help="CPP normalization mode")
     parser.add_argument("--f-bins", type=int, default=F_BINS,
                         help="Number of frequency bins in the CPP grid")
@@ -122,7 +123,7 @@ def process_one_mat(
     device: str,
     pair_chunk_size: int,
     max_samples_per_file: int | None,
-    cpp_normalization: str = "max",
+    cpp_normalization: str = "log-zscore-sample",
     fam_nfft: int = 256,
     fam_hop: int = 256,
     use_rf_segmentation: bool = False,

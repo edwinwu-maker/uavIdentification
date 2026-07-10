@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import os
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -19,7 +20,7 @@ from src.data.drone_rfa_io import (
     group_mat_files_by_class,
     parse_label,
 )
-from src.data.splits import split_dataset
+from src.data.splits import split_records_by_file
 
 
 @dataclass(frozen=True)
@@ -94,26 +95,24 @@ def prepare_test_records(
     seed: int,
     train_ratio: float,
     val_ratio: float,
+    split_manifest: str | Path,
+    files_per_class: int | None = None,
 ) -> tuple[list[SampleRecord], int, int]:
     """按现有训练划分规则获取测试样本，并返回 train/val 计数用于日志。"""
 
     if not sample_index:
         raise ValueError(f"No .mat samples found in {data_dir}")
 
-    if len(sample_index) < 3 or (train_ratio <= 0.0 and val_ratio <= 0.0):
-        train_count = 0
-        val_count = 0
-        test_records = list(sample_index)
-    else:
-        train_ds, val_ds, test_ds = split_dataset(
-            sample_index,
-            train_ratio=train_ratio,
-            val_ratio=val_ratio,
-            seed=seed,
-        )
-        train_count = len(train_ds)
-        val_count = len(val_ds)
-        test_records = [test_ds[i] for i in range(len(test_ds))]
+    train_records, val_records, test_records = split_records_by_file(
+        sample_index,
+        manifest_path=split_manifest,
+        train_ratio=train_ratio,
+        val_ratio=val_ratio,
+        seed=seed,
+        files_per_class=files_per_class,
+    )
+    train_count = len(train_records)
+    val_count = len(val_records)
 
     if max_samples is not None:
         test_records = test_records[:max_samples]
@@ -121,6 +120,64 @@ def prepare_test_records(
         raise ValueError("No test samples available after splitting and filtering")
 
     return test_records, train_count, val_count
+
+
+def save_prediction_diagnostics(
+    rows: list[dict[str, object]],
+    *,
+    predictions_csv: str | Path | None,
+    per_file_csv: str | Path | None,
+) -> None:
+    """保存逐样本预测及按 SNR/源文件聚合的诊断结果。"""
+
+    if predictions_csv is not None:
+        path = Path(predictions_csv)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fieldnames = ["snr_db", "source_file", "sample_idx", "true_label", "pred_label", "correct"]
+        with path.open("w", newline="", encoding="utf-8") as file_obj:
+            writer = csv.DictWriter(file_obj, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+
+    if per_file_csv is None:
+        return
+
+    grouped: dict[tuple[float, str, int], list[dict[str, object]]] = defaultdict(list)
+    for row in rows:
+        key = (float(row["snr_db"]), str(row["source_file"]), int(row["true_label"]))
+        grouped[key].append(row)
+
+    output_rows = []
+    for (snr_db, source_file, true_label), file_rows in sorted(grouped.items()):
+        correct = sum(int(row["correct"]) for row in file_rows)
+        wrong_predictions = Counter(
+            int(row["pred_label"]) for row in file_rows if not int(row["correct"])
+        )
+        if wrong_predictions:
+            top_wrong_label, top_wrong_count = wrong_predictions.most_common(1)[0]
+        else:
+            top_wrong_label, top_wrong_count = "", 0
+        output_rows.append({
+            "snr_db": snr_db,
+            "source_file": source_file,
+            "true_label": true_label,
+            "num_samples": len(file_rows),
+            "num_correct": correct,
+            "accuracy": correct / len(file_rows),
+            "top_wrong_label": top_wrong_label,
+            "top_wrong_count": top_wrong_count,
+        })
+
+    path = Path(per_file_csv)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = [
+        "snr_db", "source_file", "true_label", "num_samples", "num_correct",
+        "accuracy", "top_wrong_label", "top_wrong_count",
+    ]
+    with path.open("w", newline="", encoding="utf-8") as file_obj:
+        writer = csv.DictWriter(file_obj, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(output_rows)
 
 
 def add_awgn_for_snr(iq: np.ndarray, snr_db: float, rng: np.random.Generator) -> np.ndarray:

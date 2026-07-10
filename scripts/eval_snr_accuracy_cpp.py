@@ -2,15 +2,19 @@
 
 Usage:
   # CLI — quick evaluation with defaults
-  python scripts/eval_snr_accuracy_cpp.py
-  python scripts/eval_snr_accuracy_cpp.py --data-dir E:/dataSet/DroneRFa --snrs -10 0 10 --max-samples 20
-  python scripts/eval_snr_accuracy_cpp.py --data-dir E:/dataSet/DroneRFa --files-per-class 1 --model resnet18-small-stem
+  python scripts/eval_snr_accuracy_cpp.py --split-manifest outputs/splits/full.csv
+  python scripts/eval_snr_accuracy_cpp.py --data-dir E:/dataSet/DroneRFa --snrs -10 0 10 --split-manifest outputs/splits/full.csv
+  python scripts/eval_snr_accuracy_cpp.py --files-per-class 12 \
+    --split-manifest outputs/splits/select12.csv \
+    --predictions-csv outputs/metrics/select12_cpp_predictions.csv \
+    --per-file-csv outputs/metrics/select12_cpp_per_file.csv
 
   # API — import and call from other scripts
   from scripts.eval_snr_accuracy_cpp import evaluate_snr_accuracy
   rows = evaluate_snr_accuracy(
       data_dir="E:/dataSet/DroneRFa",
       model_path="outputs/checkpoints/best_cpp_model.pth",
+      split_manifest="outputs/splits/full.csv",
       snrs=[0, 10, 20],
       max_samples=50,
   )
@@ -42,6 +46,7 @@ from src.evaluation.snr_accuracy import (
     save_snr_accuracy_csv,
     save_snr_accuracy_plot,
     save_snr_confusion_matrix,
+    save_prediction_diagnostics,
 )
 from src.models.resnet import NUM_CLASSES, build_model
 from src.preprocess.cpp import compute_cpp, normalize_cpp
@@ -108,7 +113,7 @@ def evaluate_snr_accuracy(
     pair_chunk_size: int = DEFAULT_PAIR_CHUNK_SIZE,
     fam_nfft: int = 256,
     fam_hop: int = 256,
-    cpp_normalization: str = "max",
+    cpp_normalization: str = "log-zscore-sample",
     max_files: int | None = None,
     files_per_class: int | None = None,
     max_samples_per_file: int | None = None,
@@ -116,6 +121,9 @@ def evaluate_snr_accuracy(
     seed: int = DEFAULT_SEED,
     train_ratio: float = DEFAULT_TRAIN_RATIO,
     val_ratio: float = DEFAULT_VAL_RATIO,
+    split_manifest: str | Path,
+    predictions_csv: str | Path | None = None,
+    per_file_csv: str | Path | None = None,
     use_rf_segmentation: bool = False,
     rf_frame_len: int = DEFAULT_RF_FRAME_LEN,
     rf_target_len: int | None = DEFAULT_RF_TARGET_LEN,
@@ -127,7 +135,7 @@ def evaluate_snr_accuracy(
         data_dir,
         sample_length=sample_length,
         max_files=max_files,
-        files_per_class=files_per_class,
+        files_per_class=None,
         max_samples_per_file=max_samples_per_file,
     )
 
@@ -138,6 +146,8 @@ def evaluate_snr_accuracy(
         seed=seed,
         train_ratio=train_ratio,
         val_ratio=val_ratio,
+        split_manifest=split_manifest,
+        files_per_class=files_per_class,
     )
 
     logger.info(
@@ -162,6 +172,7 @@ def evaluate_snr_accuracy(
     file_cache = H5FileCache()
     try:
         rows: list[dict[str, object]] = []
+        prediction_rows: list[dict[str, object]] = []
         for snr_db in tqdm(snrs, desc="SNR", unit="snr"):
             rng = np.random.default_rng(seed)
             num_correct = 0
@@ -225,6 +236,15 @@ def evaluate_snr_accuracy(
                     num_samples += len(labels_np)
                     all_labels.extend(labels_np.tolist())
                     all_preds.extend(preds.tolist())
+                    for record, label, pred in zip(batch_records, labels_np, preds):
+                        prediction_rows.append({
+                            "snr_db": float(snr_db),
+                            "source_file": Path(record.path).name,
+                            "sample_idx": int(record.sample_idx),
+                            "true_label": int(label),
+                            "pred_label": int(pred),
+                            "correct": int(label == pred),
+                        })
 
             accuracy = float(num_correct / num_samples) if num_samples else 0.0
             snr_name = format_snr_for_filename(float(snr_db))
@@ -250,6 +270,11 @@ def evaluate_snr_accuracy(
 
         save_snr_accuracy_csv(rows, output_csv)
         save_snr_accuracy_plot(rows, output_png, title="CPP SNR-Accuracy Curve")
+        save_prediction_diagnostics(
+            prediction_rows,
+            predictions_csv=predictions_csv,
+            per_file_csv=per_file_csv,
+        )
         logger.info("Saved CSV to %s", output_csv)
         logger.info("Saved plot to %s", output_png)
         return rows
@@ -284,17 +309,25 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pair-chunk-size", type=int, default=DEFAULT_PAIR_CHUNK_SIZE)
     parser.add_argument("--fam-nfft", type=int, default=256)
     parser.add_argument("--fam-hop", type=int, default=256)
-    parser.add_argument("--cpp-normalization", choices=("max", "log-zscore-sample"), default="max")
+    parser.add_argument("--cpp-normalization", choices=("max", "log-zscore-sample"),
+                        default="log-zscore-sample")
     parser.add_argument("--use-rf-segmentation", action="store_true",
                         help="Apply ST-ESER predominant segment selection after AWGN and before CPP")
     parser.add_argument("--rf-frame-len", type=int, default=DEFAULT_RF_FRAME_LEN)
     parser.add_argument("--rf-target-len", type=int, default=DEFAULT_RF_TARGET_LEN)
     parser.add_argument("--rf-top-k", type=int, default=None)
     parser.add_argument("--max-files", type=int, default=None)
-    parser.add_argument("--files-per-class", type=int, default=None)
+    parser.add_argument("--files-per-class", type=int, default=None,
+                        help="Select this many files per class when creating the manifest, or validate an existing manifest")
     parser.add_argument("--max-samples-per-file", type=int, default=None)
     parser.add_argument("--max-samples", type=int, default=None)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
+    parser.add_argument("--split-manifest", type=str, required=True,
+                        help="Shared CSV manifest for file-level train/val/test splitting")
+    parser.add_argument("--predictions-csv", type=str, default=None,
+                        help="Optional CSV path for per-sample predictions")
+    parser.add_argument("--per-file-csv", type=str, default=None,
+                        help="Optional CSV path for per-SNR, per-file metrics")
     return parser
 
 
@@ -330,6 +363,9 @@ def main() -> None:
         max_samples_per_file=args.max_samples_per_file,
         max_samples=args.max_samples,
         seed=args.seed,
+        split_manifest=args.split_manifest,
+        predictions_csv=args.predictions_csv,
+        per_file_csv=args.per_file_csv,
         use_rf_segmentation=args.use_rf_segmentation,
         rf_frame_len=args.rf_frame_len,
         rf_target_len=args.rf_target_len,

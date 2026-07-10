@@ -21,7 +21,12 @@ SUPPORTED_CPP_NORMALIZATION_MODES = (
 DEFAULT_SEGMENT_SAMPLES = 262144
 
 
-def normalize_cpp(cpp: torch.Tensor, *, mode: str = "max", eps: float = 1e-6) -> torch.Tensor:
+def normalize_cpp(
+    cpp: torch.Tensor,
+    *,
+    mode: str = "log-zscore-sample",
+    eps: float = 1e-6,
+) -> torch.Tensor:
     """对单个 CPP 样本执行归一化，输入形状为 (C, H, W)。"""
 
     if not isinstance(cpp, torch.Tensor):
