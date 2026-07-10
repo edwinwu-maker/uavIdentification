@@ -101,6 +101,15 @@ def select_mat_files(
     return selected
 
 
+def list_mat_file_labels(data_dir: str) -> list[tuple[str, int]]:
+    """仅扫描文件名，返回 manifest 校验所需的原始文件路径和标签。"""
+
+    return [
+        (os.path.join(data_dir, filename), parse_label(filename))
+        for filename in select_mat_files(data_dir)
+    ]
+
+
 def count_iq_samples(
     src: h5py.File,
     *,
@@ -168,6 +177,7 @@ def build_sample_index(
     max_files: int | None = None,
     files_per_class: int | None = None,
     max_samples_per_file: int | None = None,
+    file_ids: set[str] | None = None,
 ) -> list[SampleRecord]:
     """扫描原始 .mat 文件，生成稳定的样本索引。"""
 
@@ -177,6 +187,11 @@ def build_sample_index(
         max_files=max_files,
         files_per_class=files_per_class,
     )
+    if file_ids is not None:
+        mat_files = [
+            filename for filename in mat_files
+            if os.path.splitext(filename)[0] in file_ids
+        ]
     for filename in mat_files:
         path = os.path.join(data_dir, filename)
         label = parse_label(filename)

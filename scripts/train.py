@@ -19,7 +19,7 @@ from torch.utils.data import DataLoader
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from src.data.splits import split_dataset_by_file
+from src.data.splits import prepare_training_split
 from src.models.resnet import NUM_CLASSES, build_model
 from src.training.trainer import train_model
 
@@ -92,13 +92,19 @@ def train(args):
         logger.info("Loaded %d %s samples from %d .h5 files in %s",
                     len(dataset), spec.name, len(set(s[0] for s in dataset.index)), args.data_dir)
 
-        train_ds, val_ds, _test_ds = split_dataset_by_file(
+        manifest_exists = Path(args.split_manifest).is_file()
+        train_ds, val_ds, _test_ds = prepare_training_split(
             dataset,
             manifest_path=args.split_manifest,
             train_ratio=TRAIN_RATIO,
             val_ratio=VAL_RATIO,
             seed=SPLIT_SEED,
             files_per_class=args.files_per_class,
+        )
+        logger.info(
+            "Split manifest %s: %s",
+            "reused" if manifest_exists else "created",
+            args.split_manifest,
         )
         train_size, val_size, test_size = len(train_ds), len(val_ds), len(_test_ds)
         logger.info("Split - train: %d, val: %d, test: %d", train_size, val_size, test_size)

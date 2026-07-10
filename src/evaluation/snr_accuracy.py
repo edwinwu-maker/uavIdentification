@@ -11,44 +11,6 @@ from torch.utils.data import DataLoader
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from src.data.drone_rfa_io import SampleRecord
-from src.data.splits import split_records_by_file
-
-
-def prepare_test_records(
-    sample_index: list[SampleRecord],
-    *,
-    data_dir: str,
-    max_samples: int | None,
-    seed: int,
-    train_ratio: float,
-    val_ratio: float,
-    split_manifest: str | Path,
-    files_per_class: int | None = None,
-) -> tuple[list[SampleRecord], int, int]:
-    """按现有训练划分规则获取测试样本，并返回 train/val 计数用于日志。"""
-
-    if not sample_index:
-        raise ValueError(f"No .mat samples found in {data_dir}")
-
-    train_records, val_records, test_records = split_records_by_file(
-        sample_index,
-        manifest_path=split_manifest,
-        train_ratio=train_ratio,
-        val_ratio=val_ratio,
-        seed=seed,
-        files_per_class=files_per_class,
-    )
-    train_count = len(train_records)
-    val_count = len(val_records)
-
-    if max_samples is not None:
-        test_records = test_records[:max_samples]
-    if not test_records:
-        raise ValueError("No test samples available after splitting and filtering")
-
-    return test_records, train_count, val_count
-
 
 def save_prediction_diagnostics(
     rows: list[dict[str, object]],

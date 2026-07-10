@@ -6,7 +6,7 @@ from pathlib import Path
 import torch
 from torch.utils.data import Dataset, Subset
 
-__all__ = ["split_dataset_by_file", "split_records_by_file"]
+__all__ = ["load_test_file_ids", "load_test_subset", "prepare_training_split"]
 
 SPLIT_NAMES = ("train", "val", "test")
 
@@ -125,10 +125,19 @@ def _load_file_split_manifest(
     files_per_class: int | None,
 ) -> dict[str, str]:
     path = Path(manifest_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"Split manifest does not exist: {path}")
+
     split_by_file: dict[str, str] = {}
     manifest_labels: dict[str, int] = {}
     with path.open(newline="", encoding="utf-8") as file_obj:
-        for row in csv.DictReader(file_obj):
+        reader = csv.DictReader(file_obj)
+        required_columns = {"file_id", "label", "split"}
+        if reader.fieldnames is None or not required_columns.issubset(reader.fieldnames):
+            raise ValueError(
+                "Split manifest must contain columns: file_id, label, split"
+            )
+        for row in reader:
             file_id = row["file_id"]
             split_name = row["split"]
             if split_name not in SPLIT_NAMES:
@@ -137,6 +146,9 @@ def _load_file_split_manifest(
                 raise ValueError(f"Duplicate file_id in split manifest: {file_id}")
             split_by_file[file_id] = split_name
             manifest_labels[file_id] = int(row["label"])
+
+    if not split_by_file:
+        raise ValueError(f"Split manifest is empty: {path}")
 
     missing = sorted(set(split_by_file) - set(file_labels))
     if missing:
@@ -150,6 +162,30 @@ def _load_file_split_manifest(
     )
     if mismatched:
         raise ValueError(f"Split manifest labels do not match the dataset: {mismatched[:5]}")
+
+    dataset_labels = set(file_labels.values())
+    manifest_label_set = set(manifest_labels.values())
+    if manifest_label_set != dataset_labels:
+        missing_labels = sorted(dataset_labels - manifest_label_set)
+        extra_labels = sorted(manifest_label_set - dataset_labels)
+        raise ValueError(
+            "Split manifest class labels do not match the dataset: "
+            f"missing={missing_labels}, extra={extra_labels}"
+        )
+
+    grouped_splits: dict[int, set[str]] = defaultdict(set)
+    for file_id, split_name in split_by_file.items():
+        grouped_splits[manifest_labels[file_id]].add(split_name)
+    incomplete = {
+        label: sorted(set(SPLIT_NAMES) - grouped_splits[label])
+        for label in sorted(dataset_labels)
+        if grouped_splits[label] != set(SPLIT_NAMES)
+    }
+    if incomplete:
+        raise ValueError(
+            "Each class in the split manifest must contain train, val, and test files: "
+            f"{incomplete}"
+        )
 
     if files_per_class is not None:
         grouped_counts = Counter(manifest_labels.values())
@@ -166,70 +202,29 @@ def _load_file_split_manifest(
     return split_by_file
 
 
-def _resolve_file_split(
-    file_labels: dict[str, int],
-    *,
-    manifest_path: str | os.PathLike[str],
-    train_ratio: float,
-    val_ratio: float,
-    seed: int,
-    files_per_class: int | None,
-) -> dict[str, str]:
-    if Path(manifest_path).exists():
-        return _load_file_split_manifest(
-            manifest_path,
-            file_labels,
-            files_per_class=files_per_class,
-        )
-
-    selected_file_labels = _select_files_per_class(
-        file_labels,
-        files_per_class=files_per_class,
-        seed=seed,
-    )
-    split_by_file = _build_file_split(
-        selected_file_labels,
-        train_ratio=train_ratio,
-        val_ratio=val_ratio,
-        seed=seed,
-    )
-    _save_file_split_manifest(manifest_path, selected_file_labels, split_by_file)
-    return split_by_file
-
-
-def _split_indices_by_file(
-    path_labels: list[tuple[str, int]],
-    *,
-    manifest_path: str | os.PathLike[str],
-    train_ratio: float,
-    val_ratio: float,
-    seed: int,
-    files_per_class: int | None,
-) -> tuple[list[int], list[int], list[int]]:
+def _collect_file_labels(path_labels: list[tuple[str, int]]) -> dict[str, int]:
     file_labels: dict[str, int] = {}
     for path, label in path_labels:
         file_id = _file_id(path)
         previous_label = file_labels.setdefault(file_id, label)
         if previous_label != label:
             raise ValueError(f"File has multiple labels: {file_id}")
+    return file_labels
 
-    split_by_file = _resolve_file_split(
-        file_labels,
-        manifest_path=manifest_path,
-        train_ratio=train_ratio,
-        val_ratio=val_ratio,
-        seed=seed,
-        files_per_class=files_per_class,
-    )
+
+def _indices_by_split(
+    path_labels: list[tuple[str, int]],
+    split_by_file: dict[str, str],
+) -> dict[str, list[int]]:
     indices = {name: [] for name in SPLIT_NAMES}
     for index, (path, _label) in enumerate(path_labels):
         split_name = split_by_file.get(_file_id(path))
         if split_name is not None:
             indices[split_name].append(index)
-    return indices["train"], indices["val"], indices["test"]
+    return indices
 
 
-def split_dataset_by_file(
+def prepare_training_split(
     dataset: Dataset,
     *,
     manifest_path: str | os.PathLike[str],
@@ -238,42 +233,73 @@ def split_dataset_by_file(
     seed: int = 42,
     files_per_class: int | None = None,
 ) -> tuple[Subset, Subset, Subset]:
-    """按 H5 源文件隔离划分数据集，并创建或复用 CSV manifest。"""
+    """训练专用：按 H5 源文件创建或复用 CSV manifest。"""
 
     path_labels = [(entry[0], int(entry[2])) for entry in dataset.index]
-    train_indices, val_indices, test_indices = _split_indices_by_file(
-        path_labels,
-        manifest_path=manifest_path,
-        train_ratio=train_ratio,
-        val_ratio=val_ratio,
-        seed=seed,
-        files_per_class=files_per_class,
+    file_labels = _collect_file_labels(path_labels)
+    if Path(manifest_path).is_file():
+        split_by_file = _load_file_split_manifest(
+            manifest_path,
+            file_labels,
+            files_per_class=files_per_class,
+        )
+    else:
+        selected_file_labels = _select_files_per_class(
+            file_labels,
+            files_per_class=files_per_class,
+            seed=seed,
+        )
+        split_by_file = _build_file_split(
+            selected_file_labels,
+            train_ratio=train_ratio,
+            val_ratio=val_ratio,
+            seed=seed,
+        )
+        _save_file_split_manifest(manifest_path, selected_file_labels, split_by_file)
+
+    indices = _indices_by_split(path_labels, split_by_file)
+    return (
+        Subset(dataset, indices["train"]),
+        Subset(dataset, indices["val"]),
+        Subset(dataset, indices["test"]),
     )
-    return Subset(dataset, train_indices), Subset(dataset, val_indices), Subset(dataset, test_indices)
 
 
-def split_records_by_file(
-    records: list,
+def load_test_file_ids(
+    path_labels: list[tuple[str, int]],
     *,
     manifest_path: str | os.PathLike[str],
-    train_ratio: float = 0.6,
-    val_ratio: float = 0.2,
-    seed: int = 42,
-    files_per_class: int | None = None,
-) -> tuple[list, list, list]:
-    """按记录的 path/label 字段进行文件级隔离划分。"""
+) -> set[str]:
+    """严格读取已有 manifest，并返回其中的测试文件 ID。"""
 
-    path_labels = [(record.path, int(record.label)) for record in records]
-    train_indices, val_indices, test_indices = _split_indices_by_file(
+    file_labels = _collect_file_labels(path_labels)
+    split_by_file = _load_file_split_manifest(
+        manifest_path,
+        file_labels,
+        files_per_class=None,
+    )
+    return {
+        file_id for file_id, split_name in split_by_file.items()
+        if split_name == "test"
+    }
+
+
+def load_test_subset(
+    dataset: Dataset,
+    *,
+    manifest_path: str | os.PathLike[str],
+) -> Subset:
+    """严格按已有 manifest 返回预计算特征测试子集。"""
+
+    path_labels = [(entry[0], int(entry[2])) for entry in dataset.index]
+    test_file_ids = load_test_file_ids(
         path_labels,
         manifest_path=manifest_path,
-        train_ratio=train_ratio,
-        val_ratio=val_ratio,
-        seed=seed,
-        files_per_class=files_per_class,
     )
-    return (
-        [records[index] for index in train_indices],
-        [records[index] for index in val_indices],
-        [records[index] for index in test_indices],
-    )
+    test_indices = [
+        index for index, (path, _label) in enumerate(path_labels)
+        if _file_id(path) in test_file_ids
+    ]
+    if not test_indices:
+        raise ValueError("No test samples available from the split manifest")
+    return Subset(dataset, test_indices)
