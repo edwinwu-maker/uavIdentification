@@ -1,6 +1,7 @@
 import os
 import re
 import sys
+from dataclasses import dataclass
 
 import h5py
 import numpy as np
@@ -11,6 +12,30 @@ LABEL_MAPPING = {
     "T1011": 8, "T1100": 9, "T1101": 10, "T1110": 11,
     "T1111": 12, "T10000": 13,
 }
+
+
+@dataclass(frozen=True)
+class SampleRecord:
+    path: str
+    sample_idx: int
+    label: int
+
+
+class H5FileHandleCache:
+    """缓存并统一关闭 HDF5 文件句柄。"""
+
+    def __init__(self) -> None:
+        self._files: dict[str, h5py.File] = {}
+
+    def get(self, path: str) -> h5py.File:
+        if path not in self._files:
+            self._files[path] = h5py.File(path, "r", rdcc_nbytes=64 * 1024 * 1024)
+        return self._files[path]
+
+    def close(self) -> None:
+        for file_obj in self._files.values():
+            file_obj.close()
+        self._files.clear()
 
 
 def default_raw_data_dir() -> str:
@@ -52,6 +77,30 @@ def group_mat_files_by_class(mat_files: list[str]) -> dict[str, list[str]]:
     return grouped
 
 
+def select_mat_files(
+    data_dir: str,
+    *,
+    max_files: int | None = None,
+    files_per_class: int | None = None,
+) -> list[str]:
+    """稳定选择原始 .mat 文件；按类别选择时优先于总文件数限制。"""
+
+    if not os.path.isdir(data_dir):
+        raise FileNotFoundError(f"Raw data directory does not exist: {data_dir}")
+
+    mat_files = sorted(filename for filename in os.listdir(data_dir) if filename.endswith(".mat"))
+    if files_per_class is None:
+        return mat_files[:max_files] if max_files is not None else mat_files
+    if files_per_class <= 0:
+        raise ValueError("files_per_class must be positive")
+
+    grouped = group_mat_files_by_class(mat_files)
+    selected: list[str] = []
+    for class_code in LABEL_MAPPING:
+        selected.extend(grouped[class_code][:files_per_class])
+    return selected
+
+
 def count_iq_samples(
     src: h5py.File,
     *,
@@ -91,3 +140,54 @@ def read_iq_batch(
     iq_batch[:, 0, :].real = rf_i
     iq_batch[:, 0, :].imag = rf_q
     return iq_batch
+
+
+def load_iq_sample(
+    src: h5py.File,
+    record: SampleRecord,
+    *,
+    sample_length: int,
+) -> np.ndarray:
+    """从已打开的 HDF5 文件中读取一条复数 IQ 样本。"""
+
+    rf_channel = rf_channel_for_file(record.path)
+    iq_batch = read_iq_batch(
+        src,
+        rf_channel=rf_channel,
+        sample_length=sample_length,
+        start_idx=record.sample_idx,
+        end_idx=record.sample_idx + 1,
+    )
+    return iq_batch[0]
+
+
+def build_sample_index(
+    data_dir: str,
+    *,
+    sample_length: int,
+    max_files: int | None = None,
+    files_per_class: int | None = None,
+    max_samples_per_file: int | None = None,
+) -> list[SampleRecord]:
+    """扫描原始 .mat 文件，生成稳定的样本索引。"""
+
+    sample_index: list[SampleRecord] = []
+    mat_files = select_mat_files(
+        data_dir,
+        max_files=max_files,
+        files_per_class=files_per_class,
+    )
+    for filename in mat_files:
+        path = os.path.join(data_dir, filename)
+        label = parse_label(filename)
+        rf_channel = rf_channel_for_file(filename)
+        with h5py.File(path, "r") as src:
+            num_samples = count_iq_samples(
+                src,
+                rf_channel=rf_channel,
+                sample_length=sample_length,
+                max_samples=max_samples_per_file,
+            )
+        for sample_idx in range(num_samples):
+            sample_index.append(SampleRecord(path=path, sample_idx=sample_idx, label=label))
+    return sample_index

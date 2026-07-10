@@ -8,10 +8,10 @@ from typing import Any
 
 from tqdm import tqdm
 
-from src.data.drone_rfa_io import LABEL_MAPPING, group_mat_files_by_class
+from src.data.drone_rfa_io import select_mat_files
 from src.utils.logger import logger
 
-__all__ = ["output_h5_path", "run_precompute_batch", "select_mat_files"]
+__all__ = ["output_h5_path", "run_precompute_batch"]
 
 
 def output_h5_path(mat_path: str, output_dir: str) -> str:
@@ -57,31 +57,3 @@ def run_precompute_batch(
 
     logger.info("All done. %d files -> %d %s", len(mat_files), total_samples, log_label)
     return len(mat_files), total_samples
-
-
-def _list_mat_files(data_dir: str) -> list[str]:
-    """输入一个文件夹路径，返回该目录下所有.mat 文件名。"""
-    mat_files = sorted(filename for filename in os.listdir(data_dir) if filename.endswith(".mat"))
-    return mat_files
-
-
-def select_mat_files(
-    data_dir: str,
-    *,
-    max_files: int | None = None,
-    files_per_class: int | None = None,
-) -> list[str]:
-    """选择待处理 .mat 文件；传入类别参数时优先执行按类别均衡抽样。"""
-
-    mat_files = _list_mat_files(data_dir)
-    if files_per_class is None:
-        return mat_files[:max_files] if max_files is not None else mat_files
-
-    if files_per_class <= 0:
-        raise ValueError("files_per_class must be positive")
-
-    grouped = group_mat_files_by_class(mat_files)
-    selected: list[str] = []
-    for class_code in LABEL_MAPPING:
-        selected.extend(grouped[class_code][:files_per_class])
-    return selected

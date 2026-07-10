@@ -34,12 +34,14 @@ from tqdm import tqdm
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from src.data.drone_rfa_io import default_raw_data_dir, read_iq_batch, rf_channel_for_file
-from src.evaluation.snr_accuracy import (
-    H5FileCache,
-    SampleRecord,
-    add_awgn_for_snr,
+from src.data.drone_rfa_io import (
+    H5FileHandleCache,
     build_sample_index,
+    default_raw_data_dir,
+    load_iq_sample,
+)
+from src.evaluation.snr_accuracy import (
+    add_awgn_for_snr,
     format_snr_for_filename,
     make_record_loader,
     prepare_test_records,
@@ -71,26 +73,6 @@ DEFAULT_MODEL_NAME = "best_stft_model.pth"
 DEFAULT_OUTPUT_CSV = metrics_dir() / "stft_snr_accuracy.csv"
 DEFAULT_OUTPUT_PNG = figures_dir() / "stft_snr_accuracy.png"
 DEFAULT_OUTPUT_CM_PREFIX = "stft_snr_confusion_matrix"
-
-def _load_iq_batch(
-    file_cache: H5FileCache,
-    record: SampleRecord,
-    *,
-    sample_length: int,
-) -> np.ndarray:
-    """从缓存里的 HDF5 文件中读取某一条样本，并把它转换成单个复数 IQ 样本(np.complex64)返回"""
-    src = file_cache.get(record.path)
-    rf_channel = rf_channel_for_file(record.path)
-    iq = read_iq_batch(
-        src,
-        rf_channel=rf_channel,
-        sample_length=sample_length,
-        start_idx=record.sample_idx,
-        end_idx=record.sample_idx + 1,
-    )
-    # 这里取第 0 个样本，返回 (1, sample_length)。
-    return iq[0]
-
 
 def evaluate_snr_accuracy(
     *,
@@ -154,7 +136,7 @@ def evaluate_snr_accuracy(
     model.load_state_dict(state_dict)
     model.eval()
 
-    file_cache = H5FileCache()
+    file_cache = H5FileHandleCache()
     try:
         rows: list[dict[str, object]] = []
         prediction_rows: list[dict[str, object]] = []
@@ -178,7 +160,11 @@ def evaluate_snr_accuracy(
                     iq_batch = []
                     labels = []
                     for record in batch_records:
-                        iq = _load_iq_batch(file_cache, record, sample_length=sample_length)
+                        iq = load_iq_sample(
+                            file_cache.get(record.path),
+                            record,
+                            sample_length=sample_length,
+                        )
                         noisy_iq = add_awgn_for_snr(iq, snr_db, rng)
                         iq_batch.append(noisy_iq)
                         labels.append(record.label)

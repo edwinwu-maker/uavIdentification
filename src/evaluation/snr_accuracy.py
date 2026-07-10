@@ -1,12 +1,9 @@
 from __future__ import annotations
 
 import csv
-import os
 from collections import Counter, defaultdict
-from dataclasses import dataclass
 from pathlib import Path
 
-import h5py
 import matplotlib
 import numpy as np
 from torch.utils.data import DataLoader
@@ -14,80 +11,8 @@ from torch.utils.data import DataLoader
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from src.data.drone_rfa_io import (
-    LABEL_MAPPING,
-    count_iq_samples,
-    group_mat_files_by_class,
-    parse_label,
-    rf_channel_for_file,
-)
+from src.data.drone_rfa_io import SampleRecord
 from src.data.splits import split_records_by_file
-
-
-@dataclass(frozen=True)
-class SampleRecord:
-    path: str
-    sample_idx: int
-    label: int
-
-
-class H5FileCache:
-    """缓存并统一关闭 HDF5 文件句柄。"""
-
-    def __init__(self) -> None:
-        self._files: dict[str, h5py.File] = {}
-
-    def get(self, path: str) -> h5py.File:
-        if path not in self._files:
-            self._files[path] = h5py.File(path, "r", rdcc_nbytes=64 * 1024 * 1024)
-        return self._files[path]
-
-    def close(self) -> None:
-        for file_obj in self._files.values():
-            file_obj.close()
-        self._files.clear()
-
-
-def build_sample_index(
-    data_dir: str,
-    *,
-    sample_length: int,
-    max_files: int | None = None,
-    files_per_class: int | None = None,
-    max_samples_per_file: int | None = None,
-) -> list[SampleRecord]:
-    """扫描原始 .mat 文件，生成稳定的样本索引。"""
-
-    if not os.path.isdir(data_dir):
-        raise FileNotFoundError(f"Raw data directory does not exist: {data_dir}")
-
-    sample_index: list[SampleRecord] = []
-    mat_files = sorted(fname for fname in os.listdir(data_dir) if fname.endswith(".mat"))
-    if files_per_class is not None:
-        if files_per_class <= 0:
-            raise ValueError("files_per_class must be positive")
-        grouped = group_mat_files_by_class(mat_files)
-        mat_files = []
-        for class_code in LABEL_MAPPING:
-            mat_files.extend(grouped[class_code][:files_per_class])
-    elif max_files is not None:
-        mat_files = mat_files[:max_files]
-
-    for fname in mat_files:
-        path = os.path.join(data_dir, fname)
-        label = parse_label(fname)
-        rf_channel = rf_channel_for_file(fname)
-        with h5py.File(path, "r") as src:
-            num_samples = count_iq_samples(
-                src,
-                rf_channel=rf_channel,
-                sample_length=sample_length,
-                max_samples=max_samples_per_file,
-            )
-        for sample_idx in range(num_samples):
-            sample_index.append(SampleRecord(path=path, sample_idx=sample_idx, label=label))
-
-    return sample_index
 
 
 def prepare_test_records(
