@@ -5,8 +5,9 @@ Each .mat is converted independently to a same-named .h5 in the output
 directory.
 
 Output HDF5 structure (per file):
-  /stft  (N, 2, 512, 512) float32
+  /stft         (N, 1, 512, 512) float32
   /labels        (N,) int64
+  attrs/rf_channel      0 or 1
 
 Usage:
   python scripts/precompute_stft_h5.py
@@ -35,7 +36,13 @@ import h5py
 import torch
 from tqdm import tqdm
 
-from src.data.drone_rfa_io import count_iq_samples, default_raw_data_dir, parse_label, read_iq_batch
+from src.data.drone_rfa_io import (
+    count_iq_samples,
+    default_raw_data_dir,
+    parse_label,
+    read_iq_batch,
+    rf_channel_for_file,
+)
 from src.preprocess.h5_precompute import run_precompute_batch, output_h5_path
 from src.preprocess.random_snr_awgn import add_random_snr_awgn
 from src.preprocess.stft import compute_stft
@@ -106,6 +113,7 @@ def process_one_mat(
     mat_file = os.path.basename(mat_path)
     out_path = output_h5_path(mat_path, output_dir)
     label = parse_label(mat_file)
+    rf_channel = rf_channel_for_file(mat_file)
 
     logger.info("Processing: %s", mat_file)
     os.makedirs(output_dir, exist_ok=True)
@@ -113,24 +121,27 @@ def process_one_mat(
     with h5py.File(mat_path, "r") as src:
         num_samples = count_iq_samples(
             src,
+            rf_channel=rf_channel,
             sample_length=sample_length,
             max_samples=max_samples_per_file,
         )
 
         with h5py.File(out_path, "w") as h5f:
             h5f.create_dataset(
-                "stft", shape=(num_samples, 2, OUTPUT_FREQ_BINS, OUTPUT_TIME_BINS),
-                chunks=(1, 2, OUTPUT_FREQ_BINS, OUTPUT_TIME_BINS), dtype="f4",
+                "stft", shape=(num_samples, 1, OUTPUT_FREQ_BINS, OUTPUT_TIME_BINS),
+                chunks=(1, 1, OUTPUT_FREQ_BINS, OUTPUT_TIME_BINS), dtype="f4",
             )
             h5f.create_dataset(
                 "labels", shape=(num_samples,), chunks=None, dtype="i8",
             )
+            h5f.attrs["rf_channel"] = rf_channel
 
             batch_starts = range(0, num_samples, batch_size)
             for sample_idx in tqdm(batch_starts, total=len(batch_starts), desc=f"  {mat_file}"):
                 batch_end = min(sample_idx + batch_size, num_samples)
                 chunk_iq = read_iq_batch(
                     src,
+                    rf_channel=rf_channel,
                     sample_length=sample_length,
                     start_idx=sample_idx,
                     end_idx=batch_end,
@@ -164,8 +175,8 @@ def process_one_mat(
 
 
 def main() -> None:
-    args = parse_args()
-    log_current_command(logger)
+    args = parse_args() # 解析命令行参数并把解析结果保存到变量 args 中
+    log_current_command(logger) # 打印一次执行命令
     data_dir = os.path.expanduser(args.data_dir)
     if args.output_dir:
         output_dir = os.path.expanduser(args.output_dir)
@@ -173,8 +184,8 @@ def main() -> None:
         output_dir = str(Path(data_dir).parent / "DroneRFa_stft_h5")
     else:
         output_dir = str(Path(data_dir).parent / "DroneRFa_stft_awgn_random_h5")
-    device = "cuda:0" if args.device == "cuda" else args.device
 
+    device = "cuda:0" if args.device == "cuda" else args.device
     logger.info("Using device: %s", device)
 
     os.makedirs(output_dir, exist_ok=True)

@@ -18,7 +18,7 @@ class CppDataset(H5FeatureDataset):
     """Load pre-computed CPP/FAM matrices from .h5 files.
 
     Each .h5 file contains:
-      /cpp    (N, 2, alpha_bins, f_bins) float32
+      /cpp    (N, 1, alpha_bins, f_bins) float32
       /labels (N,) int64
 
     The dataset scans a directory for all .h5 files and indexes every sample

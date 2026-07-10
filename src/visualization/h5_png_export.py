@@ -64,6 +64,14 @@ def process_h5_samples(
 
     logger.info("Processing: %s", h5_name)
     with h5py.File(h5_path, "r") as h5f:
+        feature_shape = h5f[feature_key].shape
+        if len(feature_shape) != 4 or feature_shape[1] != 1:
+            raise ValueError(
+                f"Feature dataset must have shape (N, 1, H, W), got {feature_shape} in {h5_path}. "
+                "Re-run precomputation; legacy dual-channel caches are not supported."
+            )
+        if "rf_channel" not in h5f.attrs or int(h5f.attrs["rf_channel"]) not in (0, 1):
+            raise ValueError(f"Missing or invalid rf_channel attribute in {h5_path}; re-run precomputation")
         num_samples = limited_sample_count(h5f[feature_key].shape[0], max_samples_per_file)
         tasks = build_tasks(
             h5f,

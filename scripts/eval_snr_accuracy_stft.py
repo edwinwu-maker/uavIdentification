@@ -34,7 +34,7 @@ from tqdm import tqdm
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from src.data.drone_rfa_io import default_raw_data_dir, read_iq_batch
+from src.data.drone_rfa_io import default_raw_data_dir, read_iq_batch, rf_channel_for_file
 from src.evaluation.snr_accuracy import (
     H5FileCache,
     SampleRecord,
@@ -80,14 +80,15 @@ def _load_iq_batch(
 ) -> np.ndarray:
     """从缓存里的 HDF5 文件中读取某一条样本，并把它转换成单个复数 IQ 样本(np.complex64)返回"""
     src = file_cache.get(record.path)
-    # iq形状通常是 (1, 2, sample_length)
+    rf_channel = rf_channel_for_file(record.path)
     iq = read_iq_batch(
         src,
+        rf_channel=rf_channel,
         sample_length=sample_length,
         start_idx=record.sample_idx,
         end_idx=record.sample_idx + 1,
     )
-    # 这里取第 0 个样本，返回(2, sample_length)
+    # 这里取第 0 个样本，返回 (1, sample_length)。
     return iq[0]
 
 

@@ -27,6 +27,19 @@ class H5FeatureDataset(Dataset):
             if fname.endswith(".h5"):
                 path = os.path.join(cache_dir, fname)
                 with h5py.File(path, "r") as f:
+                    if feature_key not in f:
+                        raise ValueError(f"{dataset_name} cache is missing dataset '{feature_key}': {path}")
+                    feature_shape = f[feature_key].shape
+                    if len(feature_shape) != 4 or feature_shape[1] != 1:
+                        raise ValueError(
+                            f"{dataset_name} cache must have shape (N, 1, H, W), got {feature_shape} in {path}. "
+                            "Re-run precomputation; legacy dual-channel caches are not supported."
+                        )
+                    if "rf_channel" not in f.attrs or int(f.attrs["rf_channel"]) not in (0, 1):
+                        raise ValueError(
+                            f"{dataset_name} cache is missing a valid rf_channel attribute: {path}. "
+                            "Re-run precomputation."
+                        )
                     labels = f["labels"][:]
                 for row_idx, label in enumerate(labels):
                     self.index.append((path, row_idx, int(label)))

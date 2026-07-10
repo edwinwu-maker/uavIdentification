@@ -33,16 +33,18 @@ def compute_stft(
     output_time_bins: int | None = None,
 ) -> torch.Tensor:
     """
-    iq_batch: (B, 2, L) complex64
+    iq_batch: (B, 1, L) complex64
     device:  torch device string, e.g. "cpu", "cuda:0", "mps"
-    returns: torch.Tensor with shape (B, 2, output_freq_bins, output_time_bins), float32,
+    returns: torch.Tensor with shape (B, 1, output_freq_bins, output_time_bins), float32,
              z-score normalized per channel
-    B: batch size, 2: channels, output_freq_bins: freq bins, output_time_bins: time bins
+    B: batch size, 1: selected RF channel, output_freq_bins: freq bins, output_time_bins: time bins
     """
     if not isinstance(iq_batch, torch.Tensor):
         raise TypeError("iq_batch must be a torch.Tensor")
 
     B, C, L = iq_batch.shape
+    if C != 1:
+        raise ValueError(f"iq_batch must have exactly one RF channel, got shape {tuple(iq_batch.shape)}")
     hop_length = L // (spec_time_bins - 1)
     out_f = output_freq_bins or n_fft
     out_t = output_time_bins or spec_time_bins

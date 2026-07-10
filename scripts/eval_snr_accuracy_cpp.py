@@ -34,7 +34,7 @@ from tqdm import tqdm
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from src.data.drone_rfa_io import default_raw_data_dir, read_iq_batch
+from src.data.drone_rfa_io import default_raw_data_dir, read_iq_batch, rf_channel_for_file
 from src.evaluation.snr_accuracy import (
     H5FileCache,
     SampleRecord,
@@ -77,15 +77,17 @@ DEFAULT_RF_FRAME_LEN = 10_000
 DEFAULT_RF_TARGET_LEN = 100_000
 
 
-def _load_dual_iq_sample(
+def _load_iq_sample(
     file_cache: H5FileCache,
     record: SampleRecord,
     *,
     sample_length: int,
 ) -> np.ndarray:
     src = file_cache.get(record.path)
+    rf_channel = rf_channel_for_file(record.path)
     iq_batch = read_iq_batch(
         src,
+        rf_channel=rf_channel,
         sample_length=sample_length,
         start_idx=record.sample_idx,
         end_idx=record.sample_idx + 1,
@@ -192,29 +194,20 @@ def evaluate_snr_accuracy(
                     cpp_batch = []
                     labels = []
                     for record in batch_records:
-                        iq = _load_dual_iq_sample(file_cache, record, sample_length=sample_length)
+                        iq = _load_iq_sample(file_cache, record, sample_length=sample_length)
                         noisy_iq = add_awgn_for_snr(iq, snr_db, rng)
                         noisy_iq = torch.as_tensor(noisy_iq, dtype=torch.complex64, device=device)
-                        ch0 = noisy_iq[0]
-                        ch1 = noisy_iq[1]
+                        signal = noisy_iq[0]
                         if use_rf_segmentation:
-                            ch0, _, _ = segment_predominant_rf(
-                                ch0,
-                                frame_len=rf_frame_len,
-                                target_len=rf_target_len,
-                                top_k=rf_top_k,
-                                device=device,
-                            )
-                            ch1, _, _ = segment_predominant_rf(
-                                ch1,
+                            signal, _, _ = segment_predominant_rf(
+                                signal,
                                 frame_len=rf_frame_len,
                                 target_len=rf_target_len,
                                 top_k=rf_top_k,
                                 device=device,
                             )
                         cpp, _, _ = compute_cpp(
-                            ch0,
-                            ch1,
+                            signal,
                             segment_samples=segment_samples,
                             segment_hop_samples=segment_hop_samples,
                             fam_merge=fam_merge,

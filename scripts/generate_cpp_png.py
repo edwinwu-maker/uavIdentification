@@ -39,34 +39,33 @@ def _default_save_root(h5_dir: str) -> str:
     return str(Path(h5_dir).parent / "cpp_png")
 
 
-def plot_dual_channel_cpp(
+def plot_single_channel_cpp(
     cpp_sample: np.ndarray,
     f_axis: np.ndarray,
     alpha_axis: np.ndarray,
     save_path: str,
     sample_idx: int,
+    rf_channel: int,
     label: int | None = None,
 ) -> None:
-    """Plot a dual-channel CPP/FAM sample and save as PNG."""
+    """Plot a single-channel CPP/FAM sample and save as PNG."""
 
-    fig, (ax0, ax1) = plt.subplots(2, 1, figsize=(12, 9), constrained_layout=True)
+    fig, ax = plt.subplots(1, 1, figsize=(12, 5), constrained_layout=True)
+    im = ax.imshow(
+        cpp_sample[0],
+        origin="lower",
+        aspect="auto",
+        extent=[f_axis[0], f_axis[-1], alpha_axis[0], alpha_axis[-1]],
+        cmap="jet",
+    )
+    title = f"RF{rf_channel} CPP - Sample {sample_idx}"
+    if label is not None:
+        title += f" (label={label})"
+    ax.set_title(title, fontsize=12)
+    ax.set_xlabel("f (cycles/sample)", fontsize=10)
+    ax.set_ylabel("alpha (cycles/sample)", fontsize=10)
 
-    for ax, ch, ch_name in [(ax0, 0, "RF0"), (ax1, 1, "RF1")]:
-        im = ax.imshow(
-            cpp_sample[ch],
-            origin="lower",
-            aspect="auto",
-            extent=[f_axis[0], f_axis[-1], alpha_axis[0], alpha_axis[-1]],
-            cmap="jet",
-        )
-        title = f"{ch_name} CPP - Sample {sample_idx}"
-        if label is not None:
-            title += f" (label={label})"
-        ax.set_title(title, fontsize=12)
-        ax.set_xlabel("f (cycles/sample)", fontsize=10)
-        ax.set_ylabel("alpha (cycles/sample)", fontsize=10)
-
-    cbar = fig.colorbar(im, ax=[ax0, ax1], shrink=0.92)
+    cbar = fig.colorbar(im, ax=ax, shrink=0.92)
     cbar.set_label("normalized |SCF|", fontsize=9)
 
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
@@ -79,17 +78,18 @@ def _task_generator(h5f, name_no_extension, drone_code, save_root, max_samples_p
     labels = h5f["labels"]
     f_axis = h5f["f_axis"][:]
     alpha_axis = h5f["alpha_axis"][:]
+    rf_channel = int(h5f.attrs["rf_channel"])
     num_samples = limited_sample_count(cpp.shape[0], max_samples_per_file)
 
     for i in range(num_samples):
         save_path = sample_save_path(save_root, drone_code, name_no_extension, i)
-        yield (cpp[i], f_axis, alpha_axis, i, int(labels[i]), save_path)
+        yield (cpp[i], f_axis, alpha_axis, i, rf_channel, int(labels[i]), save_path)
 
 
 def _process_sample(args) -> None:
-    cpp_slice, f_axis, alpha_axis, idx, label, save_path = args
+    cpp_slice, f_axis, alpha_axis, idx, rf_channel, label, save_path = args
     try:
-        plot_dual_channel_cpp(cpp_slice, f_axis, alpha_axis, save_path, idx, label)
+        plot_single_channel_cpp(cpp_slice, f_axis, alpha_axis, save_path, idx, rf_channel, label)
     except Exception as e:
         logger.error("Sample %d: %s", idx, e)
 
@@ -101,7 +101,7 @@ def process_one_h5(
     max_samples_per_file: int | None = None,
     num_workers: int | None = None,
 ) -> None:
-    """Read a CPP .h5 file and generate dual-channel CPP PNGs."""
+    """Read a CPP .h5 file and generate single-channel CPP PNGs."""
     process_h5_samples(
         h5_path,
         save_root,

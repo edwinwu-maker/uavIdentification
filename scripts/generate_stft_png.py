@@ -6,7 +6,7 @@ Usage:
   python scripts/generate_stft_png.py --h5-dir ~/Desktop/dataset/droneRFa/stft_h5 --max-files 1 --max-samples-per-file 1
 
 Reads .h5 files produced by precompute_stft_h5.py and generates PNG images.
-Each PNG contains two STFTs (Channel 0 and Channel 1).
+Each PNG contains the STFT from the RF channel selected by the source filename.
 """
 
 import argparse
@@ -45,30 +45,28 @@ def _default_save_root(h5_dir: str) -> str:
     return str(Path(h5_dir).parent / "stft_png")
 
 
-def plot_dual_channel(stft_sample, save_path, sample_idx, label=None):
-    """Plot a dual-channel stft and save as PNG.
+def plot_single_channel(stft_sample, save_path, sample_idx, rf_channel, label=None):
+    """Plot a single-channel STFT and save as PNG.
 
-    stft_sample: (2, 512, 512) float32, z-score normalized STFT.
+    stft_sample: (1, 512, 512) float32, z-score normalized STFT.
     """
     n_freqs, n_times = stft_sample.shape[1], stft_sample.shape[2]
     freqs = np.fft.fftshift(np.fft.fftfreq(n_freqs, 1.0 / FS))
     times = np.linspace(0, SAMPLE_DURATION, n_times)
 
-    fig, (ax0, ax1) = plt.subplots(2, 1, figsize=(14, 10), constrained_layout=True)
+    fig, ax = plt.subplots(1, 1, figsize=(14, 5), constrained_layout=True)
+    im = ax.pcolormesh(
+        freqs / 1e6, times * 1e3, stft_sample[0].T,
+        shading="auto", cmap="jet",
+    )
+    title = f"RF{rf_channel} — Sample {sample_idx}"
+    if label is not None:
+        title += f" (label={label})"
+    ax.set_title(title, fontsize=12)
+    ax.set_xlabel("Frequency (MHz)", fontsize=10)
+    ax.set_ylabel("Time (ms)", fontsize=10)
 
-    for ax, ch, ch_name in [(ax0, 0, "Channel 0"), (ax1, 1, "Channel 1")]:
-        im = ax.pcolormesh(
-            freqs / 1e6, times * 1e3, stft_sample[ch].T,
-            shading="auto", cmap="jet",
-        )
-        title = f"{ch_name} — Sample {sample_idx}"
-        if label is not None:
-            title += f" (label={label})"
-        ax.set_title(title, fontsize=12)
-        ax.set_xlabel("Frequency (MHz)", fontsize=10)
-        ax.set_ylabel("Time (ms)", fontsize=10)
-
-    cbar = fig.colorbar(im, ax=[ax0, ax1], shrink=0.92)
+    cbar = fig.colorbar(im, ax=ax, shrink=0.92)
     cbar.set_label("Normalized Power (z-score)", fontsize=9)
 
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
@@ -80,24 +78,25 @@ def _task_generator(h5f, name_no_extension, drone_code, save_root, max_samples_p
     """Yield (stft_slice, idx, label, save_path) one sample at a time."""
     stft = h5f["stft"]
     labels = h5f["labels"]
+    rf_channel = int(h5f.attrs["rf_channel"])
     num_samples = limited_sample_count(stft.shape[0], max_samples_per_file)
 
     for i in range(num_samples):
         save_path = sample_save_path(save_root, drone_code, name_no_extension, i)
-        yield (stft[i], i, int(labels[i]), save_path)
+        yield (stft[i], i, rf_channel, int(labels[i]), save_path)
 
 
 def _process_sample(args):
     """Worker: plot and save a single stft sample."""
-    stft_slice, idx, label, save_path = args
+    stft_slice, idx, rf_channel, label, save_path = args
     try:
-        plot_dual_channel(stft_slice, save_path, idx, label)
+        plot_single_channel(stft_slice, save_path, idx, rf_channel, label)
     except Exception as e:
         logger.error(f"Sample {idx}: {e}")
 
 
 def process_one_h5(h5_path, save_root, *, max_samples_per_file=None, num_workers=None):
-    """Read a .h5 file and generate dual-channel PNGs for all samples."""
+    """Read a .h5 file and generate single-channel PNGs for all samples."""
     process_h5_samples(
         h5_path,
         save_root,

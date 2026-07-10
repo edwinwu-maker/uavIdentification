@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 
 import h5py
@@ -25,6 +26,19 @@ def parse_label(mat_file: str) -> int:
     return LABEL_MAPPING[drone_code]
 
 
+def rf_channel_for_file(path: str | os.PathLike[str]) -> int:
+    """根据文件名中唯一的四位二进制 S 编码返回目标 RF 通道。"""
+
+    stem = os.path.splitext(os.path.basename(os.fspath(path)))[0]
+    s_tokens = [token for token in stem.split("_") if token.startswith("S")]
+    if len(s_tokens) != 1 or re.fullmatch(r"S[01]{4}", s_tokens[0]) is None:
+        raise ValueError(
+            f"DroneRFa filename must contain exactly one four-bit binary S code: {os.path.basename(os.fspath(path))}"
+        )
+    signal_code = int(s_tokens[0][1:], 2)
+    return 0 if signal_code <= 0b0111 else 1
+
+
 def group_mat_files_by_class(mat_files: list[str]) -> dict[str, list[str]]:
     """按 DroneRFa 类别代码分组 .mat 文件，并保持每组文件名排序稳定。"""
 
@@ -38,9 +52,17 @@ def group_mat_files_by_class(mat_files: list[str]) -> dict[str, list[str]]:
     return grouped
 
 
-def count_iq_samples(src: h5py.File, *, sample_length: int, max_samples: int | None = None) -> int:
+def count_iq_samples(
+    src: h5py.File,
+    *,
+    rf_channel: int,
+    sample_length: int,
+    max_samples: int | None = None,
+) -> int:
     """根据 HDF5 文件(原始.mat)里的总点数，计算能切出多少个固定长度的 IQ 样本"""
-    total_points = int(src["RF0_I"].shape[1])
+    if rf_channel not in (0, 1):
+        raise ValueError(f"rf_channel must be 0 or 1, got {rf_channel}")
+    total_points = int(src[f"RF{rf_channel}_I"].shape[1])
     num_samples = total_points // sample_length
     if max_samples is not None:
         num_samples = min(num_samples, max_samples)
@@ -50,6 +72,7 @@ def count_iq_samples(src: h5py.File, *, sample_length: int, max_samples: int | N
 def read_iq_batch(
     src: h5py.File,
     *,
+    rf_channel: int,
     sample_length: int,
     start_idx: int,
     end_idx: int,
@@ -59,14 +82,12 @@ def read_iq_batch(
     offset = start_idx * sample_length
     end = end_idx * sample_length
 
-    rf0_i = src["RF0_I"][0, offset:end].reshape(batch_size, sample_length)
-    rf0_q = src["RF0_Q"][0, offset:end].reshape(batch_size, sample_length)
-    rf1_i = src["RF1_I"][0, offset:end].reshape(batch_size, sample_length)
-    rf1_q = src["RF1_Q"][0, offset:end].reshape(batch_size, sample_length)
+    if rf_channel not in (0, 1):
+        raise ValueError(f"rf_channel must be 0 or 1, got {rf_channel}")
+    rf_i = src[f"RF{rf_channel}_I"][0, offset:end].reshape(batch_size, sample_length)
+    rf_q = src[f"RF{rf_channel}_Q"][0, offset:end].reshape(batch_size, sample_length)
 
-    iq_batch = np.empty((batch_size, 2, sample_length), dtype=np.complex64)
-    iq_batch[:, 0, :].real = rf0_i
-    iq_batch[:, 0, :].imag = rf0_q
-    iq_batch[:, 1, :].real = rf1_i
-    iq_batch[:, 1, :].imag = rf1_q
+    iq_batch = np.empty((batch_size, 1, sample_length), dtype=np.complex64)
+    iq_batch[:, 0, :].real = rf_i
+    iq_batch[:, 0, :].imag = rf_q
     return iq_batch

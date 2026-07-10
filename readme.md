@@ -2,6 +2,8 @@
 
 本项目基于 DroneRFa 无人机射频信号数据集，提供 STFT 频谱图和 CPP/FAM 特征的预计算、可视化、训练与测试脚本。
 
+原始文件按文件名中的信号编码选择单个接收通道：`S0000-S0111` 使用 `RF0`，`S1000-S1111` 使用 `RF1`。STFT 和 CPP/FAM 特征均为 `(N, 1, H, W)`，对应 H5 文件通过 `rf_channel` 属性记录实际通道。
+
 ## 数据集
 
 - DroneRFa 下载链接：[DroneRFa](https://china.scidb.cn/download?fileId=c403fc76444e4b9989e4f3ff570f3b3d&traceId=e1937db6-783a-47dd-9df2-16c869a5dc33)
@@ -42,8 +44,8 @@ python <script-or-command>
 │   ├── eval_snr_accuracy_cpp.py      # 评估 CPP/FAM 模型在不同 SNR 下的准确率
 │   ├── precompute_stft_h5.py         # 将原始 .mat IQ 数据预计算为 STFT .h5
 │   ├── precompute_cpp_h5.py          # 将原始 .mat IQ 数据预计算为 CPP/FAM .h5
-│   ├── generate_stft_png.py          # 从 STFT .h5 生成双通道频谱图 PNG
-│   └── generate_cpp_png.py           # 从 CPP/FAM .h5 生成双通道 CPP/FAM PNG
+│   ├── generate_stft_png.py          # 从 STFT .h5 生成单通道频谱图 PNG
+│   └── generate_cpp_png.py           # 从 CPP/FAM .h5 生成单通道 CPP/FAM PNG
 ├── src/
 │   ├── data/
 │   │   ├── drone_rfa_io.py           # DroneRFa 原始 .mat 数据读取工具
@@ -54,14 +56,14 @@ python <script-or-command>
 │   ├── evaluation/
 │   │   └── snr_accuracy.py           # 不同 SNR 条件下的准确率评估工具
 │   ├── models/
-│   │   └── resnet.py                 # 适配双通道特征输入的 ResNet-18
+│   │   └── resnet.py                 # 适配单通道特征输入的 ResNet-18
 │   ├── preprocess/
 │   │   ├── h5_precompute.py          # STFT/CPP .h5 预计算通用流程
 │   │   ├── random_snr_awgn.py        # 随机 SNR 加性高斯白噪声增强
 │   │   ├── rf_segmentation.py        # RF 片段选择与截取工具
 │   │   ├── stft.py                   # STFT 频谱图特征生成
 │   │   ├── fam_defaults.py           # FAM 默认坐标范围
-│   │   ├── cpp.py                    # CPP/FAM 网格生成与双通道 CPP 特征组装
+│   │   ├── cpp.py                    # 单通道 CPP/FAM 网格生成
 │   │   └── fam_torch.py              # PyTorch FAM/SCF 计算工具，支持 CPU/CUDA/MPS
 │   ├── training/
 │   │   ├── checkpoint.py             # 模型 checkpoint 保存与加载
@@ -135,6 +137,8 @@ python scripts/generate_cpp_png.py --h5-dir ~/Desktop/dataset/droneRFa/cpp_h5
 ```
 
 STFT 图片默认保存到 `outputs/figures/stft_png/`，CPP/FAM 图片默认保存到 `outputs/figures/cpp_png/`。
+
+旧的双通道 H5 和 checkpoint 与当前单通道格式不兼容。默认缓存目录和 checkpoint 文件名保持不变，因此重新实验前必须完整重新预计算并重新训练；若目录内残留双通道 H5，加载时会明确报错。文件级 split manifest 可以继续复用。
 
 ### 训练模型
 

@@ -27,7 +27,7 @@ import torch
 from tqdm import tqdm
 
 from src.data.drone_rfa_io import default_raw_data_dir
-from src.data.drone_rfa_io import count_iq_samples, parse_label, read_iq_batch
+from src.data.drone_rfa_io import count_iq_samples, parse_label, read_iq_batch, rf_channel_for_file
 from src.preprocess.cpp import (
     compute_cpp,
     DEFAULT_SEGMENT_SAMPLES,
@@ -140,12 +140,14 @@ def process_one_mat(
     mat_name = os.path.basename(mat_path)
     out_path = output_h5_path(mat_path, output_dir)
     label = parse_label(mat_name)
+    rf_channel = rf_channel_for_file(mat_name)
 
     logger.info("Processing: %s", mat_name)
     os.makedirs(output_dir, exist_ok=True)
     with h5py.File(mat_path, "r") as src:
         num_samples = count_iq_samples(
             src,
+            rf_channel=rf_channel,
             sample_length=sample_length,
             max_samples=max_samples_per_file,
         )
@@ -153,17 +155,19 @@ def process_one_mat(
         with h5py.File(out_path, "w") as h5f:
             h5f.create_dataset(
                 "cpp",
-                shape=(num_samples, 2, alpha_bins, f_bins),
-                chunks=(1, 2, alpha_bins, f_bins),
+                shape=(num_samples, 1, alpha_bins, f_bins),
+                chunks=(1, 1, alpha_bins, f_bins),
                 dtype="f4",
             )
             h5f.create_dataset("labels", shape=(num_samples,), dtype="i8")
+            h5f.attrs["rf_channel"] = rf_channel
 
             f_axis = np.linspace(-0.5, 0.5, f_bins, dtype=np.float32)
             alpha_axis = np.linspace(-1.0, 1.0, alpha_bins, dtype=np.float32)
             for sample_idx in tqdm(range(num_samples), total=num_samples, desc=f"  {mat_name}"):
                 iq = read_iq_batch(
                     src,
+                    rf_channel=rf_channel,
                     sample_length=sample_length,
                     start_idx=sample_idx,
                     end_idx=sample_idx + 1,
@@ -179,26 +183,17 @@ def process_one_mat(
                         noise_seed=noise_seed,
                         device=device,
                     )
-                ch0 = iq[0, 0, :]
-                ch1 = iq[0, 1, :]
+                signal = iq[0, 0, :]
                 if use_rf_segmentation:
-                    ch0, _, _ = segment_predominant_rf(
-                        ch0,
-                        frame_len=rf_frame_len,
-                        target_len=rf_target_len,
-                        top_k=rf_top_k,
-                        device=device,
-                    )
-                    ch1, _, _ = segment_predominant_rf(
-                        ch1,
+                    signal, _, _ = segment_predominant_rf(
+                        signal,
                         frame_len=rf_frame_len,
                         target_len=rf_target_len,
                         top_k=rf_top_k,
                         device=device,
                     )
                 cpp, f_axis, alpha_axis = compute_cpp(
-                    ch0,
-                    ch1,
+                    signal,
                     segment_samples=segment_samples,
                     segment_hop_samples=segment_hop_samples,
                     fam_merge=fam_merge,

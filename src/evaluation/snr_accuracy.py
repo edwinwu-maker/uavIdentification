@@ -19,6 +19,7 @@ from src.data.drone_rfa_io import (
     count_iq_samples,
     group_mat_files_by_class,
     parse_label,
+    rf_channel_for_file,
 )
 from src.data.splits import split_records_by_file
 
@@ -75,9 +76,11 @@ def build_sample_index(
     for fname in mat_files:
         path = os.path.join(data_dir, fname)
         label = parse_label(fname)
+        rf_channel = rf_channel_for_file(fname)
         with h5py.File(path, "r") as src:
             num_samples = count_iq_samples(
                 src,
+                rf_channel=rf_channel,
                 sample_length=sample_length,
                 max_samples=max_samples_per_file,
             )

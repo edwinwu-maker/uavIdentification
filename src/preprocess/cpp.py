@@ -154,8 +154,7 @@ def _iter_padded_segments(
 
 
 def compute_cpp(
-    ch0: torch.Tensor,
-    ch1: torch.Tensor,
+    x: torch.Tensor,
     *,
     segment_samples: int,
     segment_hop_samples: int | None,
@@ -167,15 +166,13 @@ def compute_cpp(
     fam_nfft: int = 64,
     fam_hop: int = 64,
 ) -> tuple[torch.Tensor, np.ndarray, np.ndarray]:
-    """Compute one dual-channel CPP matrix and its axes from RF0/RF1 IQ arrays."""
+    """Compute one single-channel CPP matrix and its axes from a complex IQ array."""
 
-    if not isinstance(ch0, torch.Tensor):
-        raise TypeError("ch0 must be a torch.Tensor")
-    if not isinstance(ch1, torch.Tensor):
-        raise TypeError("ch1 must be a torch.Tensor")
+    if not isinstance(x, torch.Tensor):
+        raise TypeError("x must be a torch.Tensor")
 
-    image0, f_axis, alpha_axis = compute_segmented_fam_grid(
-        ch0,
+    image, f_axis, alpha_axis = compute_segmented_fam_grid(
+        x,
         segment_samples=segment_samples,
         segment_hop_samples=segment_hop_samples,
         merge=fam_merge,
@@ -186,17 +183,5 @@ def compute_cpp(
         fam_nfft=fam_nfft,
         fam_hop=fam_hop,
     )
-    image1, _, _ = compute_segmented_fam_grid(
-        ch1,
-        segment_samples=segment_samples,
-        segment_hop_samples=segment_hop_samples,
-        merge=fam_merge,
-        f_bins=f_bins,
-        alpha_bins=alpha_bins,
-        device=device,
-        pair_chunk_size=pair_chunk_size,
-        fam_nfft=fam_nfft,
-        fam_hop=fam_hop,
-    )
-    cpp = torch.stack([image0, image1], dim=0).to(dtype=torch.float32)
+    cpp = image.unsqueeze(0).to(dtype=torch.float32)
     return cpp, f_axis.astype(np.float32), alpha_axis.astype(np.float32)
