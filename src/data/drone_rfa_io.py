@@ -52,9 +52,13 @@ def parse_label(mat_file: str) -> int:
 
 
 def rf_channel_for_file(path: str | os.PathLike[str]) -> int:
-    """根据文件名中唯一的四位二进制 S 编码返回目标 RF 通道。"""
+    """背景噪声类固定使用 RF0，其他类别根据四位二进制 S 编码选择通道。"""
 
     stem = os.path.splitext(os.path.basename(os.fspath(path)))[0]
+    class_code = stem.split("_")[0]
+    if class_code == "T0000":
+        return 0
+
     s_tokens = [token for token in stem.split("_") if token.startswith("S")]
     if len(s_tokens) != 1 or re.fullmatch(r"S[01]{4}", s_tokens[0]) is None:
         raise ValueError(
