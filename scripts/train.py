@@ -20,6 +20,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from src.data.splits import prepare_training_split
+from src.data.class_filter import RemappedSubset, add_exclusion_suffix, build_class_mapping
 from src.models.resnet import NUM_CLASSES, build_model
 from src.training.trainer import train_model
 
@@ -59,6 +60,8 @@ def build_parser():
                         help="Randomly select this many source files per class before file-level splitting")
     parser.add_argument("--split-manifest", type=str, required=True,
                         help="Shared CSV manifest for file-level train/val/test splitting")
+    parser.add_argument("--exclude-labels", type=int, nargs="*", default=None,
+                        help="Original class labels to exclude, e.g. --exclude-labels 10 11")
     return parser
 
 
@@ -70,7 +73,9 @@ def parse_args(argv=None):
     args.model = args.model if args.model is not None else DEFAULT_MODEL_BY_FEATURE[args.feature]
     args.data_dir = os.path.expanduser(args.data_dir) if args.data_dir is not None else spec.default_data_dir
     args.checkpoint_path = (
-        os.path.expanduser(args.checkpoint_path) if args.checkpoint_path is not None else spec.checkpoint_name
+        os.path.expanduser(args.checkpoint_path)
+        if args.checkpoint_path is not None
+        else add_exclusion_suffix(spec.checkpoint_name, args.exclude_labels)
     )
     args.split_manifest = os.path.expanduser(args.split_manifest)
     return args
@@ -101,6 +106,11 @@ def train(args):
             seed=SPLIT_SEED,
             files_per_class=args.files_per_class,
         )
+        mapping = build_class_mapping(NUM_CLASSES, args.exclude_labels)
+        train_ds = RemappedSubset(train_ds, mapping)
+        val_ds = RemappedSubset(val_ds, mapping)
+        _test_ds = RemappedSubset(_test_ds, mapping)
+        logger.info("Class mapping (model -> original): %s", mapping.original_labels)
         logger.info(
             "Split manifest %s: %s",
             "reused" if manifest_exists else "created",
@@ -130,7 +140,7 @@ def train(args):
         train_loader = DataLoader(train_ds, shuffle=True, **loader_kwargs)
         val_loader = DataLoader(val_ds, shuffle=False, **loader_kwargs)
 
-        model = build_model(args.model, num_classes=NUM_CLASSES).to(device)
+        model = build_model(args.model, num_classes=mapping.num_classes).to(device)
         optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
         criterion = nn.CrossEntropyLoss()
 

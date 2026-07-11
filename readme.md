@@ -164,3 +164,28 @@ python scripts/evaluate.py \
 ```
 
 测试脚本会输出 accuracy、precision、recall、F1-score 和 loss，并将混淆矩阵数组保存到 `outputs/metrics/`，混淆矩阵图片保存到 `outputs/figures/`。
+
+## 暂时屏蔽类别 10/11 的 12 类实验
+
+类别 10、11（`T1101`、`T1110`）可在训练和全部评估入口中通过
+`--exclude-labels 10 11` 排除。现有 H5 和 14 类 split manifest 可以复用；程序会先校验完整
+manifest，再过滤各 split，并将原标签 `12、13` 映射为模型标签 `10、11`。混淆矩阵坐标仍显示原始标签。
+
+```bash
+# STFT：训练与常规评估
+python scripts/train.py --feature stft --data-dir "$STFT_H5" \
+  --split-manifest "$MANIFEST" --exclude-labels 10 11 --device cuda:0
+python scripts/evaluate.py --feature stft --data-dir "$STFT_H5" \
+  --split-manifest "$MANIFEST" --exclude-labels 10 11 --device cuda:0
+
+# CPP：训练与常规评估
+python scripts/train.py --feature cpp --model resnet18-small-stem --data-dir "$CPP_H5" \
+  --split-manifest "$MANIFEST" --exclude-labels 10 11 --device cuda:0
+python scripts/evaluate.py --feature cpp --model resnet18-small-stem --data-dir "$CPP_H5" \
+  --split-manifest "$MANIFEST" --exclude-labels 10 11 --device cuda:0
+```
+
+未显式指定 checkpoint 或混淆矩阵路径时，12 类实验自动使用
+`*_exclude_10_11.*` 文件名，不会覆盖现有 14 类产物。固定 SNR 评估同样传入
+`--exclude-labels 10 11`，并应显式指定带 `exclude_10_11` 的 CSV、PNG、混淆矩阵前缀和诊断 CSV；
+其余 STFT/CPP 参数必须与预计算配置保持一致。

@@ -23,7 +23,10 @@ def save_prediction_diagnostics(
     if predictions_csv is not None:
         path = Path(predictions_csv)
         path.parent.mkdir(parents=True, exist_ok=True)
-        fieldnames = ["snr_db", "source_file", "sample_idx", "true_label", "pred_label", "correct"]
+        fieldnames = ["snr_db", "source_file", "sample_idx", "true_label", "pred_label"]
+        if rows and "original_true_label" in rows[0]:
+            fieldnames.extend(["original_true_label", "original_pred_label"])
+        fieldnames.append("correct")
         with path.open("w", newline="", encoding="utf-8") as file_obj:
             writer = csv.DictWriter(file_obj, fieldnames=fieldnames)
             writer.writeheader()
@@ -131,6 +134,7 @@ def save_snr_confusion_matrix(
     output_png: str | Path,
     *,
     title: str,
+    class_labels=None,
 ) -> None:
     """保存单个 SNR 点的混淆矩阵数组和图片。"""
 
@@ -142,7 +146,7 @@ def save_snr_confusion_matrix(
 
     from src.training.metrics import save_confusion_matrix_image
 
-    save_confusion_matrix_image(cm, png_path, title=title)
+    save_confusion_matrix_image(cm, png_path, title=title, class_labels=class_labels)
 
 
 def save_snr_accuracy_plot(

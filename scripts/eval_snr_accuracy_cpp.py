@@ -41,6 +41,7 @@ from src.data.drone_rfa_io import (
     load_iq_sample,
 )
 from src.data.splits import load_test_file_ids
+from src.data.class_filter import add_exclusion_suffix, build_class_mapping
 from src.evaluation.snr_accuracy import (
     add_awgn_for_snr,
     format_snr_for_filename,
@@ -108,6 +109,7 @@ def evaluate_snr_accuracy(
     rf_frame_len: int = DEFAULT_RF_FRAME_LEN,
     rf_target_len: int | None = DEFAULT_RF_TARGET_LEN,
     rf_top_k: int | None = None,
+    exclude_labels: list[int] | tuple[int, ...] | None = None,
 ) -> list[dict[str, object]]:
     """Run SNR-wise CPP evaluation and save CSV/PNG outputs."""
 
@@ -124,6 +126,9 @@ def evaluate_snr_accuracy(
         max_samples_per_file=max_samples_per_file,
         file_ids=test_file_ids,
     )
+    mapping = build_class_mapping(NUM_CLASSES, exclude_labels)
+    allowed_labels = set(mapping.original_labels)
+    test_records = [record for record in test_records if record.label in allowed_labels]
     if max_samples is not None:
         test_records = test_records[:max_samples]
     if not test_records:
@@ -140,7 +145,8 @@ def evaluate_snr_accuracy(
     if torch_device.type == "cuda":
         torch.cuda.set_device(torch_device)
 
-    model = build_model(model_name, num_classes=NUM_CLASSES).to(torch_device)
+    logger.info("Class mapping (model -> original): %s", mapping.original_labels)
+    model = build_model(model_name, num_classes=mapping.num_classes).to(torch_device)
     logger.info("Loading model from %s", model_path)
     state_dict = load_checkpoint(model_path, map_location=torch_device)
     model.load_state_dict(state_dict)
@@ -198,7 +204,7 @@ def evaluate_snr_accuracy(
                             fam_hop=fam_hop,
                         )
                         cpp_batch.append(normalize_cpp(cpp, mode=cpp_normalization))
-                        labels.append(record.label)
+                        labels.append(mapping.to_model(record.label))
 
                     inputs = torch.stack(cpp_batch, dim=0).to(torch_device)
                     logits = model(inputs)
@@ -215,12 +221,14 @@ def evaluate_snr_accuracy(
                             "sample_idx": int(record.sample_idx),
                             "true_label": int(label),
                             "pred_label": int(pred),
+                            "original_true_label": int(mapping.to_original(label)),
+                            "original_pred_label": int(mapping.to_original(pred)),
                             "correct": int(label == pred),
                         })
 
             accuracy = float(num_correct / num_samples) if num_samples else 0.0
             snr_name = format_snr_for_filename(float(snr_db))
-            cm = confusion_matrix(all_labels, all_preds, labels=range(NUM_CLASSES))
+            cm = confusion_matrix(all_labels, all_preds, labels=range(mapping.num_classes))
             cm_npy = metrics_dir() / f"{output_cm_prefix}_snr_{snr_name}.npy"
             cm_png = figures_dir() / f"{output_cm_prefix}_snr_{snr_name}.png"
             save_snr_confusion_matrix(
@@ -228,6 +236,7 @@ def evaluate_snr_accuracy(
                 cm_npy,
                 cm_png,
                 title=f"CPP Confusion Matrix ({snr_db:g} dB)",
+                class_labels=mapping.original_labels,
             )
             rows.append(
                 {
@@ -297,11 +306,23 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Optional CSV path for per-sample predictions")
     parser.add_argument("--per-file-csv", type=str, default=None,
                         help="Optional CSV path for per-SNR, per-file metrics")
+    parser.add_argument("--exclude-labels", type=int, nargs="*", default=None,
+                        help="Original class labels excluded during training")
     return parser
 
 
 def parse_args(argv=None):
-    return build_parser().parse_args(argv)
+    args = build_parser().parse_args(argv)
+    if args.exclude_labels:
+        if args.model_path == str(checkpoint_dir() / DEFAULT_MODEL_NAME):
+            args.model_path = add_exclusion_suffix(args.model_path, args.exclude_labels)
+        if args.output_csv == str(DEFAULT_OUTPUT_CSV):
+            args.output_csv = add_exclusion_suffix(args.output_csv, args.exclude_labels)
+        if args.output_png == str(DEFAULT_OUTPUT_PNG):
+            args.output_png = add_exclusion_suffix(args.output_png, args.exclude_labels)
+        if args.output_cm_prefix == DEFAULT_OUTPUT_CM_PREFIX:
+            args.output_cm_prefix = add_exclusion_suffix(args.output_cm_prefix, args.exclude_labels)
+    return args
 
 
 def main() -> None:
@@ -337,6 +358,7 @@ def main() -> None:
         rf_frame_len=args.rf_frame_len,
         rf_target_len=args.rf_target_len,
         rf_top_k=args.rf_top_k,
+        exclude_labels=args.exclude_labels,
     )
 
 
