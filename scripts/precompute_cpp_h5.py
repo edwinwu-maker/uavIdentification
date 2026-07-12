@@ -8,6 +8,7 @@ Usage:
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --device mps
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --device cuda:0 --pair-chunk-size 4096
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --files-per-class 1 --fam-nfft 64 --fam-hop 64
+  python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --noise-profile mixed-3x --snr-low-min -15 --snr-low-max 0 --snr-high-min 0 --snr-high-max 15
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --use-rf-segmentation --rf-frame-len 10000
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --snr-min -5 --snr-max 15 --noise-seed 42
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --clean
@@ -35,7 +36,7 @@ from src.preprocess.cpp import (
     SUPPORTED_FAM_MERGE_MODES,
 )
 from src.preprocess.h5_precompute import run_precompute_batch, output_h5_path
-from src.preprocess.random_snr_awgn import add_random_snr_awgn
+from src.preprocess.random_snr_awgn import add_random_snr_awgn_with_snr
 from src.preprocess.rf_segmentation import segment_predominant_rf
 from src.utils.cli import log_current_command
 from src.utils.logger import logger
@@ -46,6 +47,7 @@ F_BINS = 257
 ALPHA_BINS = 257
 RF_FRAME_LEN = 10_000
 RF_TARGET_LEN = 100_000
+SUPPORTED_NOISE_PROFILES = ("random", "mixed-3x")
 
 
 def parse_args() -> argparse.Namespace:
@@ -56,7 +58,7 @@ def parse_args() -> argparse.Namespace:
                         help="Directory containing .mat files")
     parser.add_argument("--output-dir", type=str, default=None,
                         help="Directory for output .h5 files (default: <data-dir-parent>/DroneRFa_cpp_awgn_random_h5, "
-                             "or DroneRFa_cpp_h5 with --clean)")
+                             "DroneRFa_cpp_awgn_mixed3x_h5 for mixed-3x, or DroneRFa_cpp_h5 with --clean)")
     parser.add_argument("--sample-length", type=int, default=SAMPLE_LENGTH,
                         help="Number of IQ samples per output CPP sample")
     parser.add_argument("--segment-samples", type=int, default=DEFAULT_SEGMENT_SAMPLES,
@@ -93,15 +95,31 @@ def parse_args() -> argparse.Namespace:
                         help="Process at most this many samples from each .mat file")
     parser.add_argument("--clean", action="store_true",
                         help="Skip AWGN noise; use clean IQ data for CPP precompute")
+    parser.add_argument("--noise-profile", choices=SUPPORTED_NOISE_PROFILES, default="random",
+                        help="Noise strategy: one random-AWGN version or clean/low/high mixed 3x")
     parser.add_argument("--snr-min", type=float, default=-5.0,
                         help="Minimum SNR in dB for AWGN")
     parser.add_argument("--snr-max", type=float, default=15.0,
                         help="Maximum SNR in dB for AWGN")
+    parser.add_argument("--snr-low-min", type=float, default=-15.0,
+                        help="Minimum SNR for the mixed-3x low-SNR version")
+    parser.add_argument("--snr-low-max", type=float, default=0.0,
+                        help="Maximum SNR for the mixed-3x low-SNR version (exclusive in intent)")
+    parser.add_argument("--snr-high-min", type=float, default=0.0,
+                        help="Minimum SNR for the mixed-3x high-SNR version")
+    parser.add_argument("--snr-high-max", type=float, default=15.0,
+                        help="Maximum SNR for the mixed-3x high-SNR version")
     parser.add_argument("--noise-seed", type=int, default=42,
                         help="Seed for deterministic AWGN")
     args = parser.parse_args()
     if args.snr_min > args.snr_max:
         parser.error("--snr-min must be <= --snr-max")
+    if args.snr_low_min >= args.snr_low_max:
+        parser.error("--snr-low-min must be < --snr-low-max")
+    if args.snr_high_min >= args.snr_high_max:
+        parser.error("--snr-high-min must be < --snr-high-max")
+    if args.clean and args.noise_profile != "random":
+        parser.error("--clean cannot be used with --noise-profile mixed-3x")
     if args.files_per_class is not None and args.max_samples_per_file is not None:
         parser.error("--max-samples-per-file cannot be used with --files-per-class")
     return args
@@ -126,12 +144,23 @@ def process_one_mat(
     rf_frame_len: int = RF_FRAME_LEN,
     rf_target_len: int | None = RF_TARGET_LEN,
     rf_top_k: int | None = None,
-    random_snr: bool = True,
+    noise_profile: str = "random",
     snr_min: float = -5.0,
     snr_max: float = 15.0,
+    snr_low_min: float = -15.0,
+    snr_low_max: float = 0.0,
+    snr_high_min: float = 0.0,
+    snr_high_max: float = 15.0,
     noise_seed: int = 42,
 ) -> tuple[str, int]:
     """Convert one DroneRFa .mat file into one CPP .h5 file."""
+
+    if noise_profile not in (*SUPPORTED_NOISE_PROFILES, "clean"):
+        raise ValueError(f"Unsupported noise profile: {noise_profile}")
+    if snr_low_min >= snr_low_max:
+        raise ValueError("snr_low_min must be less than snr_low_max")
+    if snr_high_min >= snr_high_max:
+        raise ValueError("snr_high_min must be less than snr_high_max")
 
     mat_name = os.path.basename(mat_path)
     out_path = output_h5_path(mat_path, output_dir)
@@ -141,13 +170,15 @@ def process_one_mat(
     logger.info("Processing: %s", mat_name)
     os.makedirs(output_dir, exist_ok=True)
     with h5py.File(mat_path, "r") as src:
-        num_samples = count_iq_samples(
+        num_source_samples = count_iq_samples(
             src,
             rf_channel=rf_channel,
             sample_length=sample_length,
             max_samples=max_samples_per_file,
         )
 
+        variants_per_sample = 3 if noise_profile == "mixed-3x" else 1
+        num_samples = num_source_samples * variants_per_sample
         with h5py.File(out_path, "w") as h5f:
             h5f.create_dataset(
                 "cpp",
@@ -156,11 +187,18 @@ def process_one_mat(
                 dtype="f4",
             )
             h5f.create_dataset("labels", shape=(num_samples,), dtype="i8")
+            h5f.create_dataset("is_clean", shape=(num_samples,), dtype="?")
+            h5f.create_dataset("snr_db", shape=(num_samples,), dtype="f4")
+            h5f.create_dataset("source_sample_idx", shape=(num_samples,), dtype="i8")
+            h5f.create_dataset("augmentation_variant", shape=(num_samples,), dtype="S16")
             h5f.attrs["rf_channel"] = rf_channel
+            h5f.attrs["noise_profile"] = "clean" if noise_profile == "clean" else noise_profile
 
             f_axis = np.linspace(-0.5, 0.5, f_bins, dtype=np.float32)
             alpha_axis = np.linspace(-1.0, 1.0, alpha_bins, dtype=np.float32)
-            for sample_idx in tqdm(range(num_samples), total=num_samples, desc=f"  {mat_name}"):
+            for sample_idx in tqdm(
+                range(num_source_samples), total=num_source_samples, desc=f"  {mat_name}"
+            ):
                 iq = read_iq_batch(
                     src,
                     rf_channel=rf_channel,
@@ -169,39 +207,63 @@ def process_one_mat(
                     end_idx=sample_idx + 1,
                 )
                 iq = torch.as_tensor(iq, dtype=torch.complex64, device=device)
-                if random_snr:
-                    iq = add_random_snr_awgn(
-                        iq,
-                        file_id=mat_name,
-                        start_idx=sample_idx,
-                        snr_min=snr_min,
-                        snr_max=snr_max,
-                        noise_seed=noise_seed,
-                        device=device,
+                if noise_profile == "mixed-3x":
+                    variant_specs = (
+                        ("clean", True, None, None),
+                        ("snr_low", False, snr_low_min, snr_low_max),
+                        ("snr_high", False, snr_high_min, snr_high_max),
                     )
-                signal = iq[0, 0, :]
-                if use_rf_segmentation:
-                    signal, _, _ = segment_predominant_rf(
+                elif noise_profile == "clean":
+                    variant_specs = (("clean", True, None, None),)
+                else:
+                    variant_specs = (("random", False, snr_min, snr_max),)
+
+                for variant_idx, (variant_name, is_clean, range_min, range_max) in enumerate(
+                    variant_specs
+                ):
+                    variant_iq = iq
+                    snr_value = np.nan
+                    if not is_clean:
+                        variant_iq, sampled_snr = add_random_snr_awgn_with_snr(
+                            iq,
+                            file_id=mat_name,
+                            start_idx=sample_idx,
+                            snr_min=float(range_min),
+                            snr_max=float(range_max),
+                            noise_seed=noise_seed,
+                            variant_idx=variant_idx,
+                            device=device,
+                        )
+                        snr_value = float(sampled_snr[0].item())
+
+                    signal = variant_iq[0, 0, :]
+                    if use_rf_segmentation:
+                        signal, _, _ = segment_predominant_rf(
+                            signal,
+                            frame_len=rf_frame_len,
+                            target_len=rf_target_len,
+                            top_k=rf_top_k,
+                            device=device,
+                        )
+                    cpp, f_axis, alpha_axis = compute_cpp(
                         signal,
-                        frame_len=rf_frame_len,
-                        target_len=rf_target_len,
-                        top_k=rf_top_k,
+                        segment_samples=segment_samples,
+                        segment_hop_samples=segment_hop_samples,
+                        fam_merge=fam_merge,
+                        f_bins=f_bins,
+                        alpha_bins=alpha_bins,
                         device=device,
+                        pair_chunk_size=pair_chunk_size,
+                        fam_nfft=fam_nfft,
+                        fam_hop=fam_hop,
                     )
-                cpp, f_axis, alpha_axis = compute_cpp(
-                    signal,
-                    segment_samples=segment_samples,
-                    segment_hop_samples=segment_hop_samples,
-                    fam_merge=fam_merge,
-                    f_bins=f_bins,
-                    alpha_bins=alpha_bins,
-                    device=device,
-                    pair_chunk_size=pair_chunk_size,
-                    fam_nfft=fam_nfft,
-                    fam_hop=fam_hop,
-                )
-                h5f["cpp"][sample_idx] = normalize_cpp(cpp).detach().cpu().numpy()
-                h5f["labels"][sample_idx] = label
+                    output_idx = sample_idx * variants_per_sample + variant_idx
+                    h5f["cpp"][output_idx] = normalize_cpp(cpp).detach().cpu().numpy()
+                    h5f["labels"][output_idx] = label
+                    h5f["is_clean"][output_idx] = is_clean
+                    h5f["snr_db"][output_idx] = snr_value
+                    h5f["source_sample_idx"][output_idx] = sample_idx
+                    h5f["augmentation_variant"][output_idx] = variant_name
 
             h5f.create_dataset("f_axis", data=f_axis)
             h5f.create_dataset("alpha_axis", data=alpha_axis)
@@ -220,6 +282,8 @@ def main() -> None:
         output_dir = os.path.expanduser(args.output_dir)
     elif args.clean:
         output_dir = str(Path(data_dir).parent / "DroneRFa_cpp_h5")
+    elif args.noise_profile == "mixed-3x":
+        output_dir = str(Path(data_dir).parent / "DroneRFa_cpp_awgn_mixed3x_h5")
     else:
         output_dir = str(Path(data_dir).parent / "DroneRFa_cpp_awgn_random_h5")
     os.makedirs(output_dir, exist_ok=True)
@@ -243,9 +307,13 @@ def main() -> None:
             "rf_frame_len": args.rf_frame_len,
             "rf_target_len": args.rf_target_len,
             "rf_top_k": args.rf_top_k,
-            "random_snr": not args.clean,
+            "noise_profile": "clean" if args.clean else args.noise_profile,
             "snr_min": args.snr_min,
             "snr_max": args.snr_max,
+            "snr_low_min": args.snr_low_min,
+            "snr_low_max": args.snr_low_max,
+            "snr_high_min": args.snr_high_min,
+            "snr_high_max": args.snr_high_max,
             "noise_seed": args.noise_seed,
         },
         max_files=args.max_files,

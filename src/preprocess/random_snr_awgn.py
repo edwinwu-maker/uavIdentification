@@ -12,9 +12,13 @@ def _stable_file_seed(file_id: str) -> int:
     return zlib.crc32(file_id.encode("utf-8")) & 0xFFFFFFFF
 
 
-def _batch_seed(noise_seed: int, file_id: str, start_idx: int) -> int:
+def _batch_seed(noise_seed: int, file_id: str, start_idx: int, variant_idx: int = 0) -> int:
     # 吞吐优先：随机性绑定到 batch 身份，保证同一 batch 可复现。
-    seed_seq = np.random.SeedSequence([int(noise_seed), _stable_file_seed(file_id), int(start_idx)])
+    seed_parts = [int(noise_seed), _stable_file_seed(file_id), int(start_idx)]
+    # variant_idx=0 保持原有随机序列不变；扩增版本追加独立种子维度。
+    if variant_idx != 0:
+        seed_parts.append(int(variant_idx))
+    seed_seq = np.random.SeedSequence(seed_parts)
     return int(seed_seq.generate_state(1, dtype=np.uint64)[0] & np.uint64(0x7FFFFFFFFFFFFFFF))
 
 
@@ -66,12 +70,40 @@ def add_random_snr_awgn(
 ) -> torch.Tensor:
     """对 batch 内 IQ 批量添加随机 SNR AWGN，返回 torch.complex64 Tensor。"""
 
+    noisy, _ = add_random_snr_awgn_with_snr(
+        iq_batch,
+        file_id=file_id,
+        start_idx=start_idx,
+        snr_min=snr_min,
+        snr_max=snr_max,
+        noise_seed=noise_seed,
+        device=device,
+    )
+    return noisy
+
+
+def add_random_snr_awgn_with_snr(
+    iq_batch: torch.Tensor,
+    *,
+    file_id: str,
+    start_idx: int,
+    snr_min: float,
+    snr_max: float,
+    noise_seed: int,
+    variant_idx: int = 0,
+    device: str = "cpu",
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """添加可复现的随机 SNR AWGN，并返回每个样本实际使用的 SNR。"""
+
     if not isinstance(iq_batch, torch.Tensor):
         raise TypeError("iq_batch must be a torch.Tensor")
 
     target_device = torch.device(device)
     iq = iq_batch.to(device=target_device, dtype=torch.complex64)
-    generator, generator_device = _make_generator(target_device, _batch_seed(noise_seed, file_id, start_idx))
+    generator, generator_device = _make_generator(
+        target_device,
+        _batch_seed(noise_seed, file_id, start_idx, variant_idx),
+    )
 
     batch_size = iq.shape[0]
     snr_db = _uniform(
@@ -104,4 +136,4 @@ def add_random_snr_awgn(
     zero_power = signal_power <= 0.0
     if torch.any(zero_power):
         noisy = torch.where(zero_power.reshape(batch_size, 1, 1), iq, noisy)
-    return noisy.to(torch.complex64)
+    return noisy.to(torch.complex64), snr_db

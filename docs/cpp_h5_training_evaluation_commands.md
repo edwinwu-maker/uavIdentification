@@ -9,7 +9,7 @@ cd /home/wurixin/uavIdentification
 
 PY=/home/wurixin/venv-3.10/bin/python
 RAW=/path/to/DroneRFa
-H5=/path/to/DroneRFa_cpp_awgn_random_h5
+H5=/path/to/DroneRFa_cpp_awgn_mixed3x_h5
 
 MANIFEST=outputs/splits/cpp_random12_seed42.csv
 CHECKPOINT=outputs/checkpoints/best_cpp_model.pth
@@ -31,13 +31,16 @@ $PY scripts/precompute_cpp_h5.py \
   --fam-hop 256 \
   --f-bins 257 \
   --alpha-bins 257 \
-  --snr-min -5 \
-  --snr-max 15 \
+  --noise-profile mixed-3x \
+  --snr-low-min -15 \
+  --snr-low-max 0 \
+  --snr-high-min 0 \
+  --snr-high-max 15 \
   --noise-seed 42 \
   --device cuda:0
 ```
 
-CPP 固定使用逐样本、逐通道的 `log1p + z-score` 归一化。该命令默认添加 `-5～15 dB` 的随机 AWGN。没有 CUDA 时将 `--device cuda:0` 改为 `--device cpu`。
+`mixed-3x` 为每个原始 IQ 样本依次生成 clean、`[-15, 0)` dB 和 `[0, 15]` dB 三个版本。H5 中同时保存实际 SNR、源样本编号和增强类型。CPP 固定使用逐样本、逐通道的 `log1p + z-score` 归一化。没有 CUDA 时将 `--device cuda:0` 改为 `--device cpu`。
 
 ## 3. 训练并生成划分 CSV
 
@@ -90,7 +93,7 @@ $PY scripts/eval_snr_accuracy_cpp.py \
   --model-path "$CHECKPOINT" \
   --model resnet18-small-stem \
   --split-manifest "$MANIFEST" \
-  --snrs -15 -10 -7.5 -5 -2.5 0 2.5 5 7.5 10 \
+  --snrs -15 -10 -7.5 -5 -2.5 0 2.5 5 7.5 10 15 \
   --sample-length 1000000 \
   --segment-samples 262144 \
   --fam-merge mean \
