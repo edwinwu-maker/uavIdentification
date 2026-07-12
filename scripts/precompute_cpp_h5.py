@@ -8,6 +8,7 @@ Usage:
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --device mps
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --device cuda:0 --pair-chunk-size 4096
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --files-per-class 1 --fam-nfft 64 --fam-hop 64
+  python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --include-labels 0 1 2 3 4 --files-per-class 12
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --noise-profile mixed-3x --snr-low-min -15 --snr-low-max 0 --snr-high-min 0 --snr-high-max 15
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --snr-min -5 --snr-max 15 --noise-seed 42
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --clean
@@ -79,6 +80,8 @@ def parse_args() -> argparse.Namespace:
                         help="Process at most this many .mat files")
     parser.add_argument("--files-per-class", type=int, default=None,
                         help="Process at most this many .mat files per selected class")
+    parser.add_argument("--include-labels", type=int, nargs="+", default=None,
+                        help="Only process these original class labels, e.g. --include-labels 0 1 2 3 4")
     parser.add_argument("--max-samples-per-file", type=int, default=None,
                         help="Process at most this many samples from each .mat file")
     parser.add_argument("--clean", action="store_true",
@@ -290,6 +293,7 @@ def main() -> None:
         },
         max_files=args.max_files,
         files_per_class=args.files_per_class,
+        include_labels=args.include_labels,
         log_label="CPP samples",
     )
 

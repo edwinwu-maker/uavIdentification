@@ -86,13 +86,31 @@ def select_mat_files(
     *,
     max_files: int | None = None,
     files_per_class: int | None = None,
+    include_labels: list[int] | tuple[int, ...] | set[int] | None = None,
 ) -> list[str]:
     """稳定选择原始 .mat 文件；按类别选择时优先于总文件数限制。"""
 
     if not os.path.isdir(data_dir):
         raise FileNotFoundError(f"Raw data directory does not exist: {data_dir}")
 
+    allowed_labels = None
+    if include_labels is not None:
+        allowed_labels = set(int(label) for label in include_labels)
+        valid_labels = set(LABEL_MAPPING.values())
+        invalid = sorted(allowed_labels - valid_labels)
+        if invalid:
+            raise ValueError(f"include_labels contains unknown labels: {invalid}")
+
     mat_files = sorted(filename for filename in os.listdir(data_dir) if filename.endswith(".mat"))
+    if allowed_labels is not None:
+        filtered_files: list[str] = []
+        for filename in mat_files:
+            class_code = os.path.basename(filename).split("_")[0]
+            if class_code not in LABEL_MAPPING:
+                raise ValueError(f"Unknown class code in .mat file: {class_code}")
+            if LABEL_MAPPING[class_code] in allowed_labels:
+                filtered_files.append(filename)
+        mat_files = filtered_files
     if files_per_class is None:
         return mat_files[:max_files] if max_files is not None else mat_files
     if files_per_class <= 0:
@@ -101,6 +119,8 @@ def select_mat_files(
     grouped = group_mat_files_by_class(mat_files)
     selected: list[str] = []
     for class_code in LABEL_MAPPING:
+        if allowed_labels is not None and LABEL_MAPPING[class_code] not in allowed_labels:
+            continue
         selected.extend(grouped[class_code][:files_per_class])
     return selected
 

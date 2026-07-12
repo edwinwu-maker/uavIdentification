@@ -27,6 +27,7 @@ def run_precompute_batch(
     process_kwargs: dict[str, Any] | None = None,
     max_files: int | None = None,
     files_per_class: int | None = None,
+    include_labels: list[int] | tuple[int, ...] | set[int] | None = None,
     log_label: str,
 ) -> tuple[int, int]:
     """
@@ -41,6 +42,7 @@ def run_precompute_batch(
         data_dir,
         max_files=max_files,
         files_per_class=files_per_class,
+        include_labels=include_labels,
     )
     logger.info("Found %d .mat files in %s", len(mat_files), data_dir)
     logger.info("Output directory: %s", output_dir)
