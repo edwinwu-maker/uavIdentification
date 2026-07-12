@@ -98,7 +98,6 @@ def evaluate_snr_accuracy(
     pair_chunk_size: int = DEFAULT_PAIR_CHUNK_SIZE,
     fam_nfft: int = 256,
     fam_hop: int = 256,
-    cpp_normalization: str = "log-zscore-sample",
     max_samples_per_file: int | None = None,
     max_samples: int | None = None,
     seed: int = DEFAULT_SEED,
@@ -203,7 +202,7 @@ def evaluate_snr_accuracy(
                             fam_nfft=fam_nfft,
                             fam_hop=fam_hop,
                         )
-                        cpp_batch.append(normalize_cpp(cpp, mode=cpp_normalization))
+                        cpp_batch.append(normalize_cpp(cpp))
                         labels.append(mapping.to_model(record.label))
 
                     inputs = torch.stack(cpp_batch, dim=0).to(torch_device)
@@ -290,8 +289,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pair-chunk-size", type=int, default=DEFAULT_PAIR_CHUNK_SIZE)
     parser.add_argument("--fam-nfft", type=int, default=256)
     parser.add_argument("--fam-hop", type=int, default=256)
-    parser.add_argument("--cpp-normalization", choices=("max", "log-zscore-sample"),
-                        default="log-zscore-sample")
     parser.add_argument("--use-rf-segmentation", action="store_true",
                         help="Apply ST-ESER predominant segment selection after AWGN and before CPP")
     parser.add_argument("--rf-frame-len", type=int, default=DEFAULT_RF_FRAME_LEN)
@@ -347,7 +344,6 @@ def main() -> None:
         pair_chunk_size=args.pair_chunk_size,
         fam_nfft=args.fam_nfft,
         fam_hop=args.fam_hop,
-        cpp_normalization=args.cpp_normalization,
         max_samples_per_file=args.max_samples_per_file,
         max_samples=args.max_samples,
         seed=args.seed,

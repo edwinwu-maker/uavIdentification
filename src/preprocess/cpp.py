@@ -11,42 +11,25 @@ from src.preprocess.fam_defaults import FAM_ALPHA_RANGE, FAM_F_RANGE
 from src.preprocess.fam_torch import fam_grid_torch
 
 SUPPORTED_FAM_MERGE_MODES = ("mean", "max")
-SUPPORTED_CPP_NORMALIZATION_MODES = (
-    "max",
-    "log-zscore-sample",
-    "log_zscore_sample",
-    "log-zscore-dataset",
-    "log_zscore_dataset",
-)
 DEFAULT_SEGMENT_SAMPLES = 262144
 
 
 def normalize_cpp(
     cpp: torch.Tensor,
     *,
-    mode: str = "log-zscore-sample",
     eps: float = 1e-6,
 ) -> torch.Tensor:
-    """对单个 CPP 样本执行归一化，输入形状为 (C, H, W)。"""
+    """对单个 CPP 样本执行 log-zscore-sample 归一化，输入形状为 (C, H, W)。"""
 
     if not isinstance(cpp, torch.Tensor):
         raise TypeError("cpp must be a torch.Tensor")
 
     cpp = cpp.to(dtype=torch.float32)
-    if mode == "max":
-        max_value = float(torch.max(cpp)) if cpp.numel() else 0.0
-        if max_value > 0:
-            return cpp / max_value
-        return cpp.clone()
-    if mode in ("log-zscore-sample", "log_zscore_sample"):
-        logged = torch.log1p(cpp)
-        std, mean = torch.std_mean(logged, dim=(1, 2), keepdim=True, unbiased=False)
-        centered = logged - mean
-        denominator = torch.where(std > eps, std, torch.ones_like(std))
-        return torch.where(std > eps, centered / denominator, torch.zeros_like(centered))
-    if mode in ("log-zscore-dataset", "log_zscore_dataset"):
-        raise NotImplementedError("log_zscore_dataset requires dataset-level statistics and is not implemented here")
-    raise ValueError(f"Unsupported CPP normalization mode: {mode}")
+    logged = torch.log1p(cpp)
+    std, mean = torch.std_mean(logged, dim=(1, 2), keepdim=True, unbiased=False)
+    centered = logged - mean
+    denominator = torch.where(std > eps, std, torch.ones_like(std))
+    return torch.where(std > eps, centered / denominator, torch.zeros_like(centered))
 
 
 def compute_segmented_fam_grid(

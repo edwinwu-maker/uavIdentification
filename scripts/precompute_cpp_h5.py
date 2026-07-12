@@ -7,7 +7,7 @@ Usage:
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --max-samples-per-file 1
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --device mps
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --device cuda:0 --pair-chunk-size 4096
-  python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --files-per-class 1 --cpp-normalization log-zscore-sample --fam-nfft 64 --fam-hop 64
+  python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --files-per-class 1 --fam-nfft 64 --fam-hop 64
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --use-rf-segmentation --rf-frame-len 10000
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --snr-min -5 --snr-max 15 --noise-seed 42
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --clean
@@ -69,9 +69,6 @@ def parse_args() -> argparse.Namespace:
                         help="FAM FFT size")
     parser.add_argument("--fam-hop", type=int, default=256,
                         help="FAM hop size")
-    parser.add_argument("--cpp-normalization", choices=("max", "log-zscore-sample"),
-                        default="log-zscore-sample",
-                        help="CPP normalization mode")
     parser.add_argument("--f-bins", type=int, default=F_BINS,
                         help="Number of frequency bins in the CPP grid")
     parser.add_argument("--alpha-bins", type=int, default=ALPHA_BINS,
@@ -123,7 +120,6 @@ def process_one_mat(
     device: str,
     pair_chunk_size: int,
     max_samples_per_file: int | None,
-    cpp_normalization: str = "log-zscore-sample",
     fam_nfft: int = 256,
     fam_hop: int = 256,
     use_rf_segmentation: bool = False,
@@ -204,10 +200,7 @@ def process_one_mat(
                     fam_nfft=fam_nfft,
                     fam_hop=fam_hop,
                 )
-                h5f["cpp"][sample_idx] = normalize_cpp(
-                    cpp,
-                    mode=cpp_normalization,
-                ).detach().cpu().numpy()
+                h5f["cpp"][sample_idx] = normalize_cpp(cpp).detach().cpu().numpy()
                 h5f["labels"][sample_idx] = label
 
             h5f.create_dataset("f_axis", data=f_axis)
@@ -241,7 +234,6 @@ def main() -> None:
             "fam_merge": args.fam_merge,
             "f_bins": args.f_bins,
             "alpha_bins": args.alpha_bins,
-            "cpp_normalization": args.cpp_normalization,
             "fam_nfft": args.fam_nfft,
             "fam_hop": args.fam_hop,
             "device": args.device,

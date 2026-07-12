@@ -29,7 +29,6 @@ $PY scripts/precompute_cpp_h5.py \
   --fam-merge mean \
   --fam-nfft 256 \
   --fam-hop 256 \
-  --cpp-normalization log-zscore-sample \
   --f-bins 257 \
   --alpha-bins 257 \
   --snr-min -5 \
@@ -38,7 +37,7 @@ $PY scripts/precompute_cpp_h5.py \
   --device cuda:0
 ```
 
-该命令默认添加 `-5～15 dB` 的随机 AWGN。没有 CUDA 时将 `--device cuda:0` 改为 `--device cpu`。
+CPP 固定使用逐样本、逐通道的 `log1p + z-score` 归一化。该命令默认添加 `-5～15 dB` 的随机 AWGN。没有 CUDA 时将 `--device cuda:0` 改为 `--device cpu`。
 
 ## 3. 训练并生成划分 CSV
 
@@ -97,7 +96,6 @@ $PY scripts/eval_snr_accuracy_cpp.py \
   --fam-merge mean \
   --fam-nfft 256 \
   --fam-hop 256 \
-  --cpp-normalization log-zscore-sample \
   --f-bins 257 \
   --alpha-bins 257 \
   --batch-size 1 \
@@ -111,4 +109,4 @@ $PY scripts/eval_snr_accuracy_cpp.py \
 
 SNR 评估只会为 manifest 中的测试文件计算 CPP，但原始数据目录必须包含 manifest 引用的全部源文件，以便完成一致性校验。
 
-预计算和 SNR 评估的 CPP 参数必须保持一致。如果预计算时启用了 `--use-rf-segmentation` 或修改了 FAM/CPP 参数，SNR 评估时也必须传入相同设置。
+预计算和 SNR 评估固定使用相同的 `log1p + z-score` 归一化，其余 CPP 参数也必须保持一致。如果预计算时启用了 `--use-rf-segmentation` 或修改了 FAM/CPP 参数，SNR 评估时也必须传入相同设置。
