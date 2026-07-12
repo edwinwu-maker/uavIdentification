@@ -9,7 +9,6 @@ Usage:
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --device cuda:0 --pair-chunk-size 4096
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --files-per-class 1 --fam-nfft 64 --fam-hop 64
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --noise-profile mixed-3x --snr-low-min -15 --snr-low-max 0 --snr-high-min 0 --snr-high-max 15
-  python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --use-rf-segmentation --rf-frame-len 10000
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --snr-min -5 --snr-max 15 --noise-seed 42
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --clean
 """
@@ -37,7 +36,6 @@ from src.preprocess.cpp import (
 )
 from src.preprocess.h5_precompute import run_precompute_batch, output_h5_path
 from src.preprocess.random_snr_awgn import add_random_snr_awgn_with_snr
-from src.preprocess.rf_segmentation import segment_predominant_rf
 from src.utils.cli import log_current_command
 from src.utils.logger import logger
 from src.utils.device import default_device
@@ -45,8 +43,6 @@ from src.utils.device import default_device
 SAMPLE_LENGTH = 1_000_000
 F_BINS = 257
 ALPHA_BINS = 257
-RF_FRAME_LEN = 10_000
-RF_TARGET_LEN = 100_000
 SUPPORTED_NOISE_PROFILES = ("random", "mixed-3x")
 
 
@@ -79,14 +75,6 @@ def parse_args() -> argparse.Namespace:
                         help='FAM compute device: "cpu", "cuda", "cuda:0", or "mps"')
     parser.add_argument("--pair-chunk-size", type=int, default=8192,
                         help="Number of (k, l) channel pairs per torch batch")
-    parser.add_argument("--use-rf-segmentation", action="store_true",
-                        help="Apply ST-ESER predominant segment selection before CPP extraction")
-    parser.add_argument("--rf-frame-len", type=int, default=RF_FRAME_LEN,
-                        help="RF segmentation frame length for ST-ESER")
-    parser.add_argument("--rf-target-len", type=int, default=RF_TARGET_LEN,
-                        help="Target IQ length after RF segmentation; ignored when --rf-top-k is set")
-    parser.add_argument("--rf-top-k", type=int, default=None,
-                        help="Number of RF frames to retain; overrides --rf-target-len")
     parser.add_argument("--max-files", type=int, default=None,
                         help="Process at most this many .mat files")
     parser.add_argument("--files-per-class", type=int, default=None,
@@ -140,10 +128,6 @@ def process_one_mat(
     max_samples_per_file: int | None,
     fam_nfft: int = 256,
     fam_hop: int = 256,
-    use_rf_segmentation: bool = False,
-    rf_frame_len: int = RF_FRAME_LEN,
-    rf_target_len: int | None = RF_TARGET_LEN,
-    rf_top_k: int | None = None,
     noise_profile: str = "random",
     snr_min: float = -5.0,
     snr_max: float = 15.0,
@@ -237,14 +221,6 @@ def process_one_mat(
                         snr_value = float(sampled_snr[0].item())
 
                     signal = variant_iq[0, 0, :]
-                    if use_rf_segmentation:
-                        signal, _, _ = segment_predominant_rf(
-                            signal,
-                            frame_len=rf_frame_len,
-                            target_len=rf_target_len,
-                            top_k=rf_top_k,
-                            device=device,
-                        )
                     cpp, f_axis, alpha_axis = compute_cpp(
                         signal,
                         segment_samples=segment_samples,
@@ -303,10 +279,6 @@ def main() -> None:
             "device": args.device,
             "pair_chunk_size": args.pair_chunk_size,
             "max_samples_per_file": args.max_samples_per_file,
-            "use_rf_segmentation": args.use_rf_segmentation,
-            "rf_frame_len": args.rf_frame_len,
-            "rf_target_len": args.rf_target_len,
-            "rf_top_k": args.rf_top_k,
             "noise_profile": "clean" if args.clean else args.noise_profile,
             "snr_min": args.snr_min,
             "snr_max": args.snr_max,

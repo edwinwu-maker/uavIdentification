@@ -53,7 +53,6 @@ from src.evaluation.snr_accuracy import (
 )
 from src.models.resnet import NUM_CLASSES, build_model
 from src.preprocess.cpp import compute_cpp, normalize_cpp
-from src.preprocess.rf_segmentation import segment_predominant_rf
 from src.training.checkpoint import load_checkpoint
 from src.utils.cli import log_current_command
 from src.utils.device import default_device
@@ -74,8 +73,6 @@ DEFAULT_MODEL_NAME = "best_cpp_model.pth"
 DEFAULT_OUTPUT_CSV = metrics_dir() / "cpp_snr_accuracy.csv"
 DEFAULT_OUTPUT_PNG = figures_dir() / "cpp_snr_accuracy.png"
 DEFAULT_OUTPUT_CM_PREFIX = "cpp_snr_confusion_matrix"
-DEFAULT_RF_FRAME_LEN = 10_000
-DEFAULT_RF_TARGET_LEN = 100_000
 
 
 def evaluate_snr_accuracy(
@@ -104,10 +101,6 @@ def evaluate_snr_accuracy(
     split_manifest: str | Path,
     predictions_csv: str | Path | None = None,
     per_file_csv: str | Path | None = None,
-    use_rf_segmentation: bool = False,
-    rf_frame_len: int = DEFAULT_RF_FRAME_LEN,
-    rf_target_len: int | None = DEFAULT_RF_TARGET_LEN,
-    rf_top_k: int | None = None,
     exclude_labels: list[int] | tuple[int, ...] | None = None,
 ) -> list[dict[str, object]]:
     """Run SNR-wise CPP evaluation and save CSV/PNG outputs."""
@@ -182,14 +175,6 @@ def evaluate_snr_accuracy(
                         noisy_iq = add_awgn_for_snr(iq, snr_db, rng)
                         noisy_iq = torch.as_tensor(noisy_iq, dtype=torch.complex64, device=device)
                         signal = noisy_iq[0]
-                        if use_rf_segmentation:
-                            signal, _, _ = segment_predominant_rf(
-                                signal,
-                                frame_len=rf_frame_len,
-                                target_len=rf_target_len,
-                                top_k=rf_top_k,
-                                device=device,
-                            )
                         cpp, _, _ = compute_cpp(
                             signal,
                             segment_samples=segment_samples,
@@ -289,11 +274,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pair-chunk-size", type=int, default=DEFAULT_PAIR_CHUNK_SIZE)
     parser.add_argument("--fam-nfft", type=int, default=256)
     parser.add_argument("--fam-hop", type=int, default=256)
-    parser.add_argument("--use-rf-segmentation", action="store_true",
-                        help="Apply ST-ESER predominant segment selection after AWGN and before CPP")
-    parser.add_argument("--rf-frame-len", type=int, default=DEFAULT_RF_FRAME_LEN)
-    parser.add_argument("--rf-target-len", type=int, default=DEFAULT_RF_TARGET_LEN)
-    parser.add_argument("--rf-top-k", type=int, default=None)
     parser.add_argument("--max-samples-per-file", type=int, default=None)
     parser.add_argument("--max-samples", type=int, default=None)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
@@ -350,10 +330,6 @@ def main() -> None:
         split_manifest=args.split_manifest,
         predictions_csv=args.predictions_csv,
         per_file_csv=args.per_file_csv,
-        use_rf_segmentation=args.use_rf_segmentation,
-        rf_frame_len=args.rf_frame_len,
-        rf_target_len=args.rf_target_len,
-        rf_top_k=args.rf_top_k,
         exclude_labels=args.exclude_labels,
     )
 
