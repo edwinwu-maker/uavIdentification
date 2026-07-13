@@ -123,6 +123,7 @@ def _load_file_split_manifest(
     file_labels: dict[str, int],
     *,
     files_per_class: int | None,
+    include_labels: set[int] | None = None,
 ) -> dict[str, str]:
     path = Path(manifest_path)
     if not path.is_file():
@@ -164,6 +165,19 @@ def _load_file_split_manifest(
         raise ValueError(f"Split manifest labels do not match the dataset: {mismatched[:5]}")
 
     dataset_labels = set(file_labels.values())
+    if include_labels is not None:
+        dataset_labels &= include_labels
+        split_by_file = {
+            file_id: split_name
+            for file_id, split_name in split_by_file.items()
+            if manifest_labels[file_id] in include_labels
+        }
+        manifest_labels = {
+            file_id: label
+            for file_id, label in manifest_labels.items()
+            if label in include_labels
+        }
+
     manifest_label_set = set(manifest_labels.values())
     if manifest_label_set != dataset_labels:
         missing_labels = sorted(dataset_labels - manifest_label_set)
@@ -269,14 +283,16 @@ def load_test_file_ids(
     path_labels: list[tuple[str, int]],
     *,
     manifest_path: str | os.PathLike[str],
+    include_labels: list[int] | tuple[int, ...] | set[int] | None = None,
 ) -> set[str]:
-    """严格读取已有 manifest，并返回其中的测试文件 ID。"""
+    """严格读取已有 manifest，并返回指定类别的测试文件 ID。"""
 
     file_labels = _collect_file_labels(path_labels)
     split_by_file = _load_file_split_manifest(
         manifest_path,
         file_labels,
         files_per_class=None,
+        include_labels=None if include_labels is None else set(include_labels),
     )
     return {
         file_id for file_id, split_name in split_by_file.items()

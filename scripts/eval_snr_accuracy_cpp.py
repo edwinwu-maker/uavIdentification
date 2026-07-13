@@ -107,10 +107,13 @@ def evaluate_snr_accuracy(
 
     if not Path(split_manifest).is_file():
         raise FileNotFoundError(f"Split manifest does not exist: {split_manifest}")
+    mapping = build_class_mapping(NUM_CLASSES, exclude_labels)
+    allowed_labels = set(mapping.original_labels)
     path_labels = list_mat_file_labels(data_dir)
     test_file_ids = load_test_file_ids(
         path_labels,
         manifest_path=split_manifest,
+        include_labels=allowed_labels,
     )
     test_records = build_sample_index(
         data_dir,
@@ -118,8 +121,6 @@ def evaluate_snr_accuracy(
         max_samples_per_file=max_samples_per_file,
         file_ids=test_file_ids,
     )
-    mapping = build_class_mapping(NUM_CLASSES, exclude_labels)
-    allowed_labels = set(mapping.original_labels)
     test_records = [record for record in test_records if record.label in allowed_labels]
     if max_samples is not None:
         test_records = test_records[:max_samples]
