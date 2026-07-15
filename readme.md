@@ -44,6 +44,8 @@ python <script-or-command>
 │   ├── eval_snr_accuracy_cpp.py      # 评估 CPP/FAM 模型在不同 SNR 下的准确率
 │   ├── precompute_stft_h5.py         # 将原始 .mat IQ 数据预计算为 STFT .h5
 │   ├── precompute_cpp_h5.py          # 将原始 .mat IQ 数据预计算为 CPP/FAM .h5
+│   ├── generate_raw_stft_png.py      # 从原始 .mat IQ 按指定 SNR 生成单通道 STFT PNG
+│   ├── generate_raw_cpp_png.py       # 从原始 .mat IQ 按指定 SNR 生成单通道 CPP/FAM PNG
 │   ├── generate_stft_png.py          # 从 STFT .h5 生成单通道频谱图 PNG
 │   └── generate_cpp_png.py           # 从 CPP/FAM .h5 生成单通道 CPP/FAM PNG
 ├── src/
@@ -120,11 +122,38 @@ python scripts/precompute_cpp_h5.py \
 ### 生成特征图片
 
 ```bash
+# 原始 IQ 直接生成多个指定 SNR 的单通道 STFT 图片
+python scripts/generate_raw_stft_png.py \
+  --data-dir ~/Desktop/dataset/droneRFa \
+  --snrs -10 0 10 \
+  --device mps
+
+# 原始 IQ 直接生成多个指定 SNR 的单通道 CPP/FAM 图片
+python scripts/generate_raw_cpp_png.py \
+  --data-dir ~/Desktop/dataset/droneRFa \
+  --snrs -10 0 10 \
+  --device mps
+
+# 不添加 AWGN，直接由原始 IQ 生成图片（STFT/CPP 均支持 --clean）
+python scripts/generate_raw_stft_png.py --data-dir ~/Desktop/dataset/droneRFa --clean --device mps
+python scripts/generate_raw_cpp_png.py --data-dir ~/Desktop/dataset/droneRFa --clean --device mps
+
+# 从预计算 H5 生成图片
 python scripts/generate_stft_png.py --h5-dir ~/Desktop/dataset/droneRFa/stft_h5
 python scripts/generate_cpp_png.py --h5-dir ~/Desktop/dataset/droneRFa/cpp_h5
 ```
 
-STFT 图片默认保存到 `outputs/figures/stft_png/`，CPP/FAM 图片默认保存到 `outputs/figures/cpp_png/`。
+原始 IQ 直出的 STFT 图片默认保存到数据目录旁的 `DroneRFa_stft_snr_png/`，并按
+`SNR/类别/原始文件名` 三级目录保存；
+`S0000-S0111` 选择 RF0，`S1000-S1111` 选择 RF1。图片与模型输入一致，显示逐样本 z-score
+归一化功率，适合比较信号结构，但色条不表示可跨图片比较的绝对功率。
+
+原始 IQ 直出的 CPP/FAM 图片采用相同的通道选择和三级目录结构，默认保存到数据目录旁的
+`DroneRFa_cpp_snr_png/`。图片经过与 CPP 模型输入一致的 log-zscore-sample 归一化。
+`--snrs` 与 `--clean` 必须二选一；clean 图片保存在 `clean/类别/原始文件名` 目录中。
+
+H5 生成的 STFT 图片默认保存到 H5 目录旁的 `stft_png/`，CPP/FAM 图片默认保存到 H5
+目录旁的 `cpp_png/`。
 
 旧的双通道 H5 和 checkpoint 与当前单通道格式不兼容。默认缓存目录和 checkpoint 文件名保持不变，因此重新实验前必须完整重新预计算并重新训练；若目录内残留双通道 H5，加载时会明确报错。文件级 split manifest 可以继续复用。
 

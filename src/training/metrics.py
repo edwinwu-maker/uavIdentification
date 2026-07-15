@@ -19,8 +19,10 @@ def save_confusion_matrix_image(cm, save_path, title="Confusion Matrix", class_l
         title=title,
         xlabel="Predicted Label",
         ylabel="True Label",
-        xticks=class_labels,
-        yticks=class_labels,
+        xticks=np.arange(cm.shape[1]),
+        yticks=np.arange(cm.shape[0]),
+        xticklabels=class_labels,
+        yticklabels=class_labels,
     )
 
     threshold = cm.max() / 2 if cm.size else 0
