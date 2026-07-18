@@ -5,7 +5,7 @@ Each .mat is converted independently to a same-named .h5 in the output
 directory.
 
 Output HDF5 structure (per file):
-  /stft                 (N, 1, 512, 512) float32
+  /stft                 (N, 1, 1024, 1024) float32
   /labels               (N,) int64
   /is_clean             (N,) bool
   /snr_db               (N,) float32
@@ -19,8 +19,8 @@ Usage:
   python scripts/precompute_stft_h5.py --data-dir ~/Desktop/dataset/droneRFa
   python scripts/precompute_stft_h5.py --data-dir ... --output-dir ...
   python scripts/precompute_stft_h5.py --data-dir ... --device cuda:0
-  python scripts/precompute_stft_h5.py --data-dir ... --device cuda:2 --batch-size 64
-  python scripts/precompute_stft_h5.py --data-dir ... --sample-length 1000000
+  python scripts/precompute_stft_h5.py --data-dir ... --device cuda:2 --batch-size 1
+  python scripts/precompute_stft_h5.py --data-dir ... --sample-length 10000000
   python scripts/precompute_stft_h5.py --data-dir ... --device mps
   python scripts/precompute_stft_h5.py --data-dir ... --max-files 1
   python scripts/precompute_stft_h5.py --data-dir ... --files-per-class 1
@@ -59,12 +59,12 @@ from src.utils.device import default_device
 from src.utils.logger import logger
 
 # ── Paper parameters (match transforms.py) ──
-SAMPLE_LENGTH = 1_000_000
-N_FFT = 1024
-WIN_LENGTH = 1024
-SPEC_TIME_BINS = 1024
-OUTPUT_FREQ_BINS = 512
-OUTPUT_TIME_BINS = 512
+SAMPLE_LENGTH = 10_000_000
+N_FFT = 2048
+WIN_LENGTH = 2048
+HOP_LENGTH = 1024
+OUTPUT_FREQ_BINS = 1024
+OUTPUT_TIME_BINS = 1024
 SUPPORTED_NOISE_PROFILES = ("random", "mixed-3x")
 
 
@@ -77,7 +77,7 @@ def parse_args() -> argparse.Namespace:
                              "DroneRFa_stft_awgn_mixed3x_h5 for mixed-3x, or DroneRFa_stft_h5 with --clean)")
     parser.add_argument("--sample-length", type=int, default=SAMPLE_LENGTH,
                         help="Number of IQ samples per output stft")
-    parser.add_argument("--batch-size", type=int, default=8,
+    parser.add_argument("--batch-size", type=int, default=1,
                         help="STFT batch size")
     parser.add_argument("--device", type=str, default=default_device(),
                         help='Torch device for STFT, e.g. "cpu", "cuda", "cuda:0", or "mps" '
@@ -191,6 +191,14 @@ def process_one_mat(
             h5f.create_dataset("augmentation_variant", shape=(num_samples,), dtype="S16")
             h5f.attrs["rf_channel"] = rf_channel
             h5f.attrs["noise_profile"] = noise_profile
+            h5f.attrs["sample_length"] = sample_length
+            h5f.attrs["n_fft"] = N_FFT
+            h5f.attrs["win_length"] = WIN_LENGTH
+            h5f.attrs["hop_length"] = HOP_LENGTH
+            h5f.attrs["source_freq_bins"] = N_FFT
+            h5f.attrs["source_time_bins"] = sample_length // HOP_LENGTH + 1
+            h5f.attrs["output_freq_bins"] = OUTPUT_FREQ_BINS
+            h5f.attrs["output_time_bins"] = OUTPUT_TIME_BINS
 
             batch_starts = range(0, num_source_samples, batch_size)
             for sample_idx in tqdm(batch_starts, total=len(batch_starts), desc=f"  {mat_file}"):
@@ -228,7 +236,7 @@ def process_one_mat(
                         device,
                         n_fft=N_FFT,
                         win_length=WIN_LENGTH,
-                        spec_time_bins=SPEC_TIME_BINS,
+                        hop_length=HOP_LENGTH,
                         output_freq_bins=OUTPUT_FREQ_BINS,
                         output_time_bins=OUTPUT_TIME_BINS,
                     ).cpu().numpy()

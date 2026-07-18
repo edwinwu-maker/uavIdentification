@@ -28,7 +28,7 @@ def compute_stft(
     *,
     n_fft: int = 1024,
     win_length: int = 1024,
-    spec_time_bins: int = 1024,
+    hop_length: int | None = None,
     output_freq_bins: int | None = None,
     output_time_bins: int | None = None,
 ) -> torch.Tensor:
@@ -45,9 +45,11 @@ def compute_stft(
     B, C, L = iq_batch.shape
     if C != 1:
         raise ValueError(f"iq_batch must have exactly one RF channel, got shape {tuple(iq_batch.shape)}")
-    hop_length = L // (spec_time_bins - 1)
+    if hop_length is not None and hop_length <= 0:
+        raise ValueError("hop_length must be positive")
+    hop_length = hop_length or win_length // 2
     out_f = output_freq_bins or n_fft
-    out_t = output_time_bins or spec_time_bins
+    out_t = output_time_bins
     window = _get_window(device, win_length)
     with torch.no_grad():
         sig = iq_batch.reshape(B * C, L).to(device=device, dtype=torch.complex64)
@@ -61,17 +63,17 @@ def compute_stft(
             center=True,
         )
         Zxx = torch.fft.fftshift(Zxx, dim=1)
-        Zxx = Zxx[:, :, :spec_time_bins]
         eps = torch.finfo(torch.float32).eps
         Zxx_db = 20.0 * torch.log10(Zxx.abs() + eps)
-        if out_f != n_fft or out_t != spec_time_bins:
+        target_time_bins = out_t or Zxx_db.shape[-1]
+        if out_f != n_fft or target_time_bins != Zxx_db.shape[-1]:
             # 先在 dB 域规整尺寸，再做每通道归一化，避免池化改变归一化统计。
             Zxx_db = F.adaptive_avg_pool2d(
                 Zxx_db.unsqueeze(1),
-                output_size=(out_f, out_t),
+                output_size=(out_f, target_time_bins),
             ).squeeze(1)
         mean = Zxx_db.mean(dim=(1, 2), keepdim=True)
         std = Zxx_db.std(dim=(1, 2), keepdim=True)
         Zxx_norm = (Zxx_db - mean) / (std + 1e-8)
-        Zxx_norm = Zxx_norm.reshape(B, C, out_f, out_t)
+        Zxx_norm = Zxx_norm.reshape(B, C, out_f, target_time_bins)
     return Zxx_norm

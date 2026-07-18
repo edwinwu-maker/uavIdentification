@@ -33,8 +33,14 @@ from src.visualization.h5_png_export import (
 )
 
 FS = 100e6
-SAMPLE_LENGTH = 1_000_000
-SAMPLE_DURATION = SAMPLE_LENGTH / FS
+SAMPLE_LENGTH = 10_000_000
+
+
+def _pooled_axis(values, output_bins):
+    """按预计算时的自适应平均池化分组生成坐标。"""
+    if len(values) % output_bins != 0:
+        return np.linspace(values[0], values[-1], output_bins)
+    return values.reshape(output_bins, -1).mean(axis=1)
 
 
 def _default_h5_dir() -> str:
@@ -45,14 +51,20 @@ def _default_save_root(h5_dir: str) -> str:
     return str(Path(h5_dir).parent / "stft_png")
 
 
-def plot_single_channel(stft_sample, save_path, sample_idx, rf_channel, label=None):
+def plot_single_channel(
+    stft_sample, save_path, sample_idx, rf_channel, label=None, *, sample_length=SAMPLE_LENGTH,
+    n_fft=2048, hop_length=1024, source_time_bins=None,
+):
     """Plot a single-channel STFT and save as PNG.
 
-    stft_sample: (1, 512, 512) float32, z-score normalized STFT.
+    stft_sample: (1, 1024, 1024) float32, z-score normalized STFT.
     """
     n_freqs, n_times = stft_sample.shape[1], stft_sample.shape[2]
-    freqs = np.fft.fftshift(np.fft.fftfreq(n_freqs, 1.0 / FS))
-    times = np.linspace(0, SAMPLE_DURATION, n_times)
+    source_freqs = np.fft.fftshift(np.fft.fftfreq(n_fft, 1.0 / FS))
+    source_time_bins = source_time_bins or sample_length // hop_length + 1
+    source_times = np.arange(source_time_bins, dtype=np.float64) * hop_length / FS
+    freqs = _pooled_axis(source_freqs, n_freqs)
+    times = _pooled_axis(source_times, n_times)
 
     fig, ax = plt.subplots(1, 1, figsize=(14, 5), constrained_layout=True)
     im = ax.pcolormesh(
@@ -79,18 +91,26 @@ def _task_generator(h5f, name_no_extension, drone_code, save_root, max_samples_p
     stft = h5f["stft"]
     labels = h5f["labels"]
     rf_channel = int(h5f.attrs["rf_channel"])
+    stft_metadata = {
+        "sample_length": int(h5f.attrs.get("sample_length", SAMPLE_LENGTH)),
+        "n_fft": int(h5f.attrs.get("n_fft", 2048)),
+        "hop_length": int(h5f.attrs.get("hop_length", 1024)),
+        "source_time_bins": int(h5f.attrs.get("source_time_bins", 0)) or None,
+    }
     num_samples = limited_sample_count(stft.shape[0], max_samples_per_file)
 
     for i in range(num_samples):
         save_path = sample_save_path(save_root, drone_code, name_no_extension, i)
-        yield (stft[i], i, rf_channel, int(labels[i]), save_path)
+        yield (stft[i], i, rf_channel, int(labels[i]), save_path, stft_metadata)
 
 
 def _process_sample(args):
     """Worker: plot and save a single stft sample."""
-    stft_slice, idx, rf_channel, label, save_path = args
+    stft_slice, idx, rf_channel, label, save_path, stft_metadata = args
     try:
-        plot_single_channel(stft_slice, save_path, idx, rf_channel, label)
+        plot_single_channel(
+            stft_slice, save_path, idx, rf_channel, label, **stft_metadata
+        )
     except Exception as e:
         logger.error(f"Sample {idx}: {e}")
 

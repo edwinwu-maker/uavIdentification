@@ -60,14 +60,14 @@ from src.utils.logger import logger
 from src.utils.paths import checkpoint_dir, figures_dir, metrics_dir
 
 DEFAULT_SNRS = [-15, -10, -7.5, -5, -2.5, 0, 2.5, 5, 7.5, 10]
-DEFAULT_SAMPLE_LENGTH = 1_000_000
-DEFAULT_BATCH_SIZE = 8
+DEFAULT_SAMPLE_LENGTH = 10_000_000
+DEFAULT_BATCH_SIZE = 1
 DEFAULT_SEED = 42
-DEFAULT_N_FFT = 1024
-DEFAULT_WIN_LENGTH = 1024
-DEFAULT_SPEC_TIME_BINS = 1024
-DEFAULT_OUTPUT_FREQ_BINS = 512
-DEFAULT_OUTPUT_TIME_BINS = 512
+DEFAULT_N_FFT = 2048
+DEFAULT_WIN_LENGTH = 2048
+DEFAULT_HOP_LENGTH = 1024
+DEFAULT_OUTPUT_FREQ_BINS = 1024
+DEFAULT_OUTPUT_TIME_BINS = 1024
 DEFAULT_MODEL_NAME = "best_stft_model.pth"
 DEFAULT_OUTPUT_CSV = metrics_dir() / "stft_snr_accuracy.csv"
 DEFAULT_OUTPUT_PNG = figures_dir() / "stft_snr_accuracy.png"
@@ -177,7 +177,7 @@ def evaluate_snr_accuracy(
                         device=device,
                         n_fft=DEFAULT_N_FFT,
                         win_length=DEFAULT_WIN_LENGTH,
-                        spec_time_bins=DEFAULT_SPEC_TIME_BINS,
+                        hop_length=DEFAULT_HOP_LENGTH,
                         output_freq_bins=DEFAULT_OUTPUT_FREQ_BINS,
                         output_time_bins=DEFAULT_OUTPUT_TIME_BINS,
                     )

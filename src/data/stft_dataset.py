@@ -18,7 +18,7 @@ class StftDataset(H5FeatureDataset):
     """Load pre-computed stfts from .h5 files.
 
     Each .h5 file contains:
-      /stft   (N, 1, 512, 512) float32
+      /stft   (N, 1, 1024, 1024) float32
       /labels (N,) int64
 
     The dataset scans a directory for all .h5 files and indexes every sample

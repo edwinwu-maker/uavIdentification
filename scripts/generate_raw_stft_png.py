@@ -3,7 +3,7 @@
 Usage:
   python scripts/generate_raw_stft_png.py --data-dir ~/Desktop/dataset/droneRFa --snrs -10 0 10
   python scripts/generate_raw_stft_png.py --data-dir ~/Desktop/dataset/droneRFa --clean
-  python scripts/generate_raw_stft_png.py --data-dir ... --snrs 0 --device cuda:0 --batch-size 8
+  python scripts/generate_raw_stft_png.py --data-dir ... --snrs 0 --device cuda:0 --batch-size 1
   python scripts/generate_raw_stft_png.py --data-dir ... --snrs -5 5 --max-files 1 --max-samples-per-file 1
 
 The source filename selects one RF channel: S0000-S0111 uses RF0 and
@@ -48,12 +48,12 @@ from src.utils.device import default_device
 from src.utils.logger import logger
 
 FS = 100e6
-SAMPLE_LENGTH = 1_000_000
-N_FFT = 1024
-WIN_LENGTH = 1024
-SPEC_TIME_BINS = 1024
-OUTPUT_FREQ_BINS = 512
-OUTPUT_TIME_BINS = 512
+SAMPLE_LENGTH = 10_000_000
+N_FFT = 2048
+WIN_LENGTH = 2048
+HOP_LENGTH = 1024
+OUTPUT_FREQ_BINS = 1024
+OUTPUT_TIME_BINS = 1024
 
 
 def _default_save_root(data_dir: str) -> str:
@@ -82,11 +82,11 @@ def _pooled_axis(values: np.ndarray, output_bins: int) -> np.ndarray:
 
 
 def stft_plot_axes(sample_length: int) -> tuple[np.ndarray, np.ndarray]:
-    """生成与 compute_stft 的裁剪和池化过程对应的频率、时间坐标。"""
+    """生成与 compute_stft 的池化过程对应的频率、时间坐标。"""
 
-    hop_length = sample_length // (SPEC_TIME_BINS - 1)
     source_freqs = np.fft.fftshift(np.fft.fftfreq(N_FFT, 1.0 / FS))
-    source_times = np.arange(SPEC_TIME_BINS, dtype=np.float64) * hop_length / FS
+    source_time_bins = sample_length // HOP_LENGTH + 1
+    source_times = np.arange(source_time_bins, dtype=np.float64) * HOP_LENGTH / FS
     freqs = _pooled_axis(source_freqs, OUTPUT_FREQ_BINS)
     times = _pooled_axis(source_times, OUTPUT_TIME_BINS)
     return freqs, times
@@ -211,7 +211,7 @@ def process_one_mat(
                     device=device,
                     n_fft=N_FFT,
                     win_length=WIN_LENGTH,
-                    spec_time_bins=SPEC_TIME_BINS,
+                    hop_length=HOP_LENGTH,
                     output_freq_bins=OUTPUT_FREQ_BINS,
                     output_time_bins=OUTPUT_TIME_BINS,
                 ).cpu().numpy()
@@ -254,7 +254,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help="Output root (default: <data-dir-parent>/DroneRFa_stft_snr_png)")
     parser.add_argument("--sample-length", type=int, default=SAMPLE_LENGTH,
                         help="Number of IQ points per STFT sample")
-    parser.add_argument("--batch-size", type=int, default=8,
+    parser.add_argument("--batch-size", type=int, default=1,
                         help="STFT batch size")
     parser.add_argument("--device", type=str, default=default_device(),
                         help='Torch device, e.g. "cpu", "cuda:0", or "mps"')
