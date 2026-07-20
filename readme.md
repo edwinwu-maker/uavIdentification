@@ -49,18 +49,23 @@ python <script-or-command>
 │   ├── generate_raw_stft_png.py      # 从原始 .mat IQ 按指定 SNR 生成单通道 STFT PNG
 │   ├── generate_raw_cpp_png.py       # 从原始 .mat IQ 按指定 SNR 生成单通道 CPP/FAM PNG
 │   ├── generate_stft_png.py          # 从 STFT .h5 生成单通道频谱图 PNG
-│   └── generate_cpp_png.py           # 从 CPP/FAM .h5 生成单通道 CPP/FAM PNG
+│   ├── generate_cpp_png.py           # 从 CPP/FAM .h5 生成单通道 CPP/FAM PNG
+│   ├── train_stft_deep_cluster.py    # 训练 STFT DCEC 并生成盲审样本
+│   └── export_clean_stft_h5.py       # 根据人工审核结果导出图传正样本 H5
 ├── src/
 │   ├── data/
 │   │   ├── drone_rfa_io.py           # DroneRFa 原始 .mat 数据读取工具
 │   │   ├── h5_dataset.py             # STFT/CPP .h5 数据集通用加载基类
 │   │   ├── splits.py                 # 数据集划分工具
 │   │   ├── stft_dataset.py           # 按样本索引懒加载 STFT .h5 数据
+│   │   ├── stft_clustering.py        # clean STFT 聚类索引与模型输入预处理
+│   │   ├── stft_cleaning_export.py   # 人工标定、阈值校准与 H5 导出
 │   │   └── cpp_dataset.py            # 按样本索引懒加载 CPP/FAM .h5 数据
 │   ├── evaluation/
 │   │   └── snr_accuracy.py           # 不同 SNR 条件下的准确率评估工具
 │   ├── models/
-│   │   └── resnet.py                 # 适配单通道特征输入的 ResNet-18
+│   │   ├── resnet.py                 # 适配单通道特征输入的 ResNet-18
+│   │   └── stft_deep_cluster.py      # STFT 卷积自编码器与 DCEC 模型
 │   ├── preprocess/
 │   │   ├── h5_precompute.py          # STFT/CPP .h5 预计算通用流程
 │   │   ├── random_snr_awgn.py        # 随机 SNR 加性高斯白噪声增强
@@ -73,6 +78,7 @@ python <script-or-command>
 │   │   ├── checkpoint.py             # 模型 checkpoint 保存与加载
 │   │   ├── evaluator.py              # 验证/测试循环
 │   │   ├── metrics.py                # 训练评估指标计算
+│   │   ├── stft_deep_cluster.py      # 自编码器预训练、K 选择和 DCEC 训练
 │   │   └── trainer.py                # 模型训练循环
 │   ├── visualization/
 │   │   ├── h5_png_export.py          # 从 .h5 样本批量导出 PNG 的通用工具
@@ -158,6 +164,31 @@ H5 生成的 STFT 图片默认保存到 H5 目录旁的 `stft_png/`，CPP/FAM �
 目录旁的 `cpp_png/`。
 
 旧 14 类 H5 的压缩标签、文件级 `rf_channel` 属性、split manifest 和 checkpoint 均与新格式不兼容。新实验使用带 `17class` 的独立目录和文件名，不覆盖历史产物。
+
+### STFT 图传片段深度聚类清洗
+
+该流程只接受 `noise_profile=clean` 的 STFT H5，并跳过 `T0000` 背景类。先训练卷积自编码器和
+DCEC，随后生成 250 条盲审图片及 `review.csv`：
+
+```bash
+python scripts/train_stft_deep_cluster.py \
+  --data-dir ~/Desktop/dataset/DroneRFa_stft_17class_h5 \
+  --work-dir outputs/stft_deep_cluster \
+  --device mps
+```
+
+查看 `outputs/stft_deep_cluster/review_images/`，在 `review.csv` 的 `manual_label` 列填写
+`video`、`non_video` 或 `uncertain`。完成全部审核后导出图传正样本：
+
+```bash
+python scripts/export_clean_stft_h5.py \
+  --data-dir ~/Desktop/dataset/DroneRFa_stft_17class_h5 \
+  --work-dir outputs/stft_deep_cluster \
+  --output-dir ~/Desktop/dataset/DroneRFa_stft_video_clean_h5
+```
+
+导出目录按源文件镜像组织；原始 H5 不会被修改。全量样本决定和独立审核指标分别保存在
+`cleaning_manifest.csv` 与 `cleaning_report.json`。
 
 ### 训练模型
 
