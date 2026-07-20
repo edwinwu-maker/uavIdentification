@@ -1,8 +1,8 @@
 """Train ResNet on pre-computed DroneRFa features.
 
 Usage:
-  python scripts/train.py --feature stft --data-dir ~/Desktop/dataset/DroneRFa_stft_h5 --batch-size 64
-  python scripts/train.py --feature cpp --data-dir ~/Desktop/dataset/DroneRFa_cpp_h5 --model resnet18-small-stem --batch-size 64
+  python scripts/train.py --feature stft --data-dir ~/Desktop/dataset/DroneRFa_stft_awgn_random_17class_h5 --split-manifest outputs/splits/full_17class_seed42.csv --batch-size 64
+  python scripts/train.py --feature cpp --data-dir ~/Desktop/dataset/DroneRFa_cpp_awgn_random_17class_h5 --split-manifest outputs/splits/full_17class_seed42.csv --model resnet18-small-stem --batch-size 64
   python scripts/train.py --feature cpp --data-dir ... --files-per-class 12 --split-manifest outputs/splits/random12_seed42.csv
 
 """

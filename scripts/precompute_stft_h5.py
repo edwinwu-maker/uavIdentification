@@ -11,7 +11,7 @@ Output HDF5 structure (per file):
   /snr_db               (N,) float32
   /source_sample_idx    (N,) int64
   /augmentation_variant (N,) S16
-  attrs/rf_channel      0 or 1
+  /rf_channel           (N,) int8
   attrs/noise_profile   clean, random, or mixed-3x
 
 Usage:
@@ -49,7 +49,7 @@ from src.data.drone_rfa_io import (
     default_raw_data_dir,
     parse_label,
     read_iq_batch,
-    rf_channel_for_file,
+    rf_channels_for_file,
 )
 from src.preprocess.h5_precompute import run_precompute_batch, output_h5_path
 from src.preprocess.random_snr_awgn import add_random_snr_awgn_with_snr
@@ -73,8 +73,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-dir", type=str, default=default_raw_data_dir(),
                         help="Directory containing .mat files")
     parser.add_argument("--output-dir", type=str, default=None,
-                        help="Directory for output .h5 files (default: <data-dir-parent>/DroneRFa_stft_awgn_random_h5, "
-                             "DroneRFa_stft_awgn_mixed3x_h5 for mixed-3x, or DroneRFa_stft_h5 with --clean)")
+                        help="Directory for output .h5 files (default: <data-dir-parent>/DroneRFa_stft_awgn_random_17class_h5, "
+                             "DroneRFa_stft_awgn_mixed3x_17class_h5 for mixed-3x, or "
+                             "DroneRFa_stft_17class_h5 with --clean)")
     parser.add_argument("--sample-length", type=int, default=SAMPLE_LENGTH,
                         help="Number of IQ samples per output stft")
     parser.add_argument("--batch-size", type=int, default=1,
@@ -151,21 +152,24 @@ def process_one_mat(
     mat_file = os.path.basename(mat_path)
     out_path = output_h5_path(mat_path, output_dir)
     label = parse_label(mat_file)
-    rf_channel = rf_channel_for_file(mat_file)
+    rf_channels = rf_channels_for_file(mat_file)
 
     logger.info("Processing: %s", mat_file)
     os.makedirs(output_dir, exist_ok=True)
 
     with h5py.File(mat_path, "r") as src:
-        num_source_samples = count_iq_samples(
-            src,
-            rf_channel=rf_channel,
-            sample_length=sample_length,
-            max_samples=max_samples_per_file,
-        )
+        channel_sample_counts = {
+            rf_channel: count_iq_samples(
+                src,
+                rf_channel=rf_channel,
+                sample_length=sample_length,
+                max_samples=max_samples_per_file,
+            )
+            for rf_channel in rf_channels
+        }
 
         variants_per_sample = 3 if noise_profile == "mixed-3x" else 1
-        num_samples = num_source_samples * variants_per_sample
+        num_samples = sum(channel_sample_counts.values()) * variants_per_sample
         if noise_profile == "mixed-3x":
             variant_specs = (
                 ("clean", True, None, None),
@@ -188,8 +192,8 @@ def process_one_mat(
             h5f.create_dataset("is_clean", shape=(num_samples,), dtype="?")
             h5f.create_dataset("snr_db", shape=(num_samples,), dtype="f4")
             h5f.create_dataset("source_sample_idx", shape=(num_samples,), dtype="i8")
+            h5f.create_dataset("rf_channel", shape=(num_samples,), dtype="i1")
             h5f.create_dataset("augmentation_variant", shape=(num_samples,), dtype="S16")
-            h5f.attrs["rf_channel"] = rf_channel
             h5f.attrs["noise_profile"] = noise_profile
             h5f.attrs["sample_length"] = sample_length
             h5f.attrs["n_fft"] = N_FFT
@@ -200,53 +204,63 @@ def process_one_mat(
             h5f.attrs["output_freq_bins"] = OUTPUT_FREQ_BINS
             h5f.attrs["output_time_bins"] = OUTPUT_TIME_BINS
 
-            batch_starts = range(0, num_source_samples, batch_size)
-            for sample_idx in tqdm(batch_starts, total=len(batch_starts), desc=f"  {mat_file}"):
-                batch_end = min(sample_idx + batch_size, num_source_samples)
-                chunk_iq = read_iq_batch(
-                    src,
-                    rf_channel=rf_channel,
-                    sample_length=sample_length,
-                    start_idx=sample_idx,
-                    end_idx=batch_end,
-                )
-                chunk_iq = torch.as_tensor(chunk_iq, dtype=torch.complex64, device=device)
-                source_indices = np.arange(sample_idx, batch_end, dtype=np.int64)
-                for variant_idx, (variant_name, is_clean, range_min, range_max) in enumerate(
-                    variant_specs
+            channel_offset = 0
+            for rf_channel, num_source_samples in channel_sample_counts.items():
+                batch_starts = range(0, num_source_samples, batch_size)
+                for sample_idx in tqdm(
+                    batch_starts,
+                    total=len(batch_starts),
+                    desc=f"  {mat_file} RF{rf_channel}",
                 ):
-                    variant_iq = chunk_iq
-                    sampled_snrs = torch.full(
-                        (len(source_indices),), float("nan"), dtype=torch.float32, device=device
+                    batch_end = min(sample_idx + batch_size, num_source_samples)
+                    chunk_iq = read_iq_batch(
+                        src,
+                        rf_channel=rf_channel,
+                        sample_length=sample_length,
+                        start_idx=sample_idx,
+                        end_idx=batch_end,
                     )
-                    if not is_clean:
-                        variant_iq, sampled_snrs = add_random_snr_awgn_with_snr(
-                            chunk_iq,
-                            file_id=mat_file,
-                            start_idx=sample_idx,
-                            snr_min=float(range_min),
-                            snr_max=float(range_max),
-                            noise_seed=noise_seed,
-                            variant_idx=variant_idx,
-                            device=device,
+                    chunk_iq = torch.as_tensor(chunk_iq, dtype=torch.complex64, device=device)
+                    source_indices = np.arange(sample_idx, batch_end, dtype=np.int64)
+                    for variant_idx, (variant_name, is_clean, range_min, range_max) in enumerate(
+                        variant_specs
+                    ):
+                        variant_iq = chunk_iq
+                        sampled_snrs = torch.full(
+                            (len(source_indices),), float("nan"), dtype=torch.float32, device=device
                         )
+                        if not is_clean:
+                            variant_iq, sampled_snrs = add_random_snr_awgn_with_snr(
+                                chunk_iq,
+                                file_id=f"{mat_file}:RF{rf_channel}",
+                                start_idx=sample_idx,
+                                snr_min=float(range_min),
+                                snr_max=float(range_max),
+                                noise_seed=noise_seed,
+                                variant_idx=variant_idx,
+                                device=device,
+                            )
 
-                    batch_stft = compute_stft(
-                        variant_iq,
-                        device,
-                        n_fft=N_FFT,
-                        win_length=WIN_LENGTH,
-                        hop_length=HOP_LENGTH,
-                        output_freq_bins=OUTPUT_FREQ_BINS,
-                        output_time_bins=OUTPUT_TIME_BINS,
-                    ).cpu().numpy()
-                    output_indices = source_indices * variants_per_sample + variant_idx
-                    h5f["stft"][output_indices] = batch_stft
-                    h5f["labels"][output_indices] = label
-                    h5f["is_clean"][output_indices] = is_clean
-                    h5f["snr_db"][output_indices] = sampled_snrs.cpu().numpy()
-                    h5f["source_sample_idx"][output_indices] = source_indices
-                    h5f["augmentation_variant"][output_indices] = variant_name
+                        batch_stft = compute_stft(
+                            variant_iq,
+                            device,
+                            n_fft=N_FFT,
+                            win_length=WIN_LENGTH,
+                            hop_length=HOP_LENGTH,
+                            output_freq_bins=OUTPUT_FREQ_BINS,
+                            output_time_bins=OUTPUT_TIME_BINS,
+                        ).cpu().numpy()
+                        output_indices = (
+                            channel_offset + source_indices * variants_per_sample + variant_idx
+                        )
+                        h5f["stft"][output_indices] = batch_stft
+                        h5f["labels"][output_indices] = label
+                        h5f["is_clean"][output_indices] = is_clean
+                        h5f["snr_db"][output_indices] = sampled_snrs.cpu().numpy()
+                        h5f["source_sample_idx"][output_indices] = source_indices
+                        h5f["rf_channel"][output_indices] = rf_channel
+                        h5f["augmentation_variant"][output_indices] = variant_name
+                channel_offset += num_source_samples * variants_per_sample
 
     logger.info("Done: %s -> %d stfts", mat_file, num_samples)
     return mat_file, num_samples
@@ -259,11 +273,11 @@ def main() -> None:
     if args.output_dir:
         output_dir = os.path.expanduser(args.output_dir)
     elif args.clean:
-        output_dir = str(Path(data_dir).parent / "DroneRFa_stft_h5")
+        output_dir = str(Path(data_dir).parent / "DroneRFa_stft_17class_h5")
     elif args.noise_profile == "mixed-3x":
-        output_dir = str(Path(data_dir).parent / "DroneRFa_stft_awgn_mixed3x_h5")
+        output_dir = str(Path(data_dir).parent / "DroneRFa_stft_awgn_mixed3x_17class_h5")
     else:
-        output_dir = str(Path(data_dir).parent / "DroneRFa_stft_awgn_random_h5")
+        output_dir = str(Path(data_dir).parent / "DroneRFa_stft_awgn_random_17class_h5")
 
     device = "cuda:0" if args.device == "cuda" else args.device
     logger.info("Using device: %s", device)

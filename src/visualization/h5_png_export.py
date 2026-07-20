@@ -30,8 +30,9 @@ def sample_save_path(
     drone_code: str,
     name_no_extension: str,
     sample_idx: int,
+    rf_channel: int,
 ) -> str:
-    png_name = f"{name_no_extension}_sample_{sample_idx:04d}.png"
+    png_name = f"{name_no_extension}_RF{rf_channel}_sample_{sample_idx:04d}.png"
     return os.path.join(save_root, drone_code, png_name)
 
 
@@ -70,8 +71,13 @@ def process_h5_samples(
                 f"Feature dataset must have shape (N, 1, H, W), got {feature_shape} in {h5_path}. "
                 "Re-run precomputation; legacy dual-channel caches are not supported."
             )
-        if "rf_channel" not in h5f.attrs or int(h5f.attrs["rf_channel"]) not in (0, 1):
-            raise ValueError(f"Missing or invalid rf_channel attribute in {h5_path}; re-run precomputation")
+        if "rf_channel" not in h5f:
+            raise ValueError(f"Missing rf_channel dataset in {h5_path}; re-run precomputation")
+        rf_channels = h5f["rf_channel"][:]
+        if rf_channels.shape != (feature_shape[0],) or not all(
+            int(channel) in (0, 1) for channel in rf_channels
+        ):
+            raise ValueError(f"Invalid rf_channel dataset in {h5_path}; re-run precomputation")
         num_samples = limited_sample_count(h5f[feature_key].shape[0], max_samples_per_file)
         tasks = build_tasks(
             h5f,

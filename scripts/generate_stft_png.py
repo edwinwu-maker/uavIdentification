@@ -90,7 +90,7 @@ def _task_generator(h5f, name_no_extension, drone_code, save_root, max_samples_p
     """Yield (stft_slice, idx, label, save_path) one sample at a time."""
     stft = h5f["stft"]
     labels = h5f["labels"]
-    rf_channel = int(h5f.attrs["rf_channel"])
+    rf_channels = h5f["rf_channel"]
     stft_metadata = {
         "sample_length": int(h5f.attrs.get("sample_length", SAMPLE_LENGTH)),
         "n_fft": int(h5f.attrs.get("n_fft", 2048)),
@@ -100,7 +100,8 @@ def _task_generator(h5f, name_no_extension, drone_code, save_root, max_samples_p
     num_samples = limited_sample_count(stft.shape[0], max_samples_per_file)
 
     for i in range(num_samples):
-        save_path = sample_save_path(save_root, drone_code, name_no_extension, i)
+        rf_channel = int(rf_channels[i])
+        save_path = sample_save_path(save_root, drone_code, name_no_extension, i, rf_channel)
         yield (stft[i], i, rf_channel, int(labels[i]), save_path, stft_metadata)
 
 

@@ -28,7 +28,7 @@ import torch
 from tqdm import tqdm
 
 from src.data.drone_rfa_io import default_raw_data_dir
-from src.data.drone_rfa_io import count_iq_samples, parse_label, read_iq_batch, rf_channel_for_file
+from src.data.drone_rfa_io import count_iq_samples, parse_label, read_iq_batch, rf_channels_for_file
 from src.preprocess.cpp import (
     compute_cpp,
     DEFAULT_SEGMENT_SAMPLES,
@@ -54,8 +54,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-dir", type=str, default=default_raw_data_dir(),
                         help="Directory containing .mat files")
     parser.add_argument("--output-dir", type=str, default=None,
-                        help="Directory for output .h5 files (default: <data-dir-parent>/DroneRFa_cpp_awgn_random_h5, "
-                             "DroneRFa_cpp_awgn_mixed3x_h5 for mixed-3x, or DroneRFa_cpp_h5 with --clean)")
+                        help="Directory for output .h5 files (default: <data-dir-parent>/DroneRFa_cpp_awgn_random_17class_h5, "
+                             "DroneRFa_cpp_awgn_mixed3x_17class_h5 for mixed-3x, or "
+                             "DroneRFa_cpp_17class_h5 with --clean)")
     parser.add_argument("--sample-length", type=int, default=SAMPLE_LENGTH,
                         help="Number of IQ samples per output CPP sample")
     parser.add_argument("--segment-samples", type=int, default=DEFAULT_SEGMENT_SAMPLES,
@@ -152,20 +153,23 @@ def process_one_mat(
     mat_name = os.path.basename(mat_path)
     out_path = output_h5_path(mat_path, output_dir)
     label = parse_label(mat_name)
-    rf_channel = rf_channel_for_file(mat_name)
+    rf_channels = rf_channels_for_file(mat_name)
 
     logger.info("Processing: %s", mat_name)
     os.makedirs(output_dir, exist_ok=True)
     with h5py.File(mat_path, "r") as src:
-        num_source_samples = count_iq_samples(
-            src,
-            rf_channel=rf_channel,
-            sample_length=sample_length,
-            max_samples=max_samples_per_file,
-        )
+        channel_sample_counts = {
+            rf_channel: count_iq_samples(
+                src,
+                rf_channel=rf_channel,
+                sample_length=sample_length,
+                max_samples=max_samples_per_file,
+            )
+            for rf_channel in rf_channels
+        }
 
         variants_per_sample = 3 if noise_profile == "mixed-3x" else 1
-        num_samples = num_source_samples * variants_per_sample
+        num_samples = sum(channel_sample_counts.values()) * variants_per_sample
         with h5py.File(out_path, "w") as h5f:
             h5f.create_dataset(
                 "cpp",
@@ -177,72 +181,80 @@ def process_one_mat(
             h5f.create_dataset("is_clean", shape=(num_samples,), dtype="?")
             h5f.create_dataset("snr_db", shape=(num_samples,), dtype="f4")
             h5f.create_dataset("source_sample_idx", shape=(num_samples,), dtype="i8")
+            h5f.create_dataset("rf_channel", shape=(num_samples,), dtype="i1")
             h5f.create_dataset("augmentation_variant", shape=(num_samples,), dtype="S16")
-            h5f.attrs["rf_channel"] = rf_channel
             h5f.attrs["noise_profile"] = "clean" if noise_profile == "clean" else noise_profile
 
             f_axis = np.linspace(-0.5, 0.5, f_bins, dtype=np.float32)
             alpha_axis = np.linspace(-1.0, 1.0, alpha_bins, dtype=np.float32)
-            for sample_idx in tqdm(
-                range(num_source_samples), total=num_source_samples, desc=f"  {mat_name}"
-            ):
-                iq = read_iq_batch(
-                    src,
-                    rf_channel=rf_channel,
-                    sample_length=sample_length,
-                    start_idx=sample_idx,
-                    end_idx=sample_idx + 1,
-                )
-                iq = torch.as_tensor(iq, dtype=torch.complex64, device=device)
-                if noise_profile == "mixed-3x":
-                    variant_specs = (
-                        ("clean", True, None, None),
-                        ("snr_low", False, snr_low_min, snr_low_max),
-                        ("snr_high", False, snr_high_min, snr_high_max),
-                    )
-                elif noise_profile == "clean":
-                    variant_specs = (("clean", True, None, None),)
-                else:
-                    variant_specs = (("random", False, snr_min, snr_max),)
-
-                for variant_idx, (variant_name, is_clean, range_min, range_max) in enumerate(
-                    variant_specs
+            channel_offset = 0
+            for rf_channel, num_source_samples in channel_sample_counts.items():
+                for sample_idx in tqdm(
+                    range(num_source_samples),
+                    total=num_source_samples,
+                    desc=f"  {mat_name} RF{rf_channel}",
                 ):
-                    variant_iq = iq
-                    snr_value = np.nan
-                    if not is_clean:
-                        variant_iq, sampled_snr = add_random_snr_awgn_with_snr(
-                            iq,
-                            file_id=mat_name,
-                            start_idx=sample_idx,
-                            snr_min=float(range_min),
-                            snr_max=float(range_max),
-                            noise_seed=noise_seed,
-                            variant_idx=variant_idx,
-                            device=device,
-                        )
-                        snr_value = float(sampled_snr[0].item())
-
-                    signal = variant_iq[0, 0, :]
-                    cpp, f_axis, alpha_axis = compute_cpp(
-                        signal,
-                        segment_samples=segment_samples,
-                        segment_hop_samples=segment_hop_samples,
-                        fam_merge=fam_merge,
-                        f_bins=f_bins,
-                        alpha_bins=alpha_bins,
-                        device=device,
-                        pair_chunk_size=pair_chunk_size,
-                        fam_nfft=fam_nfft,
-                        fam_hop=fam_hop,
+                    iq = read_iq_batch(
+                        src,
+                        rf_channel=rf_channel,
+                        sample_length=sample_length,
+                        start_idx=sample_idx,
+                        end_idx=sample_idx + 1,
                     )
-                    output_idx = sample_idx * variants_per_sample + variant_idx
-                    h5f["cpp"][output_idx] = normalize_cpp(cpp).detach().cpu().numpy()
-                    h5f["labels"][output_idx] = label
-                    h5f["is_clean"][output_idx] = is_clean
-                    h5f["snr_db"][output_idx] = snr_value
-                    h5f["source_sample_idx"][output_idx] = sample_idx
-                    h5f["augmentation_variant"][output_idx] = variant_name
+                    iq = torch.as_tensor(iq, dtype=torch.complex64, device=device)
+                    if noise_profile == "mixed-3x":
+                        variant_specs = (
+                            ("clean", True, None, None),
+                            ("snr_low", False, snr_low_min, snr_low_max),
+                            ("snr_high", False, snr_high_min, snr_high_max),
+                        )
+                    elif noise_profile == "clean":
+                        variant_specs = (("clean", True, None, None),)
+                    else:
+                        variant_specs = (("random", False, snr_min, snr_max),)
+
+                    for variant_idx, (variant_name, is_clean, range_min, range_max) in enumerate(
+                        variant_specs
+                    ):
+                        variant_iq = iq
+                        snr_value = np.nan
+                        if not is_clean:
+                            variant_iq, sampled_snr = add_random_snr_awgn_with_snr(
+                                iq,
+                                file_id=f"{mat_name}:RF{rf_channel}",
+                                start_idx=sample_idx,
+                                snr_min=float(range_min),
+                                snr_max=float(range_max),
+                                noise_seed=noise_seed,
+                                variant_idx=variant_idx,
+                                device=device,
+                            )
+                            snr_value = float(sampled_snr[0].item())
+
+                        signal = variant_iq[0, 0, :]
+                        cpp, f_axis, alpha_axis = compute_cpp(
+                            signal,
+                            segment_samples=segment_samples,
+                            segment_hop_samples=segment_hop_samples,
+                            fam_merge=fam_merge,
+                            f_bins=f_bins,
+                            alpha_bins=alpha_bins,
+                            device=device,
+                            pair_chunk_size=pair_chunk_size,
+                            fam_nfft=fam_nfft,
+                            fam_hop=fam_hop,
+                        )
+                        output_idx = (
+                            channel_offset + sample_idx * variants_per_sample + variant_idx
+                        )
+                        h5f["cpp"][output_idx] = normalize_cpp(cpp).detach().cpu().numpy()
+                        h5f["labels"][output_idx] = label
+                        h5f["is_clean"][output_idx] = is_clean
+                        h5f["snr_db"][output_idx] = snr_value
+                        h5f["source_sample_idx"][output_idx] = sample_idx
+                        h5f["rf_channel"][output_idx] = rf_channel
+                        h5f["augmentation_variant"][output_idx] = variant_name
+                channel_offset += num_source_samples * variants_per_sample
 
             h5f.create_dataset("f_axis", data=f_axis)
             h5f.create_dataset("alpha_axis", data=alpha_axis)
@@ -260,11 +272,11 @@ def main() -> None:
     if args.output_dir:
         output_dir = os.path.expanduser(args.output_dir)
     elif args.clean:
-        output_dir = str(Path(data_dir).parent / "DroneRFa_cpp_h5")
+        output_dir = str(Path(data_dir).parent / "DroneRFa_cpp_17class_h5")
     elif args.noise_profile == "mixed-3x":
-        output_dir = str(Path(data_dir).parent / "DroneRFa_cpp_awgn_mixed3x_h5")
+        output_dir = str(Path(data_dir).parent / "DroneRFa_cpp_awgn_mixed3x_17class_h5")
     else:
-        output_dir = str(Path(data_dir).parent / "DroneRFa_cpp_awgn_random_h5")
+        output_dir = str(Path(data_dir).parent / "DroneRFa_cpp_awgn_random_17class_h5")
     os.makedirs(output_dir, exist_ok=True)
     run_precompute_batch(
         data_dir,

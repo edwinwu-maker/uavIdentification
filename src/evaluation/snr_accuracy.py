@@ -18,12 +18,14 @@ def save_prediction_diagnostics(
     predictions_csv: str | Path | None,
     per_file_csv: str | Path | None,
 ) -> None:
-    """保存逐样本预测及按 SNR/源文件聚合的诊断结果。"""
+    """保存逐样本预测及按 SNR/源文件/通道聚合的诊断结果。"""
 
     if predictions_csv is not None:
         path = Path(predictions_csv)
         path.parent.mkdir(parents=True, exist_ok=True)
-        fieldnames = ["snr_db", "source_file", "sample_idx", "true_label", "pred_label"]
+        fieldnames = [
+            "snr_db", "source_file", "sample_idx", "rf_channel", "true_label", "pred_label",
+        ]
         if rows and "original_true_label" in rows[0]:
             fieldnames.extend(["original_true_label", "original_pred_label"])
         fieldnames.append("correct")
@@ -35,13 +37,16 @@ def save_prediction_diagnostics(
     if per_file_csv is None:
         return
 
-    grouped: dict[tuple[float, str, int], list[dict[str, object]]] = defaultdict(list)
+    grouped: dict[tuple[float, str, int, int], list[dict[str, object]]] = defaultdict(list)
     for row in rows:
-        key = (float(row["snr_db"]), str(row["source_file"]), int(row["true_label"]))
+        key = (
+            float(row["snr_db"]), str(row["source_file"]),
+            int(row["rf_channel"]), int(row["true_label"]),
+        )
         grouped[key].append(row)
 
     output_rows = []
-    for (snr_db, source_file, true_label), file_rows in sorted(grouped.items()):
+    for (snr_db, source_file, rf_channel, true_label), file_rows in sorted(grouped.items()):
         correct = sum(int(row["correct"]) for row in file_rows)
         wrong_predictions = Counter(
             int(row["pred_label"]) for row in file_rows if not int(row["correct"])
@@ -53,6 +58,7 @@ def save_prediction_diagnostics(
         output_rows.append({
             "snr_db": snr_db,
             "source_file": source_file,
+            "rf_channel": rf_channel,
             "true_label": true_label,
             "num_samples": len(file_rows),
             "num_correct": correct,
@@ -64,7 +70,7 @@ def save_prediction_diagnostics(
     path = Path(per_file_csv)
     path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = [
-        "snr_db", "source_file", "true_label", "num_samples", "num_correct",
+        "snr_db", "source_file", "rf_channel", "true_label", "num_samples", "num_correct",
         "accuracy", "top_wrong_label", "top_wrong_count",
     ]
     with path.open("w", newline="", encoding="utf-8") as file_obj:

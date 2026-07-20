@@ -1,8 +1,8 @@
 """Evaluate ResNet on pre-computed DroneRFa features.
 
 Usage:
-  python scripts/evaluate.py --feature stft --data-dir ~/Desktop/dataset/droneRFa/stft_h5 --model-path outputs/checkpoints/best_stft_model.pth --split-manifest outputs/splits/random12_seed42.csv
-  python scripts/evaluate.py --feature cpp --data-dir ~/Desktop/dataset/droneRFa/cpp_h5 --model resnet18-small-stem --model-path outputs/checkpoints/best_cpp_model.pth --split-manifest outputs/splits/random12_seed42.csv
+  python scripts/evaluate.py --feature stft --data-dir ~/Desktop/dataset/DroneRFa_stft_awgn_random_17class_h5 --model-path outputs/checkpoints/best_stft_17class_model.pth --split-manifest outputs/splits/full_17class_seed42.csv
+  python scripts/evaluate.py --feature cpp --data-dir ~/Desktop/dataset/DroneRFa_cpp_awgn_random_17class_h5 --model resnet18-small-stem --model-path outputs/checkpoints/best_cpp_17class_model.pth --split-manifest outputs/splits/full_17class_seed42.csv
 
 """
 

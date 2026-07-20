@@ -9,10 +9,10 @@ cd /home/wurixin/uavIdentification
 
 PY=/home/wurixin/venv-3.10/bin/python
 RAW=/path/to/DroneRFa
-H5=/path/to/DroneRFa_cpp_awgn_mixed3x_h5
+H5=/path/to/DroneRFa_cpp_awgn_mixed3x_17class_h5
 
 MANIFEST=outputs/splits/cpp_random12_seed42.csv
-CHECKPOINT=outputs/checkpoints/best_cpp_model.pth
+CHECKPOINT=outputs/checkpoints/best_cpp_17class_model.pth
 ```
 
 将 `/path/to/DroneRFa` 替换为实际原始数据目录。

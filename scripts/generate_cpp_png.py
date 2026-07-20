@@ -78,11 +78,12 @@ def _task_generator(h5f, name_no_extension, drone_code, save_root, max_samples_p
     labels = h5f["labels"]
     f_axis = h5f["f_axis"][:]
     alpha_axis = h5f["alpha_axis"][:]
-    rf_channel = int(h5f.attrs["rf_channel"])
+    rf_channels = h5f["rf_channel"]
     num_samples = limited_sample_count(cpp.shape[0], max_samples_per_file)
 
     for i in range(num_samples):
-        save_path = sample_save_path(save_root, drone_code, name_no_extension, i)
+        rf_channel = int(rf_channels[i])
+        save_path = sample_save_path(save_root, drone_code, name_no_extension, i, rf_channel)
         yield (cpp[i], f_axis, alpha_axis, i, rf_channel, int(labels[i]), save_path)
 
 

@@ -6,12 +6,10 @@ from dataclasses import dataclass
 import h5py
 import numpy as np
 
-LABEL_MAPPING = {
-    "T0000": 0, "T0010": 1, "T0011": 2, "T0101": 3,
-    "T0110": 4, "T0111": 5, "T1000": 6, "T1010": 7,
-    "T1011": 8, "T1100": 9, "T1101": 10, "T1110": 11,
-    "T1111": 12, "T10000": 13,
-}
+DRONE_CLASS_CODES = tuple(f"T{label:04b}" for label in range(17))
+CONTROLLER_CLASS_CODES = tuple(f"T{label:b}" for label in range(17, 25))
+DATASET_CLASS_CODES = frozenset((*DRONE_CLASS_CODES, *CONTROLLER_CLASS_CODES))
+LABEL_MAPPING = {class_code: label for label, class_code in enumerate(DRONE_CLASS_CODES)}
 
 
 @dataclass(frozen=True)
@@ -19,6 +17,7 @@ class SampleRecord:
     path: str
     sample_idx: int
     label: int
+    rf_channel: int
 
 
 class H5FileHandleCache:
@@ -51,13 +50,13 @@ def parse_label(mat_file: str) -> int:
     return LABEL_MAPPING[drone_code]
 
 
-def rf_channel_for_file(path: str | os.PathLike[str]) -> int:
-    """背景噪声类固定使用 RF0，其他类别根据四位二进制 S 编码选择通道。"""
+def rf_channels_for_file(path: str | os.PathLike[str]) -> tuple[int, ...]:
+    """背景类使用双通道，其他类别根据四位二进制 S 编码选择单通道。"""
 
     stem = os.path.splitext(os.path.basename(os.fspath(path)))[0]
     class_code = stem.split("_")[0]
     if class_code == "T0000":
-        return 0
+        return (0, 1)
 
     s_tokens = [token for token in stem.split("_") if token.startswith("S")]
     if len(s_tokens) != 1 or re.fullmatch(r"S[01]{4}", s_tokens[0]) is None:
@@ -65,13 +64,13 @@ def rf_channel_for_file(path: str | os.PathLike[str]) -> int:
             f"DroneRFa filename must contain exactly one four-bit binary S code: {os.path.basename(os.fspath(path))}"
         )
     signal_code = int(s_tokens[0][1:], 2)
-    return 0 if signal_code <= 0b0111 else 1
+    return (0,) if signal_code <= 0b0111 else (1,)
 
 
 def group_mat_files_by_class(mat_files: list[str]) -> dict[str, list[str]]:
     """按 DroneRFa 类别代码分组 .mat 文件，并保持每组文件名排序稳定。"""
 
-    # 这里循环遍历的是字典的 keys："T0000", "T0010", ..., "T10000"
+    # 这里循环遍历的是字典的 keys："T0000", "T0001", ..., "T10000"
     grouped = {class_code: [] for class_code in LABEL_MAPPING}
     for mat_file in sorted(mat_files):
         class_code = os.path.basename(mat_file).split("_")[0]
@@ -101,7 +100,15 @@ def select_mat_files(
         if invalid:
             raise ValueError(f"include_labels contains unknown labels: {invalid}")
 
-    mat_files = sorted(filename for filename in os.listdir(data_dir) if filename.endswith(".mat"))
+    mat_files: list[str] = []
+    for filename in sorted(os.listdir(data_dir)):
+        if not filename.endswith(".mat"):
+            continue
+        class_code = os.path.basename(filename).split("_")[0]
+        if class_code not in DATASET_CLASS_CODES:
+            raise ValueError(f"Unknown class code in .mat file: {class_code}")
+        if class_code in LABEL_MAPPING:
+            mat_files.append(filename)
     if allowed_labels is not None:
         filtered_files: list[str] = []
         for filename in mat_files:
@@ -183,10 +190,9 @@ def load_iq_sample(
 ) -> np.ndarray:
     """从已打开的 HDF5 文件中读取一条复数 IQ 样本。"""
 
-    rf_channel = rf_channel_for_file(record.path)
     iq_batch = read_iq_batch(
         src,
-        rf_channel=rf_channel,
+        rf_channel=record.rf_channel,
         sample_length=sample_length,
         start_idx=record.sample_idx,
         end_idx=record.sample_idx + 1,
@@ -219,14 +225,19 @@ def build_sample_index(
     for filename in mat_files:
         path = os.path.join(data_dir, filename)
         label = parse_label(filename)
-        rf_channel = rf_channel_for_file(filename)
         with h5py.File(path, "r") as src:
-            num_samples = count_iq_samples(
-                src,
-                rf_channel=rf_channel,
-                sample_length=sample_length,
-                max_samples=max_samples_per_file,
-            )
-        for sample_idx in range(num_samples):
-            sample_index.append(SampleRecord(path=path, sample_idx=sample_idx, label=label))
+            for rf_channel in rf_channels_for_file(filename):
+                num_samples = count_iq_samples(
+                    src,
+                    rf_channel=rf_channel,
+                    sample_length=sample_length,
+                    max_samples=max_samples_per_file,
+                )
+                for sample_idx in range(num_samples):
+                    sample_index.append(SampleRecord(
+                        path=path,
+                        sample_idx=sample_idx,
+                        label=label,
+                        rf_channel=rf_channel,
+                    ))
     return sample_index

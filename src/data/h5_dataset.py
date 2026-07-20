@@ -35,12 +35,17 @@ class H5FeatureDataset(Dataset):
                             f"{dataset_name} cache must have shape (N, 1, H, W), got {feature_shape} in {path}. "
                             "Re-run precomputation; legacy dual-channel caches are not supported."
                         )
-                    if "rf_channel" not in f.attrs or int(f.attrs["rf_channel"]) not in (0, 1):
+                    if "rf_channel" not in f:
                         raise ValueError(
-                            f"{dataset_name} cache is missing a valid rf_channel attribute: {path}. "
+                            f"{dataset_name} cache is missing the rf_channel dataset: {path}. "
                             "Re-run precomputation."
                         )
                     labels = f["labels"][:]
+                    rf_channels = f["rf_channel"][:]
+                    if rf_channels.shape != labels.shape or not all(
+                        int(channel) in (0, 1) for channel in rf_channels
+                    ):
+                        raise ValueError(f"{dataset_name} cache has invalid rf_channel values: {path}")
                 for row_idx, label in enumerate(labels):
                     self.index.append((path, row_idx, int(label)))
 

@@ -12,7 +12,7 @@ Usage:
   from scripts.eval_snr_accuracy_cpp import evaluate_snr_accuracy
   rows = evaluate_snr_accuracy(
       data_dir="E:/dataSet/DroneRFa",
-      model_path="outputs/checkpoints/best_cpp_model.pth",
+      model_path="outputs/checkpoints/best_cpp_17class_model.pth",
       split_manifest="outputs/splits/full.csv",
       snrs=[0, 10, 20],
       max_samples=50,
@@ -69,10 +69,10 @@ DEFAULT_ALPHA_BINS = 257
 DEFAULT_PAIR_CHUNK_SIZE = 8192
 DEFAULT_BATCH_SIZE = 1
 DEFAULT_SEED = 42
-DEFAULT_MODEL_NAME = "best_cpp_model.pth"
-DEFAULT_OUTPUT_CSV = metrics_dir() / "cpp_snr_accuracy.csv"
-DEFAULT_OUTPUT_PNG = figures_dir() / "cpp_snr_accuracy.png"
-DEFAULT_OUTPUT_CM_PREFIX = "cpp_snr_confusion_matrix"
+DEFAULT_MODEL_NAME = "best_cpp_17class_model.pth"
+DEFAULT_OUTPUT_CSV = metrics_dir() / "cpp_17class_snr_accuracy.csv"
+DEFAULT_OUTPUT_PNG = figures_dir() / "cpp_17class_snr_accuracy.png"
+DEFAULT_OUTPUT_CM_PREFIX = "cpp_17class_snr_confusion_matrix"
 
 
 def evaluate_snr_accuracy(
@@ -204,6 +204,7 @@ def evaluate_snr_accuracy(
                             "snr_db": float(snr_db),
                             "source_file": Path(record.path).name,
                             "sample_idx": int(record.sample_idx),
+                            "rf_channel": int(record.rf_channel),
                             "true_label": int(label),
                             "pred_label": int(pred),
                             "original_true_label": int(mapping.to_original(label)),

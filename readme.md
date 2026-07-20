@@ -2,7 +2,9 @@
 
 本项目基于 DroneRFa 无人机射频信号数据集，提供 STFT 频谱图和 CPP/FAM 特征的预计算、可视化、训练与测试脚本。
 
-背景噪声类 `T0000` 固定使用 `RF0`；其他原始文件按文件名中的信号编码选择单个接收通道：`S0000-S0111` 使用 `RF0`，`S1000-S1111` 使用 `RF1`。STFT 和 CPP/FAM 特征均为 `(N, 1, H, W)`，对应 H5 文件通过 `rf_channel` 属性记录实际通道。
+研究对象为 `T0000-T10000` 共 17 类：`T0000` 背景类与 16 种无人机，标签为 T 编码的二进制整数值 0-16。`T10001-T11000` 飞控器不纳入研究。
+
+`T0000` 的 `RF0` 和 `RF1` 分别生成独立单通道样本；其他文件按 `S` 编码选择通道：`S0000-S0111` 使用 `RF0`，`S1000-S1111` 使用 `RF1`。STFT 和 CPP/FAM 特征均为 `(N, 1, H, W)`，H5 通过逐样本 `/rf_channel` 数据集记录实际通道。
 
 ## 数据集
 
@@ -106,7 +108,7 @@ python <script-or-command>
 ```bash
 python scripts/precompute_stft_h5.py \
   --data-dir ~/Desktop/dataset/droneRFa \
-  --output-dir ~/Desktop/dataset/droneRFa/stft_h5 \
+  --output-dir ~/Desktop/dataset/DroneRFa_stft_awgn_random_17class_h5 \
   --device mps
 ```
 
@@ -115,7 +117,7 @@ python scripts/precompute_stft_h5.py \
 ```bash
 python scripts/precompute_cpp_h5.py \
   --data-dir ~/Desktop/dataset/droneRFa \
-  --output-dir ~/Desktop/dataset/droneRFa/cpp_h5 \
+  --output-dir ~/Desktop/dataset/DroneRFa_cpp_awgn_random_17class_h5 \
   --device mps
 ```
 
@@ -145,7 +147,7 @@ python scripts/generate_cpp_png.py --h5-dir ~/Desktop/dataset/droneRFa/cpp_h5
 
 原始 IQ 直出的 STFT 图片默认保存到数据目录旁的 `DroneRFa_stft_snr_png/`，并按
 `SNR/类别/原始文件名` 三级目录保存；
-`S0000-S0111` 选择 RF0，`S1000-S1111` 选择 RF1。图片与模型输入一致，显示逐样本 z-score
+`T0000` 同时输出 RF0/RF1，`S0000-S0111` 选择 RF0，`S1000-S1111` 选择 RF1。图片文件名包含通道编号。图片与模型输入一致，显示逐样本 z-score
 归一化功率，适合比较信号结构，但色条不表示可跨图片比较的绝对功率。
 
 原始 IQ 直出的 CPP/FAM 图片采用相同的通道选择和三级目录结构，默认保存到数据目录旁的
@@ -155,13 +157,15 @@ python scripts/generate_cpp_png.py --h5-dir ~/Desktop/dataset/droneRFa/cpp_h5
 H5 生成的 STFT 图片默认保存到 H5 目录旁的 `stft_png/`，CPP/FAM 图片默认保存到 H5
 目录旁的 `cpp_png/`。
 
-旧的双通道 H5 和 checkpoint 与当前单通道格式不兼容。默认缓存目录和 checkpoint 文件名保持不变，因此重新实验前必须完整重新预计算并重新训练；若目录内残留双通道 H5，加载时会明确报错。文件级 split manifest 可以继续复用。
+旧 14 类 H5 的压缩标签、文件级 `rf_channel` 属性、split manifest 和 checkpoint 均与新格式不兼容。新实验使用带 `17class` 的独立目录和文件名，不覆盖历史产物。
 
 ### 训练模型
 
 ```bash
-python scripts/train.py --feature stft --data-dir ~/Desktop/dataset/droneRFa/stft_h5 --batch-size 64
-python scripts/train.py --feature cpp --data-dir ~/Desktop/dataset/droneRFa/cpp_h5 --batch-size 64
+python scripts/train.py --feature stft --data-dir ~/Desktop/dataset/DroneRFa_stft_awgn_random_17class_h5 \
+  --split-manifest outputs/splits/full_17class_seed42.csv --batch-size 64
+python scripts/train.py --feature cpp --data-dir ~/Desktop/dataset/DroneRFa_cpp_awgn_random_17class_h5 \
+  --split-manifest outputs/splits/full_17class_seed42.csv --batch-size 64
 ```
 
 可通过 `--device` 指定设备，例如 `cuda:0`、`mps` 或 `cpu`。
@@ -171,38 +175,37 @@ python scripts/train.py --feature cpp --data-dir ~/Desktop/dataset/droneRFa/cpp_
 ```bash
 python scripts/evaluate.py \
   --feature stft \
-  --data-dir ~/Desktop/dataset/droneRFa/stft_h5 \
-  --model-path outputs/checkpoints/best_stft_model.pth
+  --data-dir ~/Desktop/dataset/DroneRFa_stft_awgn_random_17class_h5 \
+  --split-manifest outputs/splits/full_17class_seed42.csv \
+  --model-path outputs/checkpoints/best_stft_17class_model.pth
 
 python scripts/evaluate.py \
   --feature cpp \
-  --data-dir ~/Desktop/dataset/droneRFa/cpp_h5 \
-  --model-path outputs/checkpoints/best_cpp_model.pth
+  --data-dir ~/Desktop/dataset/DroneRFa_cpp_awgn_random_17class_h5 \
+  --split-manifest outputs/splits/full_17class_seed42.csv \
+  --model-path outputs/checkpoints/best_cpp_17class_model.pth
 ```
 
 测试脚本会输出 accuracy、precision、recall、F1-score 和 loss，并将混淆矩阵数组保存到 `outputs/metrics/`，混淆矩阵图片保存到 `outputs/figures/`。
 
-## 暂时屏蔽类别 10/11 的 12 类实验
+## 可选类别屏蔽实验
 
-类别 10、11（`T1101`、`T1110`）可在训练和全部评估入口中通过
-`--exclude-labels 10 11` 排除。现有 H5 和 14 类 split manifest 可以复用；程序会先校验完整
-manifest，再过滤各 split，并将原标签 `12、13` 映射为模型标签 `10、11`。混淆矩阵坐标仍显示原始标签。
+可通过 `--exclude-labels` 排除任意原始标签。标签现在与 T 编码的二进制值一致，例如 `T1101` 和 `T1110` 对应 `--exclude-labels 13 14`。程序会在模型内部重映射为连续标签，混淆矩阵坐标仍显示原始标签。
 
 ```bash
 # STFT：训练与常规评估
 python scripts/train.py --feature stft --data-dir "$STFT_H5" \
-  --split-manifest "$MANIFEST" --exclude-labels 10 11 --device cuda:0
+  --split-manifest "$MANIFEST" --exclude-labels 13 14 --device cuda:0
 python scripts/evaluate.py --feature stft --data-dir "$STFT_H5" \
-  --split-manifest "$MANIFEST" --exclude-labels 10 11 --device cuda:0
+  --split-manifest "$MANIFEST" --exclude-labels 13 14 --device cuda:0
 
 # CPP：训练与常规评估
 python scripts/train.py --feature cpp --model resnet18-small-stem --data-dir "$CPP_H5" \
-  --split-manifest "$MANIFEST" --exclude-labels 10 11 --device cuda:0
+  --split-manifest "$MANIFEST" --exclude-labels 13 14 --device cuda:0
 python scripts/evaluate.py --feature cpp --model resnet18-small-stem --data-dir "$CPP_H5" \
-  --split-manifest "$MANIFEST" --exclude-labels 10 11 --device cuda:0
+  --split-manifest "$MANIFEST" --exclude-labels 13 14 --device cuda:0
 ```
 
-未显式指定 checkpoint 或混淆矩阵路径时，12 类实验自动使用
-`*_exclude_10_11.*` 文件名，不会覆盖现有 14 类产物。固定 SNR 评估同样传入
-`--exclude-labels 10 11`，并应显式指定带 `exclude_10_11` 的 CSV、PNG、混淆矩阵前缀和诊断 CSV；
+未显式指定 checkpoint 或混淆矩阵路径时，屏蔽实验自动在文件名中附加排除标签。固定 SNR 评估同样传入
+`--exclude-labels 13 14`，并应显式指定对应的 CSV、PNG、混淆矩阵前缀和诊断 CSV；
 其余 STFT/CPP 参数必须与预计算配置保持一致。

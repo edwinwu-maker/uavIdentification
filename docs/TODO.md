@@ -20,10 +20,8 @@
 - T10111 云卓 T12 飞控器
 - T11000 云卓 T10 飞控器
 
-## TODO-5:删除部分无人机数据
-- T0001 DJI Phantom 3
-- T0100 DJI MATRICE 100
-- T1001 DJI Mini 2
+## TODO-5:删除部分无人机数据（已取消）
+- 当前研究对象为 `T0000-T10000`，保留 T0001 DJI Phantom 3、T0100 DJI MATRICE 100 和 T1001 DJI Mini 2。
 
 ## 提供脚本将 outputs/metrics/*.csv 绘制到一张图中
 

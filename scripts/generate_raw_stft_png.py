@@ -6,9 +6,8 @@ Usage:
   python scripts/generate_raw_stft_png.py --data-dir ... --snrs 0 --device cuda:0 --batch-size 1
   python scripts/generate_raw_stft_png.py --data-dir ... --snrs -5 5 --max-files 1 --max-samples-per-file 1
 
-The source filename selects one RF channel: S0000-S0111 uses RF0 and
-S1000-S1111 uses RF1. T0000 background files keep the project convention of
-using RF0. AWGN is added to the selected complex IQ signal before STFT.
+T0000 background files use RF0 and RF1 as independent samples. Other source
+filenames select one RF channel: S0000-S0111 uses RF0 and S1000-S1111 uses RF1.
 """
 
 from __future__ import annotations
@@ -37,7 +36,7 @@ from src.data.drone_rfa_io import (
     default_raw_data_dir,
     parse_label,
     read_iq_batch,
-    rf_channel_for_file,
+    rf_channels_for_file,
     select_mat_files,
 )
 from src.evaluation.snr_accuracy import format_snr_for_filename
@@ -69,7 +68,7 @@ def _signal_code_for_title(filename: str) -> str:
     signal_codes = [token for token in stem.split("_") if re.fullmatch(r"S[01]{4}", token)]
     if len(signal_codes) != 1:
         # 通道解析函数会给出统一的文件名错误；这里不维护第二套校验文案。
-        rf_channel_for_file(filename)
+        rf_channels_for_file(filename)
     return signal_codes[0]
 
 
@@ -136,14 +135,15 @@ def _sample_save_path(
     *,
     filename: str,
     sample_idx: int,
+    rf_channel: int,
     snr_db: float | None,
 ) -> Path:
     stem = Path(filename).stem
     class_code = stem.split("_")[0]
     if snr_db is None:
-        return save_root / "clean" / class_code / stem / f"{stem}_sample_{sample_idx:04d}_clean.png"
+        return save_root / "clean" / class_code / stem / f"{stem}_RF{rf_channel}_sample_{sample_idx:04d}_clean.png"
     snr_name = format_snr_for_filename(snr_db)
-    png_name = f"{stem}_sample_{sample_idx:04d}_snr_{snr_name}db.png"
+    png_name = f"{stem}_RF{rf_channel}_sample_{sample_idx:04d}_snr_{snr_name}db.png"
     return save_root / f"snr_{snr_name}db" / class_code / stem / png_name
 
 
@@ -162,81 +162,59 @@ def process_one_mat(
     """读取一个原始文件，并为每个样本和目标 SNR 输出一张 PNG。"""
 
     filename = os.path.basename(mat_path)
-    rf_channel = rf_channel_for_file(filename)
+    rf_channels = rf_channels_for_file(filename)
     signal_code = _signal_code_for_title(filename)
     label = parse_label(filename)
     freqs, times = stft_plot_axes(sample_length)
     conditions: tuple[float | None, ...] = (None,) if clean else snrs
 
-    logger.info("Processing: %s (%s -> RF%d)", filename, signal_code, rf_channel)
+    logger.info("Processing: %s (%s -> %s)", filename, signal_code, rf_channels)
+    total_samples = 0
     with h5py.File(mat_path, "r") as src:
-        num_samples = count_iq_samples(
-            src,
-            rf_channel=rf_channel,
-            sample_length=sample_length,
-            max_samples=max_samples_per_file,
-        )
-        batch_starts = range(0, num_samples, batch_size)
-        for start_idx in tqdm(
-            batch_starts,
-            total=math.ceil(num_samples / batch_size),
-            desc=f"  {filename}",
-            leave=False,
-        ):
-            end_idx = min(start_idx + batch_size, num_samples)
-            iq_batch = read_iq_batch(
-                src,
-                rf_channel=rf_channel,
-                sample_length=sample_length,
-                start_idx=start_idx,
-                end_idx=end_idx,
+        for rf_channel in rf_channels:
+            num_samples = count_iq_samples(
+                src, rf_channel=rf_channel, sample_length=sample_length,
+                max_samples=max_samples_per_file,
             )
-            iq_tensor = torch.as_tensor(iq_batch, dtype=torch.complex64, device=device)
+            total_samples += num_samples
+            batch_starts = range(0, num_samples, batch_size)
+            for start_idx in tqdm(
+                batch_starts, total=math.ceil(num_samples / batch_size),
+                desc=f"  {filename} RF{rf_channel}", leave=False,
+            ):
+                end_idx = min(start_idx + batch_size, num_samples)
+                iq_batch = read_iq_batch(
+                    src, rf_channel=rf_channel, sample_length=sample_length,
+                    start_idx=start_idx, end_idx=end_idx,
+                )
+                iq_tensor = torch.as_tensor(iq_batch, dtype=torch.complex64, device=device)
 
-            for snr_db in conditions:
-                variant_iq = iq_tensor
-                if snr_db is not None:
-                    # 所有 SNR 复用相同 seed 维度，使噪声形状一致，仅缩放不同。
-                    variant_iq, _ = add_random_snr_awgn_with_snr(
-                        iq_tensor,
-                        file_id=filename,
-                        start_idx=start_idx,
-                        snr_min=snr_db,
-                        snr_max=snr_db,
-                        noise_seed=noise_seed,
-                        device=device,
-                    )
-                stft_batch = compute_stft(
-                    variant_iq,
-                    device=device,
-                    n_fft=N_FFT,
-                    win_length=WIN_LENGTH,
-                    hop_length=HOP_LENGTH,
-                    output_freq_bins=OUTPUT_FREQ_BINS,
-                    output_time_bins=OUTPUT_TIME_BINS,
-                ).cpu().numpy()
-                for batch_offset, stft_sample in enumerate(stft_batch):
-                    sample_idx = start_idx + batch_offset
-                    save_path = _sample_save_path(
-                        save_root,
-                        filename=filename,
-                        sample_idx=sample_idx,
-                        snr_db=snr_db,
-                    )
-                    plot_single_channel(
-                        stft_sample,
-                        save_path,
-                        filename=filename,
-                        sample_idx=sample_idx,
-                        signal_code=signal_code,
-                        rf_channel=rf_channel,
-                        label=label,
-                        snr_db=snr_db,
-                        freqs=freqs,
-                        times=times,
-                    )
-    logger.info("Done: %s -> %d samples x %d conditions", filename, num_samples, len(conditions))
-    return num_samples
+                for snr_db in conditions:
+                    variant_iq = iq_tensor
+                    if snr_db is not None:
+                        variant_iq, _ = add_random_snr_awgn_with_snr(
+                            iq_tensor, file_id=f"{filename}:RF{rf_channel}",
+                            start_idx=start_idx, snr_min=snr_db, snr_max=snr_db,
+                            noise_seed=noise_seed, device=device,
+                        )
+                    stft_batch = compute_stft(
+                        variant_iq, device=device, n_fft=N_FFT, win_length=WIN_LENGTH,
+                        hop_length=HOP_LENGTH, output_freq_bins=OUTPUT_FREQ_BINS,
+                        output_time_bins=OUTPUT_TIME_BINS,
+                    ).cpu().numpy()
+                    for batch_offset, stft_sample in enumerate(stft_batch):
+                        sample_idx = start_idx + batch_offset
+                        save_path = _sample_save_path(
+                            save_root, filename=filename, sample_idx=sample_idx,
+                            rf_channel=rf_channel, snr_db=snr_db,
+                        )
+                        plot_single_channel(
+                            stft_sample, save_path, filename=filename, sample_idx=sample_idx,
+                            signal_code=signal_code, rf_channel=rf_channel, label=label,
+                            snr_db=snr_db, freqs=freqs, times=times,
+                        )
+    logger.info("Done: %s -> %d samples x %d conditions", filename, total_samples, len(conditions))
+    return total_samples
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
