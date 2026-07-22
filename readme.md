@@ -190,6 +190,32 @@ python scripts/export_clean_stft_h5.py \
 导出目录按源文件镜像组织；原始 H5 不会被修改。全量样本决定和独立审核指标分别保存在
 `cleaning_manifest.csv` 与 `cleaning_report.json`。
 
+### BYOL 图传片段直接清洗
+
+该流程直接读取全部 `noise_profile=clean` STFT H5。源矩阵保持 `1024×1024`，训练时临时
+池化到 `512×512`；人工审核中 `video_present` 表示含图传（包括图传与 WiFi 混合），
+`no_video` 表示不含图传，`uncertain` 不参与训练和指标：
+
+```bash
+python scripts/prepare_stft_byol_review.py \
+  --data-dir ~/Desktop/dataset/DroneRFa_stft_17class_h5 \
+  --work-dir outputs/stft_byol_cleaning \
+  --review-count 600
+
+python scripts/train_stft_byol_cleaner.py \
+  --data-dir ~/Desktop/dataset/DroneRFa_stft_17class_h5 \
+  --work-dir outputs/stft_byol_cleaning \
+  --seeds 42 43 44 --input-size 512 --batch-size 8 --device mps
+
+python scripts/export_byol_clean_stft_h5.py \
+  --data-dir ~/Desktop/dataset/DroneRFa_stft_17class_h5 \
+  --work-dir outputs/stft_byol_cleaning \
+  --output-dir ~/Desktop/dataset/DroneRFa_stft_byol_video_h5
+```
+
+最终决定使用三个模型的平均图传概率，并只在 calibration 审核集上选择阈值；audit 标签不参与
+训练或阈值选择。源 H5 不会被修改。
+
 ### 训练模型
 
 ```bash
