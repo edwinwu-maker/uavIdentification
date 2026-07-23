@@ -96,7 +96,83 @@ def review_counts(total: int) -> dict[str, int]:
     return {"train": train, "calibration": calibration, "audit": total - train - calibration}
 
 
-def split_files(file_counts: dict[str, int], targets: dict[str, int], seed: int = 42) -> dict[str, str]:
+def file_labels_from_samples(samples: list[ByolSample]) -> dict[str, int]:
+    """Return the single original label stored in each source H5 file."""
+
+    labels_by_file: dict[str, set[int]] = defaultdict(set)
+    for sample in samples:
+        labels_by_file[sample.source_file].add(sample.label)
+    mixed = {name: sorted(labels) for name, labels in labels_by_file.items() if len(labels) != 1}
+    if mixed:
+        name = sorted(mixed)[0]
+        raise ValueError(f"Each H5 file must contain exactly one original label: {name} has {mixed[name]}")
+    return {name: next(iter(labels)) for name, labels in labels_by_file.items()}
+
+
+def split_files(
+    file_counts: dict[str, int],
+    targets: dict[str, int],
+    seed: int = 42,
+    *,
+    file_labels: dict[str, int] | None = None,
+    fixed_roles: dict[str, str] | None = None,
+) -> dict[str, str]:
+    if file_labels is not None:
+        if set(file_labels) != {name for name, count in file_counts.items() if count}:
+            raise ValueError("file_labels must match all non-empty H5 files")
+        fixed_roles = fixed_roles or {}
+        unknown = set(fixed_roles) - set(file_counts)
+        if unknown:
+            raise ValueError(f"fixed_roles contains unknown file: {sorted(unknown)[0]}")
+        invalid = {role for role in fixed_roles.values() if role not in ROLES}
+        if invalid:
+            raise ValueError(f"Invalid fixed review role: {sorted(invalid)[0]}")
+
+        rng = np.random.default_rng(seed)
+        result = dict(fixed_roles)
+        by_label: dict[int, list[str]] = defaultdict(list)
+        for name, label in file_labels.items():
+            if name not in result:
+                by_label[label].append(name)
+        all_labels = sorted(set(file_labels.values()))
+        for label in all_labels:
+            fixed_for_label = {
+                role for name, role in result.items()
+                if file_labels.get(name) == label and file_counts[name]
+            }
+            required_roles = [role for role in ROLES if role not in fixed_for_label]
+            available = by_label[label]
+            if len(available) < len(required_roles):
+                raise ValueError(
+                    f"Original label {label} needs {len(required_roles)} remaining files "
+                    f"for {required_roles}, found {len(available)}"
+                )
+            tie = {name: float(rng.random()) for name in available}
+            ordered = sorted(available, key=lambda name: (-file_counts[name], tie[name]))
+            assigned = Counter({
+                role: sum(
+                    file_counts[name] for name, assigned_role in result.items()
+                    if assigned_role == role and file_labels.get(name) == label
+                )
+                for role in ROLES
+            })
+            for role, name in zip(required_roles, ordered):
+                result[name] = role
+                assigned[role] += file_counts[name]
+            for name in ordered[len(required_roles):]:
+                role = min(
+                    required_roles,
+                    key=lambda candidate: (
+                        assigned[candidate] / targets[candidate],
+                        assigned[candidate],
+                        ROLES.index(candidate),
+                    ),
+                )
+                result[name] = role
+                assigned[role] += file_counts[name]
+        result.update({name: "train" for name, count in file_counts.items() if count == 0})
+        return result
+
     nonempty = [name for name, count in file_counts.items() if count]
     if len(nonempty) < 3:
         raise ValueError("At least three non-empty H5 files are required")
@@ -165,7 +241,11 @@ def split_files(file_counts: dict[str, int], targets: dict[str, int], seed: int 
 
 
 def select_reviews(
-    samples: list[ByolSample], file_roles: dict[str, str], targets: dict[str, int], seed: int = 42,
+    samples: list[ByolSample],
+    file_roles: dict[str, str],
+    targets: dict[str, int],
+    seed: int = 42,
+    eval_background_count: int = 10,
 ) -> list[dict[str, object]]:
     """Stratify by original label/RF and retain inverse inclusion weights."""
 
@@ -173,6 +253,43 @@ def select_reviews(
     selected_rows: list[dict[str, object]] = []
     sample_file_counts = Counter(sample.source_file for sample in samples)
     for role in ROLES:
+        if role != "train":
+            target = targets[role]
+            nonbackground = tuple(range(1, 17))
+            if not 0 <= eval_background_count < target:
+                raise ValueError("eval-background-count must be within [0, evaluation target)")
+            remaining = target - eval_background_count
+            if remaining < len(nonbackground):
+                raise ValueError("Evaluation target is too small to cover all 16 non-background labels")
+            quotas = {0: eval_background_count}
+            base, extra = divmod(remaining, len(nonbackground))
+            quotas.update({label: base for label in nonbackground})
+            for label in rng.permutation(nonbackground)[:extra]:
+                quotas[int(label)] += 1
+
+            by_label: dict[int, list[int]] = defaultdict(list)
+            for index, sample in enumerate(samples):
+                if file_roles[sample.source_file] == role:
+                    by_label[sample.label].append(index)
+            for label, quota in quotas.items():
+                population = by_label[label]
+                if len(population) < quota:
+                    raise ValueError(
+                        f"Not enough original label {label} candidates for {role}: "
+                        f"need {quota}, found {len(population)}"
+                    )
+                chosen = rng.choice(population, size=quota, replace=False)
+                weight = len(population) / quota
+                selected_rows.extend({
+                    "review_role": role,
+                    "sample_index": int(index),
+                    "sampling_weight": weight,
+                    "sampling_stratum": f"original_label={label}",
+                    "sampling_population_count": len(population),
+                    "sampling_selected_count": quota,
+                } for index in chosen)
+            continue
+
         groups: dict[tuple[int, int, int, str], list[int]] = defaultdict(list)
         for index, sample in enumerate(samples):
             if file_roles[sample.source_file] == role:
@@ -196,14 +313,19 @@ def select_reviews(
             raise ValueError(f"Not enough {role} review candidates")
         chosen_counts = Counter(key for key, _index in chosen)
         population_counts = Counter(
-            (sample.label, sample.rf_channel) for sample in samples
-            if file_roles[sample.source_file] == role
+            (sample.label, sample.rf_channel, min(
+                3, sample.row_idx * 4 // max(1, sample_file_counts[sample.source_file])
+            ), sample.source_file)
+            for sample in samples if file_roles[sample.source_file] == role
         )
         for key, index in chosen:
             selected_rows.append({
                 "review_role": role,
                 "sample_index": index,
                 "sampling_weight": population_counts[key] / chosen_counts[key],
+                "sampling_stratum": "|".join(map(str, key)),
+                "sampling_population_count": population_counts[key],
+                "sampling_selected_count": chosen_counts[key],
             })
     return selected_rows
 
@@ -293,20 +415,34 @@ class ByolStftDataset(Dataset):
         self.files.clear()
 
 
-def choose_threshold(y_true: np.ndarray, probabilities: np.ndarray, minimum_recall: float = 0.95):
+def choose_threshold(
+    y_true: np.ndarray,
+    probabilities: np.ndarray,
+    minimum_recall: float = 0.95,
+    sample_weight: np.ndarray | None = None,
+):
     y_true = np.asarray(y_true, dtype=np.int64)
     probabilities = np.asarray(probabilities, dtype=np.float64)
     if y_true.shape != probabilities.shape or set(np.unique(y_true)) != {0, 1}:
         raise ValueError("Calibration requires both classes and matching probabilities")
     if not np.isfinite(probabilities).all() or np.any((probabilities < 0) | (probabilities > 1)):
         raise ValueError("Probabilities must be finite and within [0, 1]")
+    if sample_weight is not None:
+        sample_weight = np.asarray(sample_weight, dtype=np.float64)
+        if sample_weight.shape != y_true.shape or not np.isfinite(sample_weight).all():
+            raise ValueError("Calibration weights must be finite and match labels")
+        if np.any(sample_weight <= 0):
+            raise ValueError("Calibration weights must be positive")
     best = None
     for threshold in np.unique(np.concatenate(([0.0], probabilities, [1.0]))):
         predicted = probabilities >= threshold
-        recall = recall_score(y_true, predicted, zero_division=0)
+        recall = recall_score(y_true, predicted, sample_weight=sample_weight, zero_division=0)
         if recall + 1e-12 < minimum_recall:
             continue
-        key = (precision_score(y_true, predicted, zero_division=0), float(threshold))
+        key = (
+            precision_score(y_true, predicted, sample_weight=sample_weight, zero_division=0),
+            float(threshold),
+        )
         if best is None or key > best[0]:
             best = (key, float(threshold))
     if best is None:

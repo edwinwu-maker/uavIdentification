@@ -202,6 +202,13 @@ python scripts/prepare_stft_byol_review.py \
   --work-dir outputs/stft_byol_cleaning \
   --review-count 600
 
+# 已完成 train 审核时，仅重建按原始类别分层的 calibration/audit；
+# 原审核产物会先备份到 work-dir 下的 review_backup_<时间戳>。
+python scripts/prepare_stft_byol_review.py \
+  --data-dir ~/Desktop/dataset/DroneRFa_stft_17class_h5 \
+  --work-dir outputs/stft_byol_cleaning \
+  --review-count 600 --eval-background-count 10 --rebuild-eval
+
 python scripts/train_stft_byol_cleaner.py \
   --data-dir ~/Desktop/dataset/DroneRFa_stft_17class_h5 \
   --work-dir outputs/stft_byol_cleaning \

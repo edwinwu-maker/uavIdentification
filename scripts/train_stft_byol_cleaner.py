@@ -184,8 +184,12 @@ def main() -> None:
             probabilities = _infer(model, inference_loader, device, len(samples))
         finally:
             pretrain_data.close(); fine_data.close(); inference_data.close()
-        calibration_true, calibration_prob, _weights = _labeled_arrays(calibration, probabilities)
-        seed_threshold = choose_threshold(calibration_true, calibration_prob)
+        calibration_true, calibration_prob, calibration_weights = _labeled_arrays(
+            calibration, probabilities,
+        )
+        seed_threshold = choose_threshold(
+            calibration_true, calibration_prob, sample_weight=calibration_weights,
+        )
         audit_true, audit_prob, audit_weights = _labeled_arrays(audit, probabilities)
         seed_reports[str(seed)] = {
             "threshold": seed_threshold,
@@ -201,9 +205,14 @@ def main() -> None:
         all_probabilities.append(probabilities)
 
     ensemble = np.mean(np.stack(all_probabilities), axis=0)
-    calibration_true, calibration_prob, _weights = _labeled_arrays(calibration, ensemble)
-    threshold = choose_threshold(calibration_true, calibration_prob)
+    calibration_true, calibration_prob, calibration_weights = _labeled_arrays(calibration, ensemble)
+    threshold = choose_threshold(
+        calibration_true, calibration_prob, sample_weight=calibration_weights,
+    )
     calibration_metrics = metrics(calibration_true, calibration_prob >= threshold)
+    weighted_calibration = metrics(
+        calibration_true, calibration_prob >= threshold, calibration_weights,
+    )
     audit_true, audit_prob, audit_weights = _labeled_arrays(audit, ensemble)
     audit_metrics = metrics(audit_true, audit_prob >= threshold)
     weighted_audit = metrics(audit_true, audit_prob >= threshold, audit_weights)
@@ -233,6 +242,7 @@ def main() -> None:
         "minimum_calibration_recall": 0.95, "positive_definition": "video_present; video+WiFi is positive",
         "retention_rate": float(np.mean(ensemble >= threshold)), "checkpoints": checkpoints,
         "ensemble_calibration_metrics": calibration_metrics,
+        "ensemble_weighted_calibration_metrics": weighted_calibration,
         "ensemble_audit_metrics": audit_metrics,
         "ensemble_weighted_audit_metrics": weighted_audit,
         "seed_reports": seed_reports, "seed_metric_summary": seed_metric_summary,
