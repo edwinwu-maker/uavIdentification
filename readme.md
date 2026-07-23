@@ -202,23 +202,21 @@ python scripts/prepare_stft_byol_review.py \
   --work-dir outputs/stft_byol_cleaning \
   --review-count 600
 
-# 已完成 train 审核时，仅重建按原始类别分层的 calibration/audit；
-# 原审核产物会先备份到 work-dir 下的 review_backup_<时间戳>。
-python scripts/prepare_stft_byol_review.py \
-  --data-dir ~/Desktop/dataset/DroneRFa_stft_17class_h5 \
-  --work-dir outputs/stft_byol_cleaning \
-  --review-count 600 --eval-background-count 10 --rebuild-eval
-
 python scripts/train_stft_byol_cleaner.py \
   --data-dir ~/Desktop/dataset/DroneRFa_stft_17class_h5 \
   --work-dir outputs/stft_byol_cleaning \
-  --seeds 42 43 44 --input-size 512 --batch-size 8 --device mps
+  --seeds 42 43 44 --batch-size 8 --device mps
 
 python scripts/export_byol_clean_stft_h5.py \
   --data-dir ~/Desktop/dataset/DroneRFa_stft_17class_h5 \
   --work-dir outputs/stft_byol_cleaning \
   --output-dir ~/Desktop/dataset/DroneRFa_stft_byol_video_h5
 ```
+
+审核划分以 `(source_file, source_sample_idx)` 标识的 10M 采样点块为单位；同一块的 RF0/RF1
+始终属于同一个 train、calibration 或 audit 角色。每个源文件内部都包含三个角色，因此 audit
+指标表示固定数据集内未见 10M 块的清洗效果，不代表对新源文件或新采集会话的泛化能力。
+旧的文件级审核产物不兼容，需使用新的空 `work-dir` 重新生成。
 
 最终决定使用三个模型的平均图传概率，并只在 calibration 审核集上选择阈值；audit 标签不参与
 训练或阈值选择。源 H5 不会被修改。

@@ -21,6 +21,9 @@ from src.data.stft_clustering import REQUIRED_SAMPLE_DATASETS, preprocess_stft
 
 ROLES = ("train", "calibration", "audit")
 MANUAL_LABELS = frozenset(("video_present", "no_video", "uncertain"))
+BLOCK_SAMPLE_LENGTH = 10_000_000
+BYOL_INPUT_SIZE = 512
+BlockId = tuple[str, int]
 
 
 @dataclass(frozen=True)
@@ -40,7 +43,18 @@ def _text(value: object) -> str:
     return value.decode("utf-8") if isinstance(value, bytes) else str(value)
 
 
-def scan_clean_stft_h5(data_dir: str | Path) -> tuple[list[ByolSample], dict[str, int]]:
+def sample_block_id(sample: ByolSample) -> BlockId:
+    return sample.source_file, sample.source_sample_idx
+
+
+def group_samples_by_block(samples: list[ByolSample]) -> dict[BlockId, list[int]]:
+    groups: dict[BlockId, list[int]] = defaultdict(list)
+    for index, sample in enumerate(samples):
+        groups[sample_block_id(sample)].append(index)
+    return dict(groups)
+
+
+def scan_clean_stft_h5(data_dir: str | Path) -> list[ByolSample]:
     """Validate and index all background and UAV rows in clean STFT H5 files."""
 
     root = Path(data_dir).expanduser()
@@ -50,7 +64,6 @@ def scan_clean_stft_h5(data_dir: str | Path) -> tuple[list[ByolSample], dict[str
     if not paths:
         raise ValueError(f"No H5 files found in {root}")
     samples: list[ByolSample] = []
-    file_counts: dict[str, int] = {}
     for path in paths:
         with h5py.File(path, "r") as h5f:
             missing = [name for name in REQUIRED_SAMPLE_DATASETS if name not in h5f]
@@ -65,6 +78,10 @@ def scan_clean_stft_h5(data_dir: str | Path) -> tuple[list[ByolSample], dict[str
                     raise ValueError(f"Dataset '{name}' has invalid length in {path}")
             if _text(h5f.attrs.get("noise_profile", "")) != "clean":
                 raise ValueError(f"Only noise_profile=clean is supported: {path}")
+            if int(h5f.attrs.get("sample_length", -1)) != BLOCK_SAMPLE_LENGTH:
+                raise ValueError(
+                    f"BYOL requires sample_length={BLOCK_SAMPLE_LENGTH}: {path}"
+                )
             labels = np.asarray(h5f["labels"][:], dtype=np.int64)
             clean = np.asarray(h5f["is_clean"][:], dtype=bool)
             channels = np.asarray(h5f["rf_channel"][:], dtype=np.int64)
@@ -73,9 +90,18 @@ def scan_clean_stft_h5(data_dir: str | Path) -> tuple[list[ByolSample], dict[str
                 raise ValueError(f"All included rows must be clean: {path}")
             if np.any((labels < 0) | (labels > 16)):
                 raise ValueError(f"Invalid DroneRFa labels in {path}")
+            if len(np.unique(labels)) != 1:
+                raise ValueError(f"Each H5 file must contain exactly one original label: {path}")
             if np.any((channels < 0) | (channels > 1)):
                 raise ValueError(f"Invalid rf_channel values in {path}")
-            file_counts[path.name] = count
+            if np.any(source_indices < 0):
+                raise ValueError(f"source_sample_idx must be non-negative: {path}")
+            row_keys = list(zip(source_indices.tolist(), channels.tolist()))
+            if len(set(row_keys)) != len(row_keys):
+                raise ValueError(
+                    "Duplicate (source_sample_idx, rf_channel) rows in "
+                    f"{path}"
+                )
             samples.extend(
                 ByolSample(
                     str(path.resolve()), row_idx, int(labels[row_idx]),
@@ -85,7 +111,7 @@ def scan_clean_stft_h5(data_dir: str | Path) -> tuple[list[ByolSample], dict[str
             )
     if not samples:
         raise ValueError(f"Clean STFT input contains no rows: {root}")
-    return samples, file_counts
+    return samples
 
 
 def review_counts(total: int) -> dict[str, int]:
@@ -96,171 +122,55 @@ def review_counts(total: int) -> dict[str, int]:
     return {"train": train, "calibration": calibration, "audit": total - train - calibration}
 
 
-def file_labels_from_samples(samples: list[ByolSample]) -> dict[str, int]:
-    """Return the single original label stored in each source H5 file."""
-
-    labels_by_file: dict[str, set[int]] = defaultdict(set)
-    for sample in samples:
-        labels_by_file[sample.source_file].add(sample.label)
-    mixed = {name: sorted(labels) for name, labels in labels_by_file.items() if len(labels) != 1}
-    if mixed:
-        name = sorted(mixed)[0]
-        raise ValueError(f"Each H5 file must contain exactly one original label: {name} has {mixed[name]}")
-    return {name: next(iter(labels)) for name, labels in labels_by_file.items()}
-
-
-def split_files(
-    file_counts: dict[str, int],
+def split_blocks(
+    samples: list[ByolSample],
     targets: dict[str, int],
     seed: int = 42,
-    *,
-    file_labels: dict[str, int] | None = None,
-    fixed_roles: dict[str, str] | None = None,
-) -> dict[str, str]:
-    if file_labels is not None:
-        if set(file_labels) != {name for name, count in file_counts.items() if count}:
-            raise ValueError("file_labels must match all non-empty H5 files")
-        fixed_roles = fixed_roles or {}
-        unknown = set(fixed_roles) - set(file_counts)
-        if unknown:
-            raise ValueError(f"fixed_roles contains unknown file: {sorted(unknown)[0]}")
-        invalid = {role for role in fixed_roles.values() if role not in ROLES}
-        if invalid:
-            raise ValueError(f"Invalid fixed review role: {sorted(invalid)[0]}")
+) -> dict[BlockId, str]:
+    if set(targets) != set(ROLES) or any(targets[role] <= 0 for role in ROLES):
+        raise ValueError("targets must contain positive train, calibration, and audit counts")
 
-        rng = np.random.default_rng(seed)
-        result = dict(fixed_roles)
-        by_label: dict[int, list[str]] = defaultdict(list)
-        for name, label in file_labels.items():
-            if name not in result:
-                by_label[label].append(name)
-        all_labels = sorted(set(file_labels.values()))
-        role_totals = Counter({
-            role: sum(file_counts[name] for name, assigned_role in result.items() if assigned_role == role)
-            for role in ROLES
-        })
-        for label in all_labels:
-            fixed_for_label = {
-                role for name, role in result.items()
-                if file_labels.get(name) == label and file_counts[name]
-            }
-            required_roles = [role for role in ROLES if role not in fixed_for_label]
-            available = by_label[label]
-            if len(available) < len(required_roles) and not fixed_roles:
-                raise ValueError(
-                    f"Original label {label} needs {len(required_roles)} remaining files "
-                    f"for {required_roles}, found {len(available)}"
-                )
-            if not available:
-                continue
-            tie = {name: float(rng.random()) for name in available}
-            ordered = sorted(available, key=lambda name: (-file_counts[name], tie[name]))
-            assigned = Counter({
-                role: sum(
-                    file_counts[name] for name, assigned_role in result.items()
-                    if assigned_role == role and file_labels.get(name) == label
-                )
-                for role in ROLES
-            })
-            seed_roles = required_roles
-            if len(available) < len(required_roles):
-                seed_roles = sorted(
-                    required_roles,
-                    key=lambda role: (
-                        role_totals[role] / targets[role],
-                        role_totals[role],
-                        ROLES.index(role),
-                    ),
-                )[:len(available)]
-            for role, name in zip(seed_roles, ordered):
-                result[name] = role
-                assigned[role] += file_counts[name]
-                role_totals[role] += file_counts[name]
-            for name in ordered[len(seed_roles):]:
-                role = min(
-                    required_roles,
-                    key=lambda candidate: (
-                        assigned[candidate] / targets[candidate],
-                        assigned[candidate],
-                        ROLES.index(candidate),
-                    ),
-                )
-                result[name] = role
-                assigned[role] += file_counts[name]
-                role_totals[role] += file_counts[name]
-        result.update({name: "train" for name, count in file_counts.items() if count == 0})
-        return result
+    blocks_by_file: dict[str, list[BlockId]] = defaultdict(list)
+    for block_id in group_samples_by_block(samples):
+        blocks_by_file[block_id[0]].append(block_id)
 
-    nonempty = [name for name, count in file_counts.items() if count]
-    if len(nonempty) < 3:
-        raise ValueError("At least three non-empty H5 files are required")
-    rng = np.random.default_rng(seed)
-    tie = {name: float(rng.random()) for name in nonempty}
-    files = sorted(nonempty, key=lambda name: (-file_counts[name], tie[name]))
-    suffix = [0] * (len(files) + 1)
-    for index in range(len(files) - 1, -1, -1):
-        suffix[index] = suffix[index + 1] + file_counts[files[index]]
+    result: dict[BlockId, str] = {}
+    for source_file in sorted(blocks_by_file):
+        block_ids = sorted(blocks_by_file[source_file], key=lambda value: value[1])
+        if len(block_ids) < len(ROLES):
+            raise ValueError(
+                f"Each source H5 file requires at least three 10M blocks: "
+                f"{source_file} has {len(block_ids)}"
+            )
 
-    def ordered_roles(index: int, train: int, calibration: int, audit: int) -> list[str]:
-        values = {"train": train, "calibration": calibration, "audit": audit}
-        return sorted(
-            ROLES,
-            key=lambda role: (targets[role] - values[role]) / targets[role],
-            reverse=True,
-        )
+        # 文件名参与稳定种子，避免不同文件获得完全相同的块排列。
+        digest = hashlib.sha256(f"{seed}:{source_file}".encode("utf-8")).digest()
+        rng = np.random.default_rng(int.from_bytes(digest[:8], "little"))
+        block_ids = [block_ids[index] for index in rng.permutation(len(block_ids))]
 
-    # 每个文件原先占一层 Python 递归，文件较多时会超过递归深度；显式栈保持相同的 DFS 顺序。
-    initial = (0, 0, 0, 0)
-    stack: list[tuple[tuple[int, int, int, int], list[str], int]] = [
-        (initial, ordered_roles(*initial), 0),
-    ]
-    sequence: list[str] = []
-    failed: set[tuple[int, int, int, int]] = set()
-    while stack:
-        state, roles, next_role = stack[-1]
-        index, train, calibration, audit = state
-        values = {"train": train, "calibration": calibration, "audit": audit}
-        if index == len(files):
-            if all(values[role] >= targets[role] for role in ROLES):
-                break
-            failed.add(state)
-            stack.pop()
-            if sequence:
-                sequence.pop()
-            continue
-        if suffix[index] < sum(max(0, targets[role] - values[role]) for role in ROLES):
-            failed.add(state)
-            stack.pop()
-            if sequence:
-                sequence.pop()
-            continue
-        if next_role == len(roles):
-            failed.add(state)
-            stack.pop()
-            if sequence:
-                sequence.pop()
-            continue
+        assigned = Counter({role: 1 for role in ROLES})
+        for _ in range(len(block_ids) - len(ROLES)):
+            role = min(
+                ROLES,
+                key=lambda candidate: (
+                    assigned[candidate] / targets[candidate],
+                    assigned[candidate],
+                    ROLES.index(candidate),
+                ),
+            )
+            assigned[role] += 1
 
-        role = roles[next_role]
-        stack[-1] = (state, roles, next_role + 1)
-        updated = dict(values)
-        updated[role] = min(targets[role], updated[role] + file_counts[files[index]])
-        child = (index + 1, updated["train"], updated["calibration"], updated["audit"])
-        if child in failed:
-            continue
-        sequence.append(role)
-        stack.append((child, ordered_roles(*child), 0))
-
-    if not stack:
-        raise ValueError("Cannot create file-disjoint review pools with available files")
-    result = dict(zip(files, sequence))
-    result.update({name: "train" for name, count in file_counts.items() if count == 0})
+        offset = 0
+        for role in ROLES:
+            for block_id in block_ids[offset:offset + assigned[role]]:
+                result[block_id] = role
+            offset += assigned[role]
     return result
 
 
 def select_reviews(
     samples: list[ByolSample],
-    file_roles: dict[str, str],
+    block_roles: dict[BlockId, str],
     targets: dict[str, int],
     seed: int = 42,
     eval_background_count: int = 10,
@@ -277,7 +187,7 @@ def select_reviews(
                 raise ValueError("eval-background-count must be within [0, evaluation target)")
             by_label: dict[int, list[int]] = defaultdict(list)
             for index, sample in enumerate(samples):
-                if file_roles[sample.source_file] == role:
+                if block_roles[sample_block_id(sample)] == role:
                     by_label[sample.label].append(index)
             nonbackground = tuple(label for label in range(1, 17) if by_label[label])
             if not nonbackground:
@@ -315,7 +225,7 @@ def select_reviews(
 
         groups: dict[tuple[int, int, int, str], list[int]] = defaultdict(list)
         for index, sample in enumerate(samples):
-            if file_roles[sample.source_file] == role:
+            if block_roles[sample_block_id(sample)] == role:
                 file_count = sample_file_counts[sample.source_file]
                 position_band = min(3, sample.row_idx * 4 // max(1, file_count))
                 groups[(sample.label, sample.rf_channel, position_band, sample.source_file)].append(index)
@@ -339,7 +249,7 @@ def select_reviews(
             (sample.label, sample.rf_channel, min(
                 3, sample.row_idx * 4 // max(1, sample_file_counts[sample.source_file])
             ), sample.source_file)
-            for sample in samples if file_roles[sample.source_file] == role
+            for sample in samples if block_roles[sample_block_id(sample)] == role
         )
         for key, index in chosen:
             selected_rows.append({
@@ -365,6 +275,67 @@ def write_csv(path: str | Path, rows: list[dict[str, object]]) -> None:
 def read_csv(path: str | Path) -> list[dict[str, str]]:
     with Path(path).open(newline="", encoding="utf-8") as file_obj:
         return list(csv.DictReader(file_obj))
+
+
+def load_block_roles(
+    manifest_path: str | Path,
+    samples: list[ByolSample],
+) -> dict[BlockId, str]:
+    rows = read_csv(manifest_path)
+    required = {
+        "source_file", "source_sample_idx", "original_label", "review_role",
+        "input_row_count", "review_row_count",
+    }
+    if not rows:
+        raise ValueError("split_manifest.csv is empty")
+    if not required.issubset(rows[0]):
+        if "source_sample_idx" not in rows[0]:
+            raise ValueError(
+                "Legacy file-level split_manifest.csv is not supported; "
+                "rebuild reviews with 10M block-level splitting"
+            )
+        raise ValueError(f"split_manifest.csv must contain columns: {sorted(required)}")
+
+    groups = group_samples_by_block(samples)
+    roles: dict[BlockId, str] = {}
+    for row in rows:
+        block_id = (row["source_file"], int(row["source_sample_idx"]))
+        if block_id in roles:
+            raise ValueError(f"Duplicate block_id in split_manifest.csv: {block_id}")
+        if block_id not in groups:
+            raise ValueError(f"Unknown block_id in split_manifest.csv: {block_id}")
+        role = row["review_role"]
+        if role not in ROLES:
+            raise ValueError(f"Invalid review role for {block_id}: {role}")
+        member_indices = groups[block_id]
+        labels = {samples[index].label for index in member_indices}
+        if labels != {int(row["original_label"])}:
+            raise ValueError(f"Original label changed for block_id {block_id}")
+        input_count = int(row["input_row_count"])
+        review_count = int(row["review_row_count"])
+        if input_count != len(member_indices):
+            raise ValueError(f"Input row count changed for block_id {block_id}")
+        if not 0 <= review_count <= input_count:
+            raise ValueError(f"Invalid review row count for block_id {block_id}")
+        roles[block_id] = role
+
+    missing = sorted(set(groups) - set(roles))
+    if missing:
+        raise ValueError(f"split_manifest.csv is missing block_id {missing[0]}")
+    roles_by_file: dict[str, set[str]] = defaultdict(set)
+    for (source_file, _source_sample_idx), role in roles.items():
+        roles_by_file[source_file].add(role)
+    incomplete = {
+        source_file: sorted(set(ROLES) - file_roles)
+        for source_file, file_roles in roles_by_file.items()
+        if file_roles != set(ROLES)
+    }
+    if incomplete:
+        source_file = sorted(incomplete)[0]
+        raise ValueError(
+            f"Source file {source_file} is missing block roles {incomplete[source_file]}"
+        )
+    return roles
 
 
 def join_reviews(review_path: Path, lookup_path: Path, samples: list[ByolSample]) -> list[dict[str, str]]:
@@ -410,10 +381,9 @@ def validate_label_counts(rows: list[dict[str, str]]) -> None:
 
 
 class ByolStftDataset(Dataset):
-    def __init__(self, samples: list[ByolSample], indices: list[int] | None = None, input_size: int = 512):
+    def __init__(self, samples: list[ByolSample], indices: list[int] | None = None):
         self.samples = samples
         self.indices = indices if indices is not None else list(range(len(samples)))
-        self.input_size = input_size
         self.files: dict[str, h5py.File] = {}
 
     def __len__(self) -> int:
@@ -425,7 +395,7 @@ class ByolStftDataset(Dataset):
         if sample.path not in self.files:
             self.files[sample.path] = h5py.File(sample.path, "r", rdcc_nbytes=64 * 1024 * 1024)
         value = torch.from_numpy(self.files[sample.path]["stft"][sample.row_idx])
-        return preprocess_stft(value, self.input_size), index
+        return preprocess_stft(value, BYOL_INPUT_SIZE), index
 
     def __getstate__(self):
         state = self.__dict__.copy()

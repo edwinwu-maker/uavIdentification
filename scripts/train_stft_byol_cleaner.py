@@ -1,7 +1,7 @@
 """Train a three-seed BYOL ensemble for direct STFT video cleaning.
 
 Usage:
-  python scripts/train_stft_byol_cleaner.py --data-dir <clean-STFT-H5> --work-dir outputs/stft_byol_cleaning --seeds 42 43 44 --input-size 512 --batch-size 8 --device cuda:0
+  python scripts/train_stft_byol_cleaner.py --data-dir <clean-STFT-H5> --work-dir outputs/stft_byol_cleaning --seeds 42 43 44 --batch-size 8 --device cuda:0
 """
 
 from __future__ import annotations
@@ -20,8 +20,9 @@ from torch.optim import AdamW
 from torch.utils.data import DataLoader
 
 from src.data.stft_byol_data import (
-    ByolStftDataset, checkpoint_sha256, choose_threshold, join_reviews, metrics,
-    read_csv, scan_clean_stft_h5, validate_label_counts, write_csv, write_json,
+    BYOL_INPUT_SIZE, ByolStftDataset, checkpoint_sha256, choose_threshold,
+    join_reviews, load_block_roles, metrics, sample_block_id, scan_clean_stft_h5,
+    validate_label_counts, write_csv, write_json,
 )
 from src.models.stft_byol_model import StftByol
 from src.training.stft_byol_training import (
@@ -37,27 +38,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-dir", required=True)
     parser.add_argument("--work-dir", default="outputs/stft_byol_cleaning")
     parser.add_argument("--seeds", type=int, nargs="+", default=(42, 43, 44))
-    parser.add_argument("--input-size", type=int, default=512, choices=(512,))
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--pretrain-epochs", type=int, default=100)
     parser.add_argument("--finetune-epochs", type=int, default=50)
     parser.add_argument("--device", default=default_device())
     return parser.parse_args()
-
-
-def _load_roles(path: Path, file_counts: dict[str, int]) -> dict[str, str]:
-    rows = read_csv(path)
-    if len(rows) != len(file_counts) or {row["source_file"] for row in rows} != set(file_counts):
-        raise ValueError("split_manifest.csv does not match input files")
-    roles = {}
-    for row in rows:
-        if row["review_role"] not in ("train", "calibration", "audit"):
-            raise ValueError(f"Invalid review role: {row['review_role']}")
-        if int(row["input_row_count"]) != file_counts[row["source_file"]]:
-            raise ValueError(f"Input row count changed for {row['source_file']}")
-        roles[row["source_file"]] = row["review_role"]
-    return roles
 
 
 def _pretrain(model, loader, device, epochs):
@@ -147,14 +133,18 @@ def main() -> None:
     for path in required:
         if not path.is_file():
             raise FileNotFoundError(f"Required review artifact does not exist: {path}")
-    samples, file_counts = scan_clean_stft_h5(args.data_dir)
-    roles = _load_roles(work_dir / "split_manifest.csv", file_counts)
+    samples = scan_clean_stft_h5(args.data_dir)
+    roles = load_block_roles(work_dir / "split_manifest.csv", samples)
     reviews = join_reviews(work_dir / "review.csv", work_dir / "review_lookup.csv", samples)
     for row in reviews:
-        if roles[row["source_file"]] != row["review_role"]:
+        block_id = (row["source_file"], int(row["source_sample_idx"]))
+        if roles[block_id] != row["review_role"]:
             raise ValueError(f"Split role mismatch for {row['review_id']}")
     validate_label_counts(reviews)
-    train_pool = [index for index, sample in enumerate(samples) if roles[sample.source_file] == "train"]
+    train_pool = [
+        index for index, sample in enumerate(samples)
+        if roles[sample_block_id(sample)] == "train"
+    ]
     train_reviews = [row for row in reviews
                      if row["review_role"] == "train" and row["manual_label"] != "uncertain"]
     train_indices = [int(row["sample_index"]) for row in train_reviews]
@@ -170,9 +160,9 @@ def main() -> None:
 
     for seed in args.seeds:
         set_seed(seed)
-        pretrain_data = ByolStftDataset(samples, train_pool, args.input_size)
-        fine_data = ByolStftDataset(samples, train_indices, args.input_size)
-        inference_data = ByolStftDataset(samples, input_size=args.input_size)
+        pretrain_data = ByolStftDataset(samples, train_pool)
+        fine_data = ByolStftDataset(samples, train_indices)
+        inference_data = ByolStftDataset(samples)
         pretrain_loader = DataLoader(pretrain_data, batch_size=args.batch_size, shuffle=True, **loader_kwargs)
         fine_loader = DataLoader(fine_data, batch_size=args.batch_size,
                                  sampler=BalancedSampler(train_labels, seed), **loader_kwargs)
@@ -199,7 +189,8 @@ def main() -> None:
             "finetune_history": finetune_history,
         }
         checkpoint = work_dir / f"stft_byol_seed{seed}.pt"
-        torch.save({"model_state_dict": model.state_dict(), "seed": seed, "input_size": 512,
+        torch.save({"model_state_dict": model.state_dict(), "seed": seed,
+                    "input_size": BYOL_INPUT_SIZE,
                     "positive_class": "video_present"}, checkpoint)
         checkpoints.append({"seed": seed, "path": checkpoint.name, "sha256": checkpoint_sha256(checkpoint)})
         all_probabilities.append(probabilities)
@@ -230,7 +221,7 @@ def main() -> None:
         row = {"sample_index": index, "source_file": sample.source_file,
                "source_row_idx": sample.row_idx, "original_label": sample.label,
                "rf_channel": sample.rf_channel, "source_sample_idx": sample.source_sample_idx,
-               "review_role": roles[sample.source_file], "manual_label": manual.get(index, "")}
+               "review_role": roles[sample_block_id(sample)], "manual_label": manual.get(index, "")}
         row.update({f"probability_seed_{seed}": float(values[index])
                     for seed, values in zip(args.seeds, all_probabilities)})
         row["ensemble_probability"] = float(ensemble[index])
@@ -238,7 +229,7 @@ def main() -> None:
         prediction_rows.append(row)
     write_csv(work_dir / "byol_predictions.csv", prediction_rows)
     report = {
-        "input_size": 512, "seeds": args.seeds, "threshold": threshold,
+        "input_size": BYOL_INPUT_SIZE, "seeds": args.seeds, "threshold": threshold,
         "minimum_calibration_recall": 0.95, "positive_definition": "video_present; video+WiFi is positive",
         "retention_rate": float(np.mean(ensemble >= threshold)), "checkpoints": checkpoints,
         "ensemble_calibration_metrics": calibration_metrics,
