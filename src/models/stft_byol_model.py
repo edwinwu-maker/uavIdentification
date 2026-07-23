@@ -52,14 +52,17 @@ class StftByol(nn.Module):
         return self.classifier(self.encode(inputs))
 
     def byol_loss(self, first: torch.Tensor, second: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        first_prediction = self.predictor(self.online_projector(self.online_encoder(first)))
-        second_prediction = self.predictor(self.online_projector(self.online_encoder(second)))
+        first_encoding = self.online_encoder(first)
+        second_encoding = self.online_encoder(second)
+        first_prediction = self.predictor(self.online_projector(first_encoding))
+        second_prediction = self.predictor(self.online_projector(second_encoding))
         with torch.no_grad():
             first_target = self.target_projector(self.target_encoder(first))
             second_target = self.target_projector(self.target_encoder(second))
         first_loss = 2 - 2 * F.cosine_similarity(first_prediction, second_target.detach(), dim=1)
         second_loss = 2 - 2 * F.cosine_similarity(second_prediction, first_target.detach(), dim=1)
-        return (first_loss + second_loss).mean(), torch.cat((first_prediction, second_prediction))
+        encodings = torch.cat((first_encoding, second_encoding)).detach()
+        return (first_loss + second_loss).mean(), encodings
 
     @torch.no_grad()
     def update_target(self, momentum: float) -> None:

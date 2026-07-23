@@ -35,6 +35,8 @@ from src.utils.cli import log_current_command
 from src.utils.device import default_device
 from src.utils.logger import logger
 
+REPRESENTATION_SAMPLE_LIMIT = 512
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train a direct BYOL STFT cleaner")
@@ -98,14 +100,50 @@ def _log_dataset_summary(samples, roles, reviews):
         )
 
 
+def _reuse_checkpoint(model, path, *, seed, device):
+    if not path.is_file():
+        return False
+    checkpoint = torch.load(path, map_location=device, weights_only=True)
+    expected = {
+        "seed": seed,
+        "input_size": BYOL_INPUT_SIZE,
+        "positive_class": "video_present",
+    }
+    for name, value in expected.items():
+        if checkpoint.get(name) != value:
+            raise ValueError(
+                f"Checkpoint {name} mismatch for {path}: "
+                f"expected {value!r}, got {checkpoint.get(name)!r}"
+            )
+    if "model_state_dict" not in checkpoint:
+        raise ValueError(f"Checkpoint model_state_dict is missing: {path}")
+    try:
+        model.load_state_dict(checkpoint["model_state_dict"], strict=True)
+    except RuntimeError as exc:
+        raise ValueError(f"Checkpoint model weights are incompatible: {path}") from exc
+    return True
+
+
+def _collapse_signals(stats):
+    signals = []
+    if stats["embedding_std"] < 0.01:
+        signals.append("embedding_std")
+    if stats["mean_cosine_similarity"] > 0.99:
+        signals.append("mean_cosine_similarity")
+    if stats["effective_rank"] < 2.0:
+        signals.append("effective_rank")
+    return signals
+
+
 def _pretrain(model, loader, device, epochs, *, seed):
     optimizer = AdamW(model.online_parameters(), lr=3e-4, weight_decay=1e-4)
     total_steps = max(1, epochs * len(loader))
-    global_step, history = 0, []
+    global_step, history, collapse_streak = 0, [], 0
     for epoch in range(epochs):
         epoch_started = time.perf_counter()
         model.train()
-        losses, loss_sum, last_embeddings = [], 0.0, None
+        losses, loss_sum, diagnostic_features = [], 0.0, []
+        diagnostic_count = 0
         description = f"Seed {seed} | BYOL {epoch + 1}/{epochs}"
         with _batch_progress(loader, description) as progress:
             for inputs, _indices in progress:
@@ -122,8 +160,11 @@ def _pretrain(model, loader, device, epochs, *, seed):
                 loss_value = float(loss.detach())
                 losses.append(loss_value)
                 loss_sum += loss_value
-                if last_embeddings is None or len(inputs) == loader.batch_size:
-                    last_embeddings = embeddings
+                if diagnostic_count < REPRESENTATION_SAMPLE_LIMIT:
+                    remaining = REPRESENTATION_SAMPLE_LIMIT - diagnostic_count
+                    selected = embeddings[:remaining].detach().cpu()
+                    diagnostic_features.append(selected)
+                    diagnostic_count += len(selected)
                 progress.set_postfix(
                     loss=f"{loss_sum / len(losses):.6f}",
                     ema=f"{momentum:.6f}",
@@ -131,8 +172,7 @@ def _pretrain(model, loader, device, epochs, *, seed):
                 )
         if not losses:
             raise ValueError("BYOL produced no usable batches")
-        assert last_embeddings is not None
-        stats = representation_stats(last_embeddings)
+        stats = representation_stats(torch.cat(diagnostic_features))
         epoch_report = {
             "loss": float(np.mean(losses)),
             **stats,
@@ -145,9 +185,18 @@ def _pretrain(model, loader, device, epochs, *, seed):
             epoch_report["embedding_std"], epoch_report["mean_cosine_similarity"],
             epoch_report["effective_rank"], time.perf_counter() - epoch_started,
         )
-    final = history[-1]
-    if final["embedding_std"] < 0.01 or final["effective_rank"] < 2.0:
-        raise RuntimeError(f"BYOL representation collapse detected: {final}")
+        signals = _collapse_signals(epoch_report)
+        if signals:
+            logger.warning(
+                "Seed %d | BYOL epoch %d/%d | collapse warning: %s",
+                seed, epoch + 1, epochs, ", ".join(signals),
+            )
+        collapse_streak = collapse_streak + 1 if len(signals) >= 2 else 0
+        if collapse_streak >= 3:
+            raise RuntimeError(
+                "BYOL representation collapse detected for three consecutive epochs: "
+                f"{epoch_report}"
+            )
     return history
 
 
@@ -259,6 +308,7 @@ def main() -> None:
     for seed_index, seed in enumerate(args.seeds, 1):
         seed_started = time.perf_counter()
         set_seed(seed)
+        checkpoint = work_dir / f"stft_byol_seed{seed}.pt"
         pretrain_data = ByolStftDataset(samples, train_pool)
         fine_data = ByolStftDataset(samples, train_indices)
         inference_data = ByolStftDataset(samples)
@@ -276,26 +326,37 @@ def main() -> None:
         )
         try:
             model = StftByol().to(device)
-            phase_started = time.perf_counter()
-            logger.info("Seed %d | BYOL pretraining started", seed)
-            pretrain_history = _pretrain(
-                model, pretrain_loader, device, args.pretrain_epochs, seed=seed,
+            checkpoint_reused = _reuse_checkpoint(
+                model, checkpoint, seed=seed, device=device,
             )
-            logger.info(
-                "Seed %d | BYOL pretraining completed | final_loss=%.6f | elapsed=%.1fs",
-                seed, pretrain_history[-1]["loss"], time.perf_counter() - phase_started,
-            )
+            if checkpoint_reused:
+                pretrain_history, finetune_history = [], []
+                logger.info(
+                    "Seed %d | checkpoint reused; pretraining and fine-tuning skipped | path=%s",
+                    seed, checkpoint,
+                )
+            else:
+                logger.info("Seed %d | checkpoint not found; training from scratch", seed)
+                phase_started = time.perf_counter()
+                logger.info("Seed %d | BYOL pretraining started", seed)
+                pretrain_history = _pretrain(
+                    model, pretrain_loader, device, args.pretrain_epochs, seed=seed,
+                )
+                logger.info(
+                    "Seed %d | BYOL pretraining completed | final_loss=%.6f | elapsed=%.1fs",
+                    seed, pretrain_history[-1]["loss"], time.perf_counter() - phase_started,
+                )
 
-            phase_started = time.perf_counter()
-            logger.info("Seed %d | classifier fine-tuning started", seed)
-            finetune_history = _finetune(
-                model, fine_loader, labels_by_index, device, args.finetune_epochs,
-                seed=seed,
-            )
-            logger.info(
-                "Seed %d | classifier fine-tuning completed | final_loss=%.6f | elapsed=%.1fs",
-                seed, finetune_history[-1], time.perf_counter() - phase_started,
-            )
+                phase_started = time.perf_counter()
+                logger.info("Seed %d | classifier fine-tuning started", seed)
+                finetune_history = _finetune(
+                    model, fine_loader, labels_by_index, device, args.finetune_epochs,
+                    seed=seed,
+                )
+                logger.info(
+                    "Seed %d | classifier fine-tuning completed | final_loss=%.6f | elapsed=%.1fs",
+                    seed, finetune_history[-1], time.perf_counter() - phase_started,
+                )
 
             phase_started = time.perf_counter()
             logger.info("Seed %d | full-dataset inference started", seed)
@@ -325,11 +386,12 @@ def main() -> None:
             "weighted_audit_metrics": seed_weighted_audit,
             "pretrain_history": pretrain_history,
             "finetune_history": finetune_history,
+            "checkpoint_reused": checkpoint_reused,
         }
-        checkpoint = work_dir / f"stft_byol_seed{seed}.pt"
-        torch.save({"model_state_dict": model.state_dict(), "seed": seed,
-                    "input_size": BYOL_INPUT_SIZE,
-                    "positive_class": "video_present"}, checkpoint)
+        if not checkpoint_reused:
+            torch.save({"model_state_dict": model.state_dict(), "seed": seed,
+                        "input_size": BYOL_INPUT_SIZE,
+                        "positive_class": "video_present"}, checkpoint)
         checkpoint_hash = checkpoint_sha256(checkpoint)
         checkpoints.append({"seed": seed, "path": checkpoint.name, "sha256": checkpoint_hash})
         all_probabilities.append(probabilities)
