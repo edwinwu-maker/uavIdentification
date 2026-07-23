@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
+from collections import Counter
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -18,9 +20,10 @@ import torch
 import torch.nn.functional as F
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 from src.data.stft_byol_data import (
-    BYOL_INPUT_SIZE, ByolStftDataset, checkpoint_sha256, choose_threshold,
+    BYOL_INPUT_SIZE, ROLES, ByolStftDataset, checkpoint_sha256, choose_threshold,
     join_reviews, load_block_roles, metrics, sample_block_id, scan_clean_stft_h5,
     validate_label_counts, write_csv, write_json,
 )
@@ -46,26 +49,86 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _pretrain(model, loader, device, epochs):
+def _batch_progress(loader, description):
+    return tqdm(
+        loader,
+        total=len(loader),
+        desc=description,
+        unit="batch",
+        leave=False,
+        dynamic_ncols=True,
+        mininterval=0.5,
+        disable=None,
+    )
+
+
+def _format_metrics(values):
+    names = ("precision", "recall", "f1", "no_video_removal_rate")
+    return " | ".join(
+        f"{name}={values[name]:.4f}" if values[name] is not None else f"{name}=n/a"
+        for name in names
+    )
+
+
+def _log_dataset_summary(samples, roles, reviews):
+    source_files = {sample.source_file for sample in samples}
+    block_counts = Counter(roles.values())
+    sample_counts = Counter(roles[sample_block_id(sample)] for sample in samples)
+    logger.info(
+        "Dataset | source_files=%d | blocks=%d | samples=%d",
+        len(source_files), len(roles), len(samples),
+    )
+    logger.info(
+        "Split | %s",
+        " | ".join(
+            f"{role}: blocks={block_counts[role]}, samples={sample_counts[role]}"
+            for role in ROLES
+        ),
+    )
+    for role in ROLES:
+        labels = Counter(
+            row["manual_label"] for row in reviews if row["review_role"] == role
+        )
+        logger.info(
+            "Reviews %s | video_present=%d | no_video=%d | uncertain=%d",
+            role,
+            labels["video_present"],
+            labels["no_video"],
+            labels["uncertain"],
+        )
+
+
+def _pretrain(model, loader, device, epochs, *, seed):
     optimizer = AdamW(model.online_parameters(), lr=3e-4, weight_decay=1e-4)
     total_steps = max(1, epochs * len(loader))
     global_step, history = 0, []
     for epoch in range(epochs):
+        epoch_started = time.perf_counter()
         model.train()
-        losses, last_embeddings = [], None
-        for inputs, _indices in loader:
-            if len(inputs) < 2:
-                continue
-            inputs = inputs.to(device)
-            loss, embeddings = model.byol_loss(augment(inputs), augment(inputs))
-            optimizer.zero_grad(set_to_none=True)
-            loss.backward()
-            optimizer.step()
-            model.update_target(ema_momentum(global_step, total_steps))
-            global_step += 1
-            losses.append(float(loss.detach()))
-            if last_embeddings is None or len(inputs) == loader.batch_size:
-                last_embeddings = embeddings
+        losses, loss_sum, last_embeddings = [], 0.0, None
+        description = f"Seed {seed} | BYOL {epoch + 1}/{epochs}"
+        with _batch_progress(loader, description) as progress:
+            for inputs, _indices in progress:
+                if len(inputs) < 2:
+                    continue
+                inputs = inputs.to(device)
+                loss, embeddings = model.byol_loss(augment(inputs), augment(inputs))
+                optimizer.zero_grad(set_to_none=True)
+                loss.backward()
+                optimizer.step()
+                momentum = ema_momentum(global_step, total_steps)
+                model.update_target(momentum)
+                global_step += 1
+                loss_value = float(loss.detach())
+                losses.append(loss_value)
+                loss_sum += loss_value
+                if last_embeddings is None or len(inputs) == loader.batch_size:
+                    last_embeddings = embeddings
+                progress.set_postfix(
+                    loss=f"{loss_sum / len(losses):.6f}",
+                    ema=f"{momentum:.6f}",
+                    refresh=False,
+                )
         if not losses:
             raise ValueError("BYOL produced no usable batches")
         assert last_embeddings is not None
@@ -75,40 +138,62 @@ def _pretrain(model, loader, device, epochs):
             **stats,
         }
         history.append(epoch_report)
-        logger.info("BYOL epoch %d/%d: %s", epoch + 1, epochs, epoch_report)
+        logger.info(
+            "Seed %d | BYOL epoch %d/%d | loss=%.6f | embedding_std=%.6f | "
+            "mean_cosine_similarity=%.6f | effective_rank=%.3f | elapsed=%.1fs",
+            seed, epoch + 1, epochs, epoch_report["loss"],
+            epoch_report["embedding_std"], epoch_report["mean_cosine_similarity"],
+            epoch_report["effective_rank"], time.perf_counter() - epoch_started,
+        )
     final = history[-1]
     if final["embedding_std"] < 0.01 or final["effective_rank"] < 2.0:
         raise RuntimeError(f"BYOL representation collapse detected: {final}")
     return history
 
 
-def _finetune(model, loader, labels_by_index, device, epochs):
+def _finetune(model, loader, labels_by_index, device, epochs, *, seed):
     optimizer = AdamW([*model.online_encoder.parameters(), *model.classifier.parameters()],
                       lr=1e-4, weight_decay=1e-4)
     history = []
     for epoch in range(epochs):
+        epoch_started = time.perf_counter()
         model.train()
-        losses = []
-        for inputs, indices in loader:
-            labels = torch.tensor([labels_by_index[int(index)] for index in indices],
-                                  dtype=torch.long, device=device)
-            loss = F.cross_entropy(model.classify(augment(inputs.to(device))), labels)
-            optimizer.zero_grad(set_to_none=True)
-            loss.backward()
-            optimizer.step()
-            losses.append(float(loss.detach()))
+        losses, loss_sum = [], 0.0
+        description = f"Seed {seed} | classifier {epoch + 1}/{epochs}"
+        with _batch_progress(loader, description) as progress:
+            for inputs, indices in progress:
+                labels = torch.tensor([labels_by_index[int(index)] for index in indices],
+                                      dtype=torch.long, device=device)
+                loss = F.cross_entropy(model.classify(augment(inputs.to(device))), labels)
+                optimizer.zero_grad(set_to_none=True)
+                loss.backward()
+                optimizer.step()
+                loss_value = float(loss.detach())
+                losses.append(loss_value)
+                loss_sum += loss_value
+                progress.set_postfix(
+                    loss=f"{loss_sum / len(losses):.6f}",
+                    refresh=False,
+                )
         history.append(float(np.mean(losses)))
-        logger.info("Classifier epoch %d/%d loss=%.6f", epoch + 1, epochs, history[-1])
+        logger.info(
+            "Seed %d | classifier epoch %d/%d | loss=%.6f | elapsed=%.1fs",
+            seed, epoch + 1, epochs, history[-1], time.perf_counter() - epoch_started,
+        )
     return history
 
 
 @torch.no_grad()
-def _infer(model, loader, device, count):
+def _infer(model, loader, device, count, *, seed):
     model.eval()
     probabilities = np.empty(count, dtype=np.float64)
-    for inputs, indices in loader:
-        probability = torch.softmax(model.classify(inputs.to(device)), dim=1)[:, 1].cpu().numpy()
-        probabilities[np.asarray(indices)] = probability
+    processed = 0
+    with _batch_progress(loader, f"Seed {seed} | inference") as progress:
+        for inputs, indices in progress:
+            probability = torch.softmax(model.classify(inputs.to(device)), dim=1)[:, 1].cpu().numpy()
+            probabilities[np.asarray(indices)] = probability
+            processed += len(indices)
+            progress.set_postfix(samples=f"{processed}/{count}", refresh=False)
     return probabilities
 
 
@@ -120,6 +205,7 @@ def _labeled_arrays(rows, probabilities):
 
 
 def main() -> None:
+    run_started = time.perf_counter()
     args = parse_args()
     log_current_command(logger)
     if args.batch_size < 2 or args.num_workers < 0:
@@ -129,10 +215,21 @@ def main() -> None:
     if len(args.seeds) != 3 or len(set(args.seeds)) != 3:
         raise ValueError("Exactly three distinct seeds are required")
     device, work_dir = torch.device(args.device), Path(args.work_dir).expanduser()
+    logger.info(
+        "Training config | device=%s | seeds=%s | input_size=%d | batch_size=%d | "
+        "num_workers=%d | pretrain_epochs=%d | finetune_epochs=%d",
+        device, list(args.seeds), BYOL_INPUT_SIZE, args.batch_size,
+        args.num_workers, args.pretrain_epochs, args.finetune_epochs,
+    )
+    logger.info(
+        "Paths | data_dir=%s | work_dir=%s",
+        Path(args.data_dir).expanduser(), work_dir,
+    )
     required = [work_dir / name for name in ("review.csv", "review_lookup.csv", "split_manifest.csv")]
     for path in required:
         if not path.is_file():
             raise FileNotFoundError(f"Required review artifact does not exist: {path}")
+    logger.info("Loading and validating STFT samples and review artifacts")
     samples = scan_clean_stft_h5(args.data_dir)
     roles = load_block_roles(work_dir / "split_manifest.csv", samples)
     reviews = join_reviews(work_dir / "review.csv", work_dir / "review_lookup.csv", samples)
@@ -141,6 +238,7 @@ def main() -> None:
         if roles[block_id] != row["review_role"]:
             raise ValueError(f"Split role mismatch for {row['review_id']}")
     validate_label_counts(reviews)
+    _log_dataset_summary(samples, roles, reviews)
     train_pool = [
         index for index, sample in enumerate(samples)
         if roles[sample_block_id(sample)] == "train"
@@ -158,7 +256,8 @@ def main() -> None:
     loader_kwargs = {"num_workers": args.num_workers, "pin_memory": device.type == "cuda"}
     all_probabilities, checkpoints, seed_reports = [], [], {}
 
-    for seed in args.seeds:
+    for seed_index, seed in enumerate(args.seeds, 1):
+        seed_started = time.perf_counter()
         set_seed(seed)
         pretrain_data = ByolStftDataset(samples, train_pool)
         fine_data = ByolStftDataset(samples, train_indices)
@@ -167,11 +266,46 @@ def main() -> None:
         fine_loader = DataLoader(fine_data, batch_size=args.batch_size,
                                  sampler=BalancedSampler(train_labels, seed), **loader_kwargs)
         inference_loader = DataLoader(inference_data, batch_size=args.batch_size, shuffle=False, **loader_kwargs)
+        logger.info(
+            "Seed %d (%d/%d) started | pretrain_samples=%d, batches=%d | "
+            "finetune_samples=%d, balanced_batches=%d | inference_samples=%d, batches=%d",
+            seed, seed_index, len(args.seeds),
+            len(pretrain_data), len(pretrain_loader),
+            len(fine_data), len(fine_loader),
+            len(inference_data), len(inference_loader),
+        )
         try:
             model = StftByol().to(device)
-            pretrain_history = _pretrain(model, pretrain_loader, device, args.pretrain_epochs)
-            finetune_history = _finetune(model, fine_loader, labels_by_index, device, args.finetune_epochs)
-            probabilities = _infer(model, inference_loader, device, len(samples))
+            phase_started = time.perf_counter()
+            logger.info("Seed %d | BYOL pretraining started", seed)
+            pretrain_history = _pretrain(
+                model, pretrain_loader, device, args.pretrain_epochs, seed=seed,
+            )
+            logger.info(
+                "Seed %d | BYOL pretraining completed | final_loss=%.6f | elapsed=%.1fs",
+                seed, pretrain_history[-1]["loss"], time.perf_counter() - phase_started,
+            )
+
+            phase_started = time.perf_counter()
+            logger.info("Seed %d | classifier fine-tuning started", seed)
+            finetune_history = _finetune(
+                model, fine_loader, labels_by_index, device, args.finetune_epochs,
+                seed=seed,
+            )
+            logger.info(
+                "Seed %d | classifier fine-tuning completed | final_loss=%.6f | elapsed=%.1fs",
+                seed, finetune_history[-1], time.perf_counter() - phase_started,
+            )
+
+            phase_started = time.perf_counter()
+            logger.info("Seed %d | full-dataset inference started", seed)
+            probabilities = _infer(
+                model, inference_loader, device, len(samples), seed=seed,
+            )
+            logger.info(
+                "Seed %d | full-dataset inference completed | elapsed=%.1fs",
+                seed, time.perf_counter() - phase_started,
+            )
         finally:
             pretrain_data.close(); fine_data.close(); inference_data.close()
         calibration_true, calibration_prob, calibration_weights = _labeled_arrays(
@@ -181,10 +315,14 @@ def main() -> None:
             calibration_true, calibration_prob, sample_weight=calibration_weights,
         )
         audit_true, audit_prob, audit_weights = _labeled_arrays(audit, probabilities)
+        seed_audit_metrics = metrics(audit_true, audit_prob >= seed_threshold)
+        seed_weighted_audit = metrics(
+            audit_true, audit_prob >= seed_threshold, audit_weights,
+        )
         seed_reports[str(seed)] = {
             "threshold": seed_threshold,
-            "audit_metrics": metrics(audit_true, audit_prob >= seed_threshold),
-            "weighted_audit_metrics": metrics(audit_true, audit_prob >= seed_threshold, audit_weights),
+            "audit_metrics": seed_audit_metrics,
+            "weighted_audit_metrics": seed_weighted_audit,
             "pretrain_history": pretrain_history,
             "finetune_history": finetune_history,
         }
@@ -192,8 +330,22 @@ def main() -> None:
         torch.save({"model_state_dict": model.state_dict(), "seed": seed,
                     "input_size": BYOL_INPUT_SIZE,
                     "positive_class": "video_present"}, checkpoint)
-        checkpoints.append({"seed": seed, "path": checkpoint.name, "sha256": checkpoint_sha256(checkpoint)})
+        checkpoint_hash = checkpoint_sha256(checkpoint)
+        checkpoints.append({"seed": seed, "path": checkpoint.name, "sha256": checkpoint_hash})
         all_probabilities.append(probabilities)
+        logger.info(
+            "Seed %d | threshold=%.8f | audit: %s",
+            seed, seed_threshold, _format_metrics(seed_audit_metrics),
+        )
+        logger.info(
+            "Seed %d | weighted audit: %s",
+            seed, _format_metrics(seed_weighted_audit),
+        )
+        logger.info(
+            "Seed %d (%d/%d) completed | checkpoint=%s | sha256=%s | elapsed=%.1fs",
+            seed, seed_index, len(args.seeds), checkpoint, checkpoint_hash,
+            time.perf_counter() - seed_started,
+        )
 
     ensemble = np.mean(np.stack(all_probabilities), axis=0)
     calibration_true, calibration_prob, calibration_weights = _labeled_arrays(calibration, ensemble)
@@ -227,7 +379,9 @@ def main() -> None:
         row["ensemble_probability"] = float(ensemble[index])
         row["decision"] = "video_present" if ensemble[index] >= threshold else "no_video"
         prediction_rows.append(row)
-    write_csv(work_dir / "byol_predictions.csv", prediction_rows)
+    prediction_path = work_dir / "byol_predictions.csv"
+    report_path = work_dir / "byol_cleaning_report.json"
+    write_csv(prediction_path, prediction_rows)
     report = {
         "input_size": BYOL_INPUT_SIZE, "seeds": args.seeds, "threshold": threshold,
         "minimum_calibration_recall": 0.95, "positive_definition": "video_present; video+WiFi is positive",
@@ -238,8 +392,19 @@ def main() -> None:
         "ensemble_weighted_audit_metrics": weighted_audit,
         "seed_reports": seed_reports, "seed_metric_summary": seed_metric_summary,
     }
-    write_json(work_dir / "byol_cleaning_report.json", report)
-    logger.info("BYOL ensemble threshold %.8f; audit=%s", threshold, audit_metrics)
+    write_json(report_path, report)
+    logger.info(
+        "Ensemble | threshold=%.8f | retention_rate=%.4f",
+        threshold, report["retention_rate"],
+    )
+    logger.info("Ensemble calibration | %s", _format_metrics(calibration_metrics))
+    logger.info("Ensemble weighted calibration | %s", _format_metrics(weighted_calibration))
+    logger.info("Ensemble audit | %s", _format_metrics(audit_metrics))
+    logger.info("Ensemble weighted audit | %s", _format_metrics(weighted_audit))
+    logger.info(
+        "Training completed | predictions=%s | report=%s | checkpoints=%s | elapsed=%.1fs",
+        prediction_path, report_path, work_dir, time.perf_counter() - run_started,
+    )
 
 
 if __name__ == "__main__":
