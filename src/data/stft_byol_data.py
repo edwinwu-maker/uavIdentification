@@ -9,7 +9,6 @@ import math
 import os
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from functools import lru_cache
 from pathlib import Path
 
 import h5py
@@ -108,28 +107,57 @@ def split_files(file_counts: dict[str, int], targets: dict[str, int], seed: int 
     for index in range(len(files) - 1, -1, -1):
         suffix[index] = suffix[index + 1] + file_counts[files[index]]
 
-    @lru_cache(maxsize=None)
-    def assign(index: int, train: int, calibration: int, audit: int):
+    def ordered_roles(index: int, train: int, calibration: int, audit: int) -> list[str]:
         values = {"train": train, "calibration": calibration, "audit": audit}
-        if index == len(files):
-            return () if all(values[role] >= targets[role] for role in ROLES) else None
-        if suffix[index] < sum(max(0, targets[role] - values[role]) for role in ROLES):
-            return None
-        ordered_roles = sorted(
+        return sorted(
             ROLES,
             key=lambda role: (targets[role] - values[role]) / targets[role],
             reverse=True,
         )
-        for role in ordered_roles:
-            updated = dict(values)
-            updated[role] = min(targets[role], updated[role] + file_counts[files[index]])
-            tail = assign(index + 1, updated["train"], updated["calibration"], updated["audit"])
-            if tail is not None:
-                return (role, *tail)
-        return None
 
-    sequence = assign(0, 0, 0, 0)
-    if sequence is None:
+    # 每个文件原先占一层 Python 递归，文件较多时会超过递归深度；显式栈保持相同的 DFS 顺序。
+    initial = (0, 0, 0, 0)
+    stack: list[tuple[tuple[int, int, int, int], list[str], int]] = [
+        (initial, ordered_roles(*initial), 0),
+    ]
+    sequence: list[str] = []
+    failed: set[tuple[int, int, int, int]] = set()
+    while stack:
+        state, roles, next_role = stack[-1]
+        index, train, calibration, audit = state
+        values = {"train": train, "calibration": calibration, "audit": audit}
+        if index == len(files):
+            if all(values[role] >= targets[role] for role in ROLES):
+                break
+            failed.add(state)
+            stack.pop()
+            if sequence:
+                sequence.pop()
+            continue
+        if suffix[index] < sum(max(0, targets[role] - values[role]) for role in ROLES):
+            failed.add(state)
+            stack.pop()
+            if sequence:
+                sequence.pop()
+            continue
+        if next_role == len(roles):
+            failed.add(state)
+            stack.pop()
+            if sequence:
+                sequence.pop()
+            continue
+
+        role = roles[next_role]
+        stack[-1] = (state, roles, next_role + 1)
+        updated = dict(values)
+        updated[role] = min(targets[role], updated[role] + file_counts[files[index]])
+        child = (index + 1, updated["train"], updated["calibration"], updated["audit"])
+        if child in failed:
+            continue
+        sequence.append(role)
+        stack.append((child, ordered_roles(*child), 0))
+
+    if not stack:
         raise ValueError("Cannot create file-disjoint review pools with available files")
     result = dict(zip(files, sequence))
     result.update({name: "train" for name, count in file_counts.items() if count == 0})
