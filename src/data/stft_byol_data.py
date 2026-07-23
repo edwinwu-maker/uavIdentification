@@ -135,6 +135,10 @@ def split_files(
             if name not in result:
                 by_label[label].append(name)
         all_labels = sorted(set(file_labels.values()))
+        role_totals = Counter({
+            role: sum(file_counts[name] for name, assigned_role in result.items() if assigned_role == role)
+            for role in ROLES
+        })
         for label in all_labels:
             fixed_for_label = {
                 role for name, role in result.items()
@@ -142,11 +146,13 @@ def split_files(
             }
             required_roles = [role for role in ROLES if role not in fixed_for_label]
             available = by_label[label]
-            if len(available) < len(required_roles):
+            if len(available) < len(required_roles) and not fixed_roles:
                 raise ValueError(
                     f"Original label {label} needs {len(required_roles)} remaining files "
                     f"for {required_roles}, found {len(available)}"
                 )
+            if not available:
+                continue
             tie = {name: float(rng.random()) for name in available}
             ordered = sorted(available, key=lambda name: (-file_counts[name], tie[name]))
             assigned = Counter({
@@ -156,10 +162,21 @@ def split_files(
                 )
                 for role in ROLES
             })
-            for role, name in zip(required_roles, ordered):
+            seed_roles = required_roles
+            if len(available) < len(required_roles):
+                seed_roles = sorted(
+                    required_roles,
+                    key=lambda role: (
+                        role_totals[role] / targets[role],
+                        role_totals[role],
+                        ROLES.index(role),
+                    ),
+                )[:len(available)]
+            for role, name in zip(seed_roles, ordered):
                 result[name] = role
                 assigned[role] += file_counts[name]
-            for name in ordered[len(required_roles):]:
+                role_totals[role] += file_counts[name]
+            for name in ordered[len(seed_roles):]:
                 role = min(
                     required_roles,
                     key=lambda candidate: (
@@ -170,6 +187,7 @@ def split_files(
                 )
                 result[name] = role
                 assigned[role] += file_counts[name]
+                role_totals[role] += file_counts[name]
         result.update({name: "train" for name, count in file_counts.items() if count == 0})
         return result
 
@@ -255,22 +273,27 @@ def select_reviews(
     for role in ROLES:
         if role != "train":
             target = targets[role]
-            nonbackground = tuple(range(1, 17))
             if not 0 <= eval_background_count < target:
                 raise ValueError("eval-background-count must be within [0, evaluation target)")
+            by_label: dict[int, list[int]] = defaultdict(list)
+            for index, sample in enumerate(samples):
+                if file_roles[sample.source_file] == role:
+                    by_label[sample.label].append(index)
+            nonbackground = tuple(label for label in range(1, 17) if by_label[label])
+            if not nonbackground:
+                raise ValueError(f"{role} contains no non-background review candidates")
             remaining = target - eval_background_count
             if remaining < len(nonbackground):
-                raise ValueError("Evaluation target is too small to cover all 16 non-background labels")
+                raise ValueError(
+                    f"Evaluation target is too small to cover all {len(nonbackground)} "
+                    f"available non-background labels in {role}"
+                )
             quotas = {0: eval_background_count}
             base, extra = divmod(remaining, len(nonbackground))
             quotas.update({label: base for label in nonbackground})
             for label in rng.permutation(nonbackground)[:extra]:
                 quotas[int(label)] += 1
 
-            by_label: dict[int, list[int]] = defaultdict(list)
-            for index, sample in enumerate(samples):
-                if file_roles[sample.source_file] == role:
-                    by_label[sample.label].append(index)
             for label, quota in quotas.items():
                 population = by_label[label]
                 if len(population) < quota:

@@ -254,6 +254,18 @@ def main() -> None:
     file_roles = split_files(
         file_counts, targets, args.seed, file_labels=file_labels, fixed_roles=fixed_roles,
     )
+    for role in ("calibration", "audit"):
+        available_labels = {
+            file_labels[name] for name, assigned_role in file_roles.items()
+            if assigned_role == role and name in file_labels
+        }
+        missing = sorted(set(range(1, 17)) - available_labels)
+        if missing:
+            logger.warning(
+                "%s has no remaining source file for original labels %s; "
+                "their review quota will be redistributed",
+                role, missing,
+            )
     selections = [
         row for row in select_reviews(
             samples, file_roles, targets, args.seed, args.eval_background_count,
