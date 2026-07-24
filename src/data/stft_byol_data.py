@@ -1,4 +1,4 @@
-"""Data preparation and export helpers for direct BYOL STFT cleaning."""
+"""Data preparation and export helpers for post-DEC BYOL STFT cleaning."""
 
 from __future__ import annotations
 
@@ -33,6 +33,7 @@ class ByolSample:
     label: int
     rf_channel: int
     source_sample_idx: int
+    dec_source_row_idx: int | None = None
 
     @property
     def source_file(self) -> str:
@@ -55,7 +56,7 @@ def group_samples_by_block(samples: list[ByolSample]) -> dict[BlockId, list[int]
 
 
 def scan_clean_stft_h5(data_dir: str | Path) -> list[ByolSample]:
-    """Validate and index all background and UAV rows in clean STFT H5 files."""
+    """Validate DEC-filtered H5 files and index only T0001-T10000 rows."""
 
     root = Path(data_dir).expanduser()
     if not root.is_dir():
@@ -90,6 +91,8 @@ def scan_clean_stft_h5(data_dir: str | Path) -> list[ByolSample]:
                 raise ValueError(f"All included rows must be clean: {path}")
             if np.any((labels < 0) | (labels > 16)):
                 raise ValueError(f"Invalid DroneRFa labels in {path}")
+            if count == 0:
+                continue
             if len(np.unique(labels)) != 1:
                 raise ValueError(f"Each H5 file must contain exactly one original label: {path}")
             if np.any((channels < 0) | (channels > 1)):
@@ -102,10 +105,21 @@ def scan_clean_stft_h5(data_dir: str | Path) -> list[ByolSample]:
                     "Duplicate (source_sample_idx, rf_channel) rows in "
                     f"{path}"
                 )
+            if int(labels[0]) == 0:
+                continue
+            cleaning_method = _text(h5f.attrs.get("cleaning_method", ""))
+            if "DCEC-background-filter" not in cleaning_method:
+                raise ValueError(f"BYOL requires DCEC-background-filter input: {path}")
+            if "dec_source_row_idx" not in h5f:
+                raise ValueError(f"DEC source-row lineage is missing: {path}")
+            dec_source_rows = np.asarray(h5f["dec_source_row_idx"][:], dtype=np.int64)
+            if dec_source_rows.shape != (count,) or np.any(dec_source_rows < 0):
+                raise ValueError(f"Invalid dec_source_row_idx in {path}")
             samples.extend(
                 ByolSample(
                     str(path.resolve()), row_idx, int(labels[row_idx]),
                     int(channels[row_idx]), int(source_indices[row_idx]),
+                    int(dec_source_rows[row_idx]),
                 )
                 for row_idx in range(count)
             )
@@ -173,9 +187,8 @@ def select_reviews(
     block_roles: dict[BlockId, str],
     targets: dict[str, int],
     seed: int = 42,
-    eval_background_count: int = 10,
 ) -> list[dict[str, object]]:
-    """Stratify by original label/RF and retain inverse inclusion weights."""
+    """Stratify post-DEC UAV rows by original label/RF and retain sampling weights."""
 
     rng = np.random.default_rng(seed)
     selected_rows: list[dict[str, object]] = []
@@ -183,32 +196,28 @@ def select_reviews(
     for role in ROLES:
         if role != "train":
             target = targets[role]
-            if not 0 <= eval_background_count < target:
-                raise ValueError("eval-background-count must be within [0, evaluation target)")
-            by_label: dict[int, list[int]] = defaultdict(list)
+            by_stratum: dict[tuple[int, int], list[int]] = defaultdict(list)
             for index, sample in enumerate(samples):
-                if block_roles[sample_block_id(sample)] == role:
-                    by_label[sample.label].append(index)
-            nonbackground = tuple(label for label in range(1, 17) if by_label[label])
-            if not nonbackground:
-                raise ValueError(f"{role} contains no non-background review candidates")
-            remaining = target - eval_background_count
-            if remaining < len(nonbackground):
+                if sample.label != 0 and block_roles[sample_block_id(sample)] == role:
+                    by_stratum[(sample.label, sample.rf_channel)].append(index)
+            strata = tuple(sorted(by_stratum))
+            if not strata:
+                raise ValueError(f"{role} contains no UAV review candidates")
+            if target < len(strata):
                 raise ValueError(
-                    f"Evaluation target is too small to cover all {len(nonbackground)} "
-                    f"available non-background labels in {role}"
+                    f"Evaluation target is too small to cover all {len(strata)} "
+                    f"available original_label/rf_channel strata in {role}"
                 )
-            quotas = {0: eval_background_count}
-            base, extra = divmod(remaining, len(nonbackground))
-            quotas.update({label: base for label in nonbackground})
-            for label in rng.permutation(nonbackground)[:extra]:
-                quotas[int(label)] += 1
+            base, extra = divmod(target, len(strata))
+            quotas = {stratum: base for stratum in strata}
+            for stratum_index in rng.permutation(len(strata))[:extra]:
+                quotas[strata[int(stratum_index)]] += 1
 
-            for label, quota in quotas.items():
-                population = by_label[label]
+            for stratum, quota in quotas.items():
+                population = by_stratum[stratum]
                 if len(population) < quota:
                     raise ValueError(
-                        f"Not enough original label {label} candidates for {role}: "
+                        f"Not enough candidates for {stratum} in {role}: "
                         f"need {quota}, found {len(population)}"
                     )
                 chosen = rng.choice(population, size=quota, replace=False)
@@ -217,7 +226,9 @@ def select_reviews(
                     "review_role": role,
                     "sample_index": int(index),
                     "sampling_weight": weight,
-                    "sampling_stratum": f"original_label={label}",
+                    "sampling_stratum": (
+                        f"original_label={stratum[0]}|rf_channel={stratum[1]}"
+                    ),
                     "sampling_population_count": len(population),
                     "sampling_selected_count": quota,
                 } for index in chosen)
@@ -225,7 +236,7 @@ def select_reviews(
 
         groups: dict[tuple[int, int, int, str], list[int]] = defaultdict(list)
         for index, sample in enumerate(samples):
-            if block_roles[sample_block_id(sample)] == role:
+            if sample.label != 0 and block_roles[sample_block_id(sample)] == role:
                 file_count = sample_file_counts[sample.source_file]
                 position_band = min(3, sample.row_idx * 4 // max(1, file_count))
                 groups[(sample.label, sample.rf_channel, position_band, sample.source_file)].append(index)
@@ -343,6 +354,10 @@ def join_reviews(review_path: Path, lookup_path: Path, samples: list[ByolSample]
     by_id = {row["review_id"]: row for row in lookups}
     if len(by_id) != len(lookups) or len(reviews) != len(lookups):
         raise ValueError("Review and lookup rows must match one-to-one")
+    if lookups and "dec_source_row_idx" not in lookups[0]:
+        raise ValueError(
+            "Legacy BYOL reviews lack DEC lineage; rebuild them from DEC-filtered H5"
+        )
     joined, seen = [], set()
     for review in reviews:
         review_id = review.get("review_id", "")
@@ -362,9 +377,22 @@ def join_reviews(review_path: Path, lookup_path: Path, samples: list[ByolSample]
         sampling_weight = float(lookup["sampling_weight"])
         if not math.isfinite(sampling_weight) or sampling_weight <= 0:
             raise ValueError(f"Invalid sampling_weight for {review_id}")
-        actual = (lookup["source_file"], int(lookup["source_row_idx"]), int(lookup["original_label"]),
-                  int(lookup["rf_channel"]), int(lookup["source_sample_idx"]))
-        expected = (sample.source_file, sample.row_idx, sample.label, sample.rf_channel, sample.source_sample_idx)
+        actual = (
+            lookup["source_file"],
+            int(lookup["source_row_idx"]),
+            int(lookup["original_label"]),
+            int(lookup["rf_channel"]),
+            int(lookup["source_sample_idx"]),
+            int(lookup["dec_source_row_idx"]),
+        )
+        expected = (
+            sample.source_file,
+            sample.row_idx,
+            sample.label,
+            sample.rf_channel,
+            sample.source_sample_idx,
+            sample.dec_source_row_idx,
+        )
         if actual != expected:
             raise ValueError(f"Lookup does not match source H5 for {review_id}")
         joined.append({**lookup, "manual_label": label})
@@ -411,8 +439,9 @@ class ByolStftDataset(Dataset):
 def choose_threshold(
     y_true: np.ndarray,
     probabilities: np.ndarray,
-    minimum_recall: float = 0.95,
+    minimum_recall: float = 0.98,
     sample_weight: np.ndarray | None = None,
+    groups: list[tuple[int, int]] | None = None,
 ):
     y_true = np.asarray(y_true, dtype=np.int64)
     probabilities = np.asarray(probabilities, dtype=np.float64)
@@ -426,15 +455,31 @@ def choose_threshold(
             raise ValueError("Calibration weights must be finite and match labels")
         if np.any(sample_weight <= 0):
             raise ValueError("Calibration weights must be positive")
+    if groups is not None and len(groups) != len(y_true):
+        raise ValueError("Calibration groups must match labels")
     best = None
     for threshold in np.unique(np.concatenate(([0.0], probabilities, [1.0]))):
         predicted = probabilities >= threshold
         recall = recall_score(y_true, predicted, sample_weight=sample_weight, zero_division=0)
         if recall + 1e-12 < minimum_recall:
             continue
+        if groups is not None:
+            failed_group = any(
+                not predicted[
+                    (y_true == 1)
+                    & np.asarray([value == group for value in groups], dtype=bool)
+                ].any()
+                for group in set(groups)
+                if np.any(
+                    (y_true == 1)
+                    & np.asarray([value == group for value in groups], dtype=bool)
+                )
+            )
+            if failed_group:
+                continue
         key = (
             precision_score(y_true, predicted, sample_weight=sample_weight, zero_division=0),
-            float(threshold),
+            -float(threshold),
         )
         if best is None or key > best[0]:
             best = (key, float(threshold))
@@ -469,6 +514,27 @@ def metrics(y_true, y_pred, weights=None) -> dict[str, object]:
         result["precision_wilson_95"] = _wilson(int(tp), int(tp + fp))
         result["recall_wilson_95"] = _wilson(int(tp), int(tp + fn))
         result["no_video_removal_wilson_95"] = _wilson(int(tn), int(tn + fp))
+    return result
+
+
+def metrics_by_group(y_true, y_pred, groups, weights=None) -> dict[str, dict[str, object]]:
+    y_true = np.asarray(y_true, dtype=np.int64)
+    y_pred = np.asarray(y_pred, dtype=np.int64)
+    if len(groups) != len(y_true):
+        raise ValueError("Metric groups must match labels")
+    if weights is not None:
+        weights = np.asarray(weights, dtype=np.float64)
+    result = {}
+    for group in sorted(set(groups)):
+        mask = np.asarray([value == group for value in groups], dtype=bool)
+        key = f"original_label={group[0]}|rf_channel={group[1]}"
+        values = metrics(
+            y_true[mask],
+            y_pred[mask],
+            None if weights is None else weights[mask],
+        )
+        values["actual_positive"] = int(y_true[mask].sum())
+        result[key] = values
     return result
 
 
@@ -507,17 +573,52 @@ def export_clean_h5(data_dir, output_dir, prediction_rows, threshold, checkpoint
     by_key = {(row["source_file"], int(row["source_row_idx"])): row for row in prediction_rows}
     expected = set()
     counts_by_file = {}
+    background_files = set()
     for path in paths:
         with h5py.File(path, "r") as source:
-            counts_by_file[path.name] = source["stft"].shape[0]
-            expected.update((path.name, index) for index in range(source["stft"].shape[0]))
+            count = source["stft"].shape[0]
+            counts_by_file[path.name] = count
+            labels = np.asarray(source["labels"][:], dtype=np.int64)
+            if count and len(np.unique(labels)) != 1:
+                raise ValueError(f"Each H5 file must contain exactly one label: {path}")
+            if count and int(labels[0]) == 0:
+                background_files.add(path.name)
+            else:
+                expected.update((path.name, index) for index in range(count))
     if len(by_key) != len(prediction_rows) or set(by_key) != expected:
-        raise ValueError("Predictions must match all input rows one-to-one")
+        raise ValueError("Predictions must match all non-background input rows one-to-one")
     target_root.mkdir(parents=True, exist_ok=True)
     manifest, decisions = [], Counter()
+    prediction_fields = list(prediction_rows[0]) if prediction_rows else []
     for path in paths:
-        rows = [by_key[(path.name, index)] for index in range(counts_by_file[path.name])]
-        selected = [int(row["source_row_idx"]) for row in rows if float(row["ensemble_probability"]) >= threshold]
+        count = counts_by_file[path.name]
+        is_background = path.name in background_files
+        if is_background:
+            rows = []
+            with h5py.File(path, "r") as background_source:
+                for source_row in range(count):
+                    row = {field: "" for field in prediction_fields}
+                    row.update({
+                        "sample_index": "",
+                        "source_file": path.name,
+                        "source_row_idx": source_row,
+                        "original_label": 0,
+                        "rf_channel": int(background_source["rf_channel"][source_row]),
+                        "source_sample_idx": int(
+                            background_source["source_sample_idx"][source_row]
+                        ),
+                        "dec_source_row_idx": "",
+                        "decision": "t0000_passthrough",
+                    })
+                    rows.append(row)
+            selected = list(range(count))
+        else:
+            rows = [by_key[(path.name, index)] for index in range(count)]
+            selected = [
+                int(row["source_row_idx"])
+                for row in rows
+                if float(row["ensemble_probability"]) >= threshold
+            ]
         output_positions = {source_row: output_row for output_row, source_row in enumerate(selected)}
         temporary, target = target_root / f".{path.name}.tmp", target_root / path.name
         try:
@@ -525,19 +626,23 @@ def export_clean_h5(data_dir, output_dir, prediction_rows, threshold, checkpoint
                 count = source["stft"].shape[0]
                 for key, value in source.attrs.items():
                     output.attrs[key] = value
-                output.attrs["cleaning_method"] = "BYOL-ensemble"
+                upstream = _text(source.attrs.get("cleaning_method", "")).strip()
+                output.attrs["cleaning_method"] = (
+                    f"{upstream}+BYOL-video-filter" if upstream else "BYOL-video-filter"
+                )
                 output.attrs["cleaning_input_size"] = 512
                 output.attrs["cleaning_video_threshold"] = threshold
                 output.attrs["cleaning_checkpoint_sha256"] = json.dumps(checkpoint_hashes)
-                output.attrs["cleaning_positive_definition"] = "video_present (including video+WiFi)"
+                output.attrs["cleaning_positive_definition"] = "video_present"
                 for name, dataset in source.items():
                     if dataset.shape[:1] == (count,):
                         _copy_rows(dataset, output, name, selected)
                     else:
                         source.copy(name, output)
-                output.create_dataset("video_probability", data=np.asarray([
-                    float(rows[index]["ensemble_probability"]) for index in selected
-                ], dtype=np.float32))
+                if not is_background:
+                    output.create_dataset("video_probability", data=np.asarray([
+                        float(rows[index]["ensemble_probability"]) for index in selected
+                    ], dtype=np.float32))
             os.replace(temporary, target)
         finally:
             if temporary.exists():
@@ -545,8 +650,13 @@ def export_clean_h5(data_dir, output_dir, prediction_rows, threshold, checkpoint
         for row in rows:
             source_row = int(row["source_row_idx"])
             kept = source_row in output_positions
-            decisions["retained" if kept else "removed"] += 1
-            manifest.append({**row, "decision": "video_present" if kept else "no_video",
+            decision = (
+                "t0000_passthrough"
+                if is_background
+                else "video_present" if kept else "no_video"
+            )
+            decisions[decision] += 1
+            manifest.append({**row, "decision": decision,
                              "output_file": path.name if kept else "",
                              "output_row_idx": output_positions.get(source_row, "")})
     return manifest, dict(decisions)

@@ -165,50 +165,49 @@ H5 生成的 STFT 图片默认保存到 H5 目录旁的 `stft_png/`，CPP/FAM �
 
 旧 14 类 H5 的压缩标签、文件级 `rf_channel` 属性、split manifest 和 checkpoint 均与新格式不兼容。新实验使用带 `17class` 的独立目录和文件名，不覆盖历史产物。
 
-### STFT 图传片段深度聚类清洗
+### DEC → BYOL 两阶段 STFT 清洗
 
-该流程只接受 `noise_profile=clean` 的 STFT H5，并跳过 `T0000` 背景类。先训练卷积自编码器和
-DCEC，随后生成 250 条盲审图片及 `review.csv`：
+第一阶段 DEC 只负责从 T0001-T10000 中剔除纯背景。训练会跳过 `T0000`，并生成 250 条
+盲审图片及 `review.csv`：
 
 ```bash
 python scripts/train_stft_deep_cluster.py \
   --data-dir ~/Desktop/dataset/DroneRFa_stft_17class_h5 \
-  --work-dir outputs/stft_deep_cluster \
+  --work-dir outputs/stft_dec_background \
   --device mps
 ```
 
-查看 `outputs/stft_deep_cluster/review_images/`，在 `review.csv` 的 `manual_label` 列填写
-`video`、`non_video` 或 `uncertain`。完成全部审核后导出图传正样本：
+查看 `outputs/stft_dec_background/review_images/`，在 `review.csv` 的 `manual_label` 列填写
+`background`、`signal` 或 `uncertain`。`signal` 表示任何可见信号，不要求必须是图传。
+完成审核后导出 DEC 背景过滤结果：
 
 ```bash
 python scripts/export_clean_stft_h5.py \
   --data-dir ~/Desktop/dataset/DroneRFa_stft_17class_h5 \
-  --work-dir outputs/stft_deep_cluster \
-  --output-dir ~/Desktop/dataset/DroneRFa_stft_video_clean_h5
+  --work-dir outputs/stft_dec_background \
+  --output-dir ~/Desktop/dataset/DroneRFa_stft_dec_filtered_h5
 ```
 
-导出目录按源文件镜像组织；原始 H5 不会被修改。全量样本决定和独立审核指标分别保存在
-`cleaning_manifest.csv` 与 `cleaning_report.json`。
+DEC 仅删除高置信纯背景，`signal`、混合簇和低置信样本全部保留给 BYOL；T0000 原样复制。
+全量决定和独立审核指标分别保存在 `cleaning_manifest.csv` 与 `cleaning_report.json`。
 
-### BYOL 图传片段直接清洗
-
-该流程直接读取全部 `noise_profile=clean` STFT H5。源矩阵保持 `1024×1024`，训练时临时
-池化到 `512×512`；人工审核中 `video_present` 表示含图传（包括图传与 WiFi 混合），
-`no_video` 表示不含图传，`uncertain` 不参与训练和指标：
+第二阶段 BYOL 读取 DEC 输出，只索引 T0001-T10000。源矩阵保持 `1024×1024`，训练时临时
+池化到 `512×512`；人工审核中 `video_present` 表示存在图传，`no_video` 表示 WiFi、跳频、
+脉冲等非图传信号，`uncertain` 只参与自监督预训练：
 
 ```bash
 python scripts/prepare_stft_byol_review.py \
-  --data-dir ~/Desktop/dataset/DroneRFa_stft_17class_h5 \
+  --data-dir ~/Desktop/dataset/DroneRFa_stft_dec_filtered_h5 \
   --work-dir outputs/stft_byol_cleaning \
   --review-count 600
 
 python scripts/train_stft_byol_cleaner.py \
-  --data-dir ~/Desktop/dataset/DroneRFa_stft_17class_h5 \
+  --data-dir ~/Desktop/dataset/DroneRFa_stft_dec_filtered_h5 \
   --work-dir outputs/stft_byol_cleaning \
   --seeds 42 43 44 --batch-size 8 --device mps
 
 python scripts/export_byol_clean_stft_h5.py \
-  --data-dir ~/Desktop/dataset/DroneRFa_stft_17class_h5 \
+  --data-dir ~/Desktop/dataset/DroneRFa_stft_dec_filtered_h5 \
   --work-dir outputs/stft_byol_cleaning \
   --output-dir ~/Desktop/dataset/DroneRFa_stft_byol_video_h5
 ```
@@ -218,8 +217,11 @@ python scripts/export_byol_clean_stft_h5.py \
 指标表示固定数据集内未见 10M 块的清洗效果，不代表对新源文件或新采集会话的泛化能力。
 旧的文件级审核产物不兼容，需使用新的空 `work-dir` 重新生成。
 
-最终决定使用三个模型的平均图传概率，并只在 calibration 审核集上选择阈值；audit 标签不参与
-训练或阈值选择。源 H5 不会被修改。
+最终决定使用三个模型图传概率的中位数。阈值只在 calibration 集上按召回优先规则选择，
+audit 标签不参与训练或阈值选择；正式导出要求加权 audit 召回率不低于 95%，且 T1111、
+T10000 的 audit 图传样本全部保留。最终导出再次原样复制 T0000，源 H5 不会被修改。
+旧 DEC `video/non_video` 复核、直接清洗 BYOL 复核和 BYOL checkpoint 均不兼容，必须使用
+新的空 `work-dir` 重新生成。
 
 ### 训练模型
 

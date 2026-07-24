@@ -1,7 +1,7 @@
-"""Train a three-seed BYOL ensemble for direct STFT video cleaning.
+"""Train a three-seed BYOL ensemble on DCEC background-filtered STFT data.
 
 Usage:
-  python scripts/train_stft_byol_cleaner.py --data-dir <clean-STFT-H5> --work-dir outputs/stft_byol_cleaning --seeds 42 43 44 --batch-size 8 --device cuda:0
+  python scripts/train_stft_byol_cleaner.py --data-dir <DEC-filtered-STFT-H5> --work-dir outputs/stft_byol_cleaning --seeds 42 43 44 --batch-size 8 --device cuda:0
 """
 
 from __future__ import annotations
@@ -24,8 +24,8 @@ from tqdm import tqdm
 
 from src.data.stft_byol_data import (
     BYOL_INPUT_SIZE, ROLES, ByolStftDataset, checkpoint_sha256, choose_threshold,
-    join_reviews, load_block_roles, metrics, sample_block_id, scan_clean_stft_h5,
-    validate_label_counts, write_csv, write_json,
+    join_reviews, load_block_roles, metrics, metrics_by_group, sample_block_id,
+    scan_clean_stft_h5, validate_label_counts, write_csv, write_json,
 )
 from src.models.stft_byol_model import StftByol
 from src.training.stft_byol_training import (
@@ -39,7 +39,7 @@ REPRESENTATION_SAMPLE_LIMIT = 512
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Train a direct BYOL STFT cleaner")
+    parser = argparse.ArgumentParser(description="Train a post-DEC BYOL STFT cleaner")
     parser.add_argument("--data-dir", required=True)
     parser.add_argument("--work-dir", default="outputs/stft_byol_cleaning")
     parser.add_argument("--seeds", type=int, nargs="+", default=(42, 43, 44))
@@ -108,6 +108,7 @@ def _reuse_checkpoint(model, path, *, seed, device):
         "seed": seed,
         "input_size": BYOL_INPUT_SIZE,
         "positive_class": "video_present",
+        "training_stage": "post_dec_video_filter",
     }
     for name, value in expected.items():
         if checkpoint.get(name) != value:
@@ -253,6 +254,13 @@ def _labeled_arrays(rows, probabilities):
     return y_true, values, weights
 
 
+def _review_groups(rows):
+    return [
+        (int(row["original_label"]), int(row["rf_channel"]))
+        for row in rows
+    ]
+
+
 def main() -> None:
     run_started = time.perf_counter()
     args = parse_args()
@@ -373,7 +381,10 @@ def main() -> None:
             calibration, probabilities,
         )
         seed_threshold = choose_threshold(
-            calibration_true, calibration_prob, sample_weight=calibration_weights,
+            calibration_true,
+            calibration_prob,
+            sample_weight=calibration_weights,
+            groups=_review_groups(calibration),
         )
         audit_true, audit_prob, audit_weights = _labeled_arrays(audit, probabilities)
         seed_audit_metrics = metrics(audit_true, audit_prob >= seed_threshold)
@@ -391,7 +402,8 @@ def main() -> None:
         if not checkpoint_reused:
             torch.save({"model_state_dict": model.state_dict(), "seed": seed,
                         "input_size": BYOL_INPUT_SIZE,
-                        "positive_class": "video_present"}, checkpoint)
+                        "positive_class": "video_present",
+                        "training_stage": "post_dec_video_filter"}, checkpoint)
         checkpoint_hash = checkpoint_sha256(checkpoint)
         checkpoints.append({"seed": seed, "path": checkpoint.name, "sha256": checkpoint_hash})
         all_probabilities.append(probabilities)
@@ -409,10 +421,15 @@ def main() -> None:
             time.perf_counter() - seed_started,
         )
 
-    ensemble = np.mean(np.stack(all_probabilities), axis=0)
+    stacked_probabilities = np.stack(all_probabilities)
+    mean_probabilities = np.mean(stacked_probabilities, axis=0)
+    ensemble = np.median(stacked_probabilities, axis=0)
     calibration_true, calibration_prob, calibration_weights = _labeled_arrays(calibration, ensemble)
     threshold = choose_threshold(
-        calibration_true, calibration_prob, sample_weight=calibration_weights,
+        calibration_true,
+        calibration_prob,
+        sample_weight=calibration_weights,
+        groups=_review_groups(calibration),
     )
     calibration_metrics = metrics(calibration_true, calibration_prob >= threshold)
     weighted_calibration = metrics(
@@ -421,6 +438,17 @@ def main() -> None:
     audit_true, audit_prob, audit_weights = _labeled_arrays(audit, ensemble)
     audit_metrics = metrics(audit_true, audit_prob >= threshold)
     weighted_audit = metrics(audit_true, audit_prob >= threshold, audit_weights)
+    audit_group_metrics = metrics_by_group(
+        audit_true,
+        audit_prob >= threshold,
+        _review_groups(audit),
+    )
+    weighted_audit_group_metrics = metrics_by_group(
+        audit_true,
+        audit_prob >= threshold,
+        _review_groups(audit),
+        audit_weights,
+    )
     metric_names = ("precision", "recall", "f1", "no_video_removal_rate")
     seed_metric_summary = {
         name: {
@@ -435,9 +463,11 @@ def main() -> None:
         row = {"sample_index": index, "source_file": sample.source_file,
                "source_row_idx": sample.row_idx, "original_label": sample.label,
                "rf_channel": sample.rf_channel, "source_sample_idx": sample.source_sample_idx,
+               "dec_source_row_idx": sample.dec_source_row_idx,
                "review_role": roles[sample_block_id(sample)], "manual_label": manual.get(index, "")}
         row.update({f"probability_seed_{seed}": float(values[index])
                     for seed, values in zip(args.seeds, all_probabilities)})
+        row["mean_probability"] = float(mean_probabilities[index])
         row["ensemble_probability"] = float(ensemble[index])
         row["decision"] = "video_present" if ensemble[index] >= threshold else "no_video"
         prediction_rows.append(row)
@@ -446,12 +476,16 @@ def main() -> None:
     write_csv(prediction_path, prediction_rows)
     report = {
         "input_size": BYOL_INPUT_SIZE, "seeds": args.seeds, "threshold": threshold,
-        "minimum_calibration_recall": 0.95, "positive_definition": "video_present; video+WiFi is positive",
+        "ensemble_method": "median",
+        "minimum_calibration_recall": 0.98,
+        "positive_definition": "video_present",
         "retention_rate": float(np.mean(ensemble >= threshold)), "checkpoints": checkpoints,
         "ensemble_calibration_metrics": calibration_metrics,
         "ensemble_weighted_calibration_metrics": weighted_calibration,
         "ensemble_audit_metrics": audit_metrics,
         "ensemble_weighted_audit_metrics": weighted_audit,
+        "ensemble_audit_group_metrics": audit_group_metrics,
+        "ensemble_weighted_audit_group_metrics": weighted_audit_group_metrics,
         "seed_reports": seed_reports, "seed_metric_summary": seed_metric_summary,
     }
     write_json(report_path, report)

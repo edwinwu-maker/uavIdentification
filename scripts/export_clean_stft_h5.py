@@ -1,4 +1,4 @@
-"""Use reviewed DCEC clusters to export video-positive clean STFT H5 files.
+"""Use reviewed DCEC clusters to remove pure-background STFT rows.
 
 Usage:
   python scripts/export_clean_stft_h5.py --data-dir ... --work-dir outputs/stft_deep_cluster --output-dir ...
@@ -17,9 +17,9 @@ sys.path.insert(0, str(REPO_ROOT))
 import numpy as np
 
 from src.data.stft_cleaning_export import (
-    calibrate_video_threshold,
+    calibrate_background_threshold,
     checkpoint_sha256,
-    evaluate_audit_reviews,
+    evaluate_background_audit,
     export_clean_h5_files,
     map_cluster_semantics,
     read_csv,
@@ -32,7 +32,9 @@ from src.utils.logger import logger
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Export reviewed video-positive STFT rows to new H5 files")
+    parser = argparse.ArgumentParser(
+        description="Remove reviewed pure-background rows and retain all other signals"
+    )
     parser.add_argument("--data-dir", required=True, help="Original clean STFT H5 directory")
     parser.add_argument("--work-dir", default="outputs/stft_deep_cluster")
     parser.add_argument("--review-csv", default=None, help="Completed review CSV (default: <work-dir>/review.csv)")
@@ -91,13 +93,25 @@ def main() -> None:
             raise ValueError(f"Review lookup does not match assignments for sample_index={sample_index}")
 
     semantics, cluster_stats = map_cluster_semantics(joined_reviews, cluster_count)
-    video_clusters = {cluster_id for cluster_id, value in semantics.items() if value == "video"}
-    threshold, calibration_metrics = calibrate_video_threshold(
-        joined_reviews, assignments, video_clusters
+    background_clusters = {
+        cluster_id for cluster_id, value in semantics.items() if value == "background"
+    }
+    threshold, calibration_metrics = calibrate_background_threshold(
+        joined_reviews, assignments, background_clusters
     )
-    audit_metrics = evaluate_audit_reviews(
-        joined_reviews, assignments, video_clusters, threshold
+    audit_metrics = evaluate_background_audit(
+        joined_reviews, assignments, background_clusters, threshold
     )
+    if audit_metrics["signal_retention"] < 1.0:
+        raise ValueError(
+            "DCEC audit rejected: reviewed signal retention must be 1.0, "
+            f"got {audit_metrics['signal_retention']:.4f}"
+        )
+    if audit_metrics["background_recall"] < 0.90:
+        raise ValueError(
+            "DCEC audit rejected: background recall must be at least 0.90, "
+            f"got {audit_metrics['background_recall']:.4f}"
+        )
     manifest, decision_counts = export_clean_h5_files(
         data_dir=args.data_dir,
         output_dir=args.output_dir,
@@ -111,14 +125,18 @@ def main() -> None:
     report = {
         "cluster_semantics": {str(key): value for key, value in semantics.items()},
         "cluster_review_stats": {str(key): value for key, value in cluster_stats.items()},
-        "video_threshold": threshold,
+        "background_threshold": threshold,
         "calibration_metrics": calibration_metrics,
         "audit_metrics": audit_metrics,
         "decision_counts": decision_counts,
         "decision_rates": {
             key: value / total_decisions for key, value in decision_counts.items()
         },
-        "retention_rate": decision_counts.get("video", 0) / total_decisions,
+        "retention_rate": (
+            decision_counts.get("signal_retained", 0)
+            + decision_counts.get("uncertain_retained", 0)
+            + decision_counts.get("t0000_passthrough", 0)
+        ) / total_decisions,
         "output_dir": str(Path(args.output_dir).expanduser().resolve()),
     }
     write_json(work_dir / "cleaning_report.json", report)

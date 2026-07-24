@@ -1,7 +1,7 @@
-"""Prepare blinded reviews for direct BYOL STFT cleaning.
+"""Prepare blinded reviews for post-DEC BYOL STFT cleaning.
 
 Usage:
-  python scripts/prepare_stft_byol_review.py --data-dir <clean-STFT-H5> --work-dir outputs/stft_byol_cleaning --review-count 600
+  python scripts/prepare_stft_byol_review.py --data-dir <DEC-filtered-STFT-H5> --work-dir outputs/stft_byol_cleaning --review-count 600
 """
 
 from __future__ import annotations
@@ -34,7 +34,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--work-dir", default="outputs/stft_byol_cleaning")
     parser.add_argument("--review-count", type=int, default=600)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--eval-background-count", type=int, default=10)
     return parser.parse_args()
 
 
@@ -103,6 +102,7 @@ def _render_artifacts(
                 "sample_index": sample_index, "source_file": sample.source_file,
                 "source_row_idx": sample.row_idx, "original_label": sample.label,
                 "rf_channel": sample.rf_channel, "source_sample_idx": sample.source_sample_idx,
+                "dec_source_row_idx": sample.dec_source_row_idx,
                 "sampling_weight": selection["sampling_weight"],
                 "sampling_stratum": selection["sampling_stratum"],
                 "sampling_population_count": selection["sampling_population_count"],
@@ -130,7 +130,7 @@ def main() -> None:
 
     block_roles = split_blocks(samples, targets, args.seed)
     selections = select_reviews(
-        samples, block_roles, targets, args.seed, args.eval_background_count,
+        samples, block_roles, targets, args.seed,
     )
     _render_artifacts(work_dir, samples, block_roles, selections)
     logger.info("Prepared %d reviews in %s: %s", len(selections), work_dir, targets)

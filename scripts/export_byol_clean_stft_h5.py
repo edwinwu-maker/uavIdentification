@@ -1,7 +1,7 @@
 """Export rows retained by the calibrated three-seed BYOL ensemble.
 
 Usage:
-  python scripts/export_byol_clean_stft_h5.py --data-dir <clean-STFT-H5> --work-dir outputs/stft_byol_cleaning --output-dir <cleaned-H5-dir>
+  python scripts/export_byol_clean_stft_h5.py --data-dir <DEC-filtered-STFT-H5> --work-dir outputs/stft_byol_cleaning --output-dir <cleaned-H5-dir>
 """
 
 from __future__ import annotations
@@ -38,6 +38,27 @@ def main() -> None:
             raise FileNotFoundError(f"Required BYOL artifact does not exist: {path}")
     with report_path.open(encoding="utf-8") as file_obj:
         report = json.load(file_obj)
+    weighted_audit = report.get("ensemble_weighted_audit_metrics", {})
+    if float(weighted_audit.get("recall", 0.0)) < 0.95:
+        raise ValueError(
+            "BYOL audit rejected: weighted video recall must be at least 0.95"
+        )
+    group_metrics = report.get("ensemble_audit_group_metrics", {})
+    for original_label in (15, 16):
+        relevant = [
+            values for key, values in group_metrics.items()
+            if key.startswith(f"original_label={original_label}|")
+            and int(values.get("actual_positive", 0)) > 0
+        ]
+        if not relevant:
+            raise ValueError(
+                f"BYOL audit rejected: original_label={original_label} has no reviewed positives"
+            )
+        if any(float(values["recall"]) < 1.0 for values in relevant):
+            raise ValueError(
+                f"BYOL audit rejected: original_label={original_label} "
+                "must retain every reviewed video sample"
+            )
     hashes = []
     for checkpoint in report["checkpoints"]:
         path = work_dir / checkpoint["path"]

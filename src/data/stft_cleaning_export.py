@@ -1,4 +1,4 @@
-"""Map reviewed DCEC clusters to video decisions and export cleaned H5 files."""
+"""Map reviewed DCEC clusters to background decisions and export filtered H5 files."""
 
 from __future__ import annotations
 
@@ -15,15 +15,11 @@ import numpy as np
 from sklearn.metrics import (
     balanced_accuracy_score,
     confusion_matrix,
-    f1_score,
-    fbeta_score,
     precision_score,
     recall_score,
 )
 
-from src.data.stft_clustering import REQUIRED_SAMPLE_DATASETS
-
-MANUAL_LABELS = frozenset(("video", "non_video", "uncertain"))
+MANUAL_LABELS = frozenset(("background", "signal", "uncertain"))
 REVIEW_ROLES = frozenset(("mapping", "calibration", "audit"))
 
 
@@ -55,7 +51,7 @@ def validate_and_join_reviews(
             raise ValueError(f"Unknown review_role for {review_id}: {role}")
         if label not in MANUAL_LABELS:
             raise ValueError(
-                f"manual_label for {review_id} must be video, non_video, or uncertain"
+                f"manual_label for {review_id} must be background, signal, or uncertain"
             )
         lookup_row = lookup[review_id]
         if lookup_row.get("review_role") != role:
@@ -77,77 +73,86 @@ def map_cluster_semantics(
     stats: dict[int, dict[str, float | int | str | None]] = {}
     for cluster_id in range(cluster_count):
         counts = Counter(by_cluster.get(cluster_id, []))
-        definite_count = counts["video"] + counts["non_video"]
-        video_fraction = counts["video"] / definite_count if definite_count else None
-        if definite_count >= 5 and video_fraction is not None and video_fraction >= 0.8:
-            semantic = "video"
-        elif definite_count >= 5 and video_fraction is not None and video_fraction <= 0.2:
-            semantic = "non_video"
+        definite_count = counts["background"] + counts["signal"]
+        background_fraction = counts["background"] / definite_count if definite_count else None
+        if definite_count >= 5 and background_fraction is not None and background_fraction >= 0.8:
+            semantic = "background"
+        elif definite_count >= 5 and background_fraction is not None and background_fraction <= 0.2:
+            semantic = "signal"
         else:
             semantic = "mixed"
         semantics[cluster_id] = semantic
         stats[cluster_id] = {
-            "video": counts["video"],
-            "non_video": counts["non_video"],
+            "background": counts["background"],
+            "signal": counts["signal"],
             "uncertain": counts["uncertain"],
             "definite_count": definite_count,
-            "video_fraction": video_fraction,
+            "background_fraction": background_fraction,
             "semantic": semantic,
         }
-    if "video" not in semantics.values():
-        raise ValueError("No cluster satisfies the reviewed video-cluster rule")
+    if "background" not in semantics.values():
+        raise ValueError("No cluster satisfies the reviewed background-cluster rule")
     return semantics, stats
 
 
-def _video_score(assignment: dict[str, str], video_clusters: set[int]) -> float:
-    return sum(float(assignment[f"q_{cluster_id}"]) for cluster_id in video_clusters)
+def _background_score(assignment: dict[str, str], background_clusters: set[int]) -> float:
+    return sum(float(assignment[f"q_{cluster_id}"]) for cluster_id in background_clusters)
 
 
-def _predict_video(
+def _predict_background(
     assignment: dict[str, str],
-    video_clusters: set[int],
+    background_clusters: set[int],
     threshold: float,
 ) -> bool:
     return (
-        int(assignment["cluster_id"]) in video_clusters
-        and _video_score(assignment, video_clusters) >= threshold
+        int(assignment["cluster_id"]) in background_clusters
+        and _background_score(assignment, background_clusters) >= threshold
     )
 
 
-def calibrate_video_threshold(
+def calibrate_background_threshold(
     joined_reviews: list[dict[str, str]],
     assignments: dict[int, dict[str, str]],
-    video_clusters: set[int],
+    background_clusters: set[int],
 ) -> tuple[float, dict[str, float | int]]:
     rows = [
         row for row in joined_reviews
         if row["review_role"] == "calibration" and row["manual_label"] != "uncertain"
     ]
-    if not rows or not any(row["manual_label"] == "video" for row in rows):
-        raise ValueError("Calibration reviews must contain at least one definite video sample")
-    y_true = np.array([row["manual_label"] == "video" for row in rows], dtype=np.int64)
-    best: tuple[float, float, float] | None = None
+    labels = {row["manual_label"] for row in rows}
+    if labels != {"background", "signal"}:
+        raise ValueError("Calibration reviews must contain both background and signal samples")
+    y_true = np.array([row["manual_label"] == "background" for row in rows], dtype=np.int64)
+    best: tuple[float, float] | None = None
     best_metrics: dict[str, float | int] | None = None
-    for threshold in np.linspace(0.50, 0.99, 50):
+    for threshold in np.linspace(0.50, 1.00, 51):
         y_pred = np.array([
-            _predict_video(assignments[int(row["sample_index"])], video_clusters, float(threshold))
+            _predict_background(
+                assignments[int(row["sample_index"])], background_clusters, float(threshold)
+            )
             for row in rows
         ], dtype=np.int64)
-        f05 = float(fbeta_score(y_true, y_pred, beta=0.5, zero_division=0))
+        false_background = int(np.sum((y_true == 0) & (y_pred == 1)))
+        true_background = int(np.sum((y_true == 1) & (y_pred == 1)))
+        if false_background or not true_background:
+            continue
+        background_recall = float(recall_score(y_true, y_pred, zero_division=0))
         precision = float(precision_score(y_true, y_pred, zero_division=0))
-        key = (f05, precision, float(threshold))
+        key = (background_recall, float(threshold))
         if best is None or key > best:
             best = key
             best_metrics = {
                 "sample_count": len(rows),
                 "threshold": float(threshold),
-                "precision": precision,
-                "recall": float(recall_score(y_true, y_pred, zero_division=0)),
-                "f1": float(f1_score(y_true, y_pred, zero_division=0)),
-                "f0_5": f05,
+                "background_precision": precision,
+                "background_recall": background_recall,
+                "signal_retention": 1.0,
             }
-    assert best is not None and best_metrics is not None
-    return best[2], best_metrics
+    if best is None or best_metrics is None:
+        raise ValueError(
+            "No useful background threshold avoids removing reviewed signal samples"
+        )
+    return best[1], best_metrics
 
 
 def _wilson_interval(successes: int, total: int, z: float = 1.959963984540054) -> list[float] | None:
@@ -162,24 +167,31 @@ def _wilson_interval(successes: int, total: int, z: float = 1.959963984540054) -
     return [max(0.0, center - margin), min(1.0, center + margin)]
 
 
-def evaluate_audit_reviews(
+def evaluate_background_audit(
     joined_reviews: list[dict[str, str]],
     assignments: dict[int, dict[str, str]],
-    video_clusters: set[int],
+    background_clusters: set[int],
     threshold: float,
 ) -> dict[str, object]:
     all_audit = [row for row in joined_reviews if row["review_role"] == "audit"]
     rows = [row for row in all_audit if row["manual_label"] != "uncertain"]
     if not rows:
         raise ValueError("Audit reviews contain no definite labels")
-    y_true = np.array([row["manual_label"] == "video" for row in rows], dtype=np.int64)
+    labels = {row["manual_label"] for row in rows}
+    if labels != {"background", "signal"}:
+        raise ValueError("Audit reviews must contain both background and signal samples")
+    y_true = np.array([row["manual_label"] == "background" for row in rows], dtype=np.int64)
     y_pred = np.array([
-        _predict_video(assignments[int(row["sample_index"])], video_clusters, threshold)
+        _predict_background(
+            assignments[int(row["sample_index"])], background_clusters, threshold
+        )
         for row in rows
     ], dtype=np.int64)
     true_positive = int(np.sum((y_true == 1) & (y_pred == 1)))
     predicted_positive = int(np.sum(y_pred == 1))
-    actual_positive = int(np.sum(y_true == 1))
+    actual_background = int(np.sum(y_true == 1))
+    actual_signal = int(np.sum(y_true == 0))
+    retained_signal = int(np.sum((y_true == 0) & (y_pred == 0)))
     balanced = (
         float(balanced_accuracy_score(y_true, y_pred))
         if len(np.unique(y_true)) == 2 else None
@@ -188,12 +200,16 @@ def evaluate_audit_reviews(
         "review_count": len(all_audit),
         "definite_count": len(rows),
         "manual_uncertain_count": len(all_audit) - len(rows),
-        "precision": float(precision_score(y_true, y_pred, zero_division=0)),
-        "precision_wilson_95": _wilson_interval(true_positive, predicted_positive),
-        "recall": float(recall_score(y_true, y_pred, zero_division=0)),
-        "recall_wilson_95": _wilson_interval(true_positive, actual_positive),
-        "f1": float(f1_score(y_true, y_pred, zero_division=0)),
-        "f0_5": float(fbeta_score(y_true, y_pred, beta=0.5, zero_division=0)),
+        "background_precision": float(precision_score(y_true, y_pred, zero_division=0)),
+        "background_precision_wilson_95": _wilson_interval(
+            true_positive, predicted_positive
+        ),
+        "background_recall": float(recall_score(y_true, y_pred, zero_division=0)),
+        "background_recall_wilson_95": _wilson_interval(
+            true_positive, actual_background
+        ),
+        "signal_retention": retained_signal / actual_signal,
+        "signal_retention_wilson_95": _wilson_interval(retained_signal, actual_signal),
         "balanced_accuracy": balanced,
         "confusion_matrix": confusion_matrix(y_true, y_pred, labels=(0, 1)).tolist(),
     }
@@ -243,66 +259,104 @@ def export_clean_h5_files(
     destination_root = Path(output_dir).expanduser().resolve()
     if source_root == destination_root:
         raise ValueError("output-dir must differ from data-dir")
+    if not math.isfinite(threshold) or not 0.0 <= threshold <= 1.0:
+        raise ValueError("threshold must be finite and within [0, 1]")
 
-    by_file: dict[str, list[dict[str, str]]] = defaultdict(list)
-    video_clusters = {cluster_id for cluster_id, value in semantics.items() if value == "video"}
+    source_paths = sorted(source_root.glob("*.h5"))
+    if not source_paths:
+        raise ValueError(f"No H5 files found in {source_root}")
+    background_clusters = {
+        cluster_id for cluster_id, value in semantics.items() if value == "background"
+    }
+    if not background_clusters:
+        raise ValueError("Cluster semantics contain no background cluster")
+    assignment_fields = list(assignment_rows[0]) if assignment_rows else []
+    by_file: dict[str, list[dict[str, object]]] = defaultdict(list)
     manifest: list[dict[str, object]] = []
     decisions = Counter()
     for row in assignment_rows:
-        score = _video_score(row, video_clusters)
+        score = _background_score(row, background_clusters)
         cluster_id = int(row["cluster_id"])
         if row["source_file"] != Path(row["source_file"]).name:
             raise ValueError(f"source_file must be a basename: {row['source_file']}")
-        if cluster_id in video_clusters and score >= threshold:
-            decision = "video"
-        elif semantics[cluster_id] == "non_video" and float(row["cluster_confidence"]) >= threshold:
-            decision = "non_video"
+        if _predict_background(row, background_clusters, threshold):
+            decision = "background_removed"
+        elif semantics[cluster_id] == "signal":
+            decision = "signal_retained"
         else:
-            decision = "uncertain"
-        enriched = {**row, "video_score": score, "decision": decision}
+            decision = "uncertain_retained"
+        enriched = {**row, "background_score": score, "decision": decision}
         by_file[row["source_file"]].append(enriched)
         decisions[decision] += 1
 
-    targets = [destination_root / filename for filename in sorted(by_file)]
+    source_names = {path.name for path in source_paths}
+    unknown_files = sorted(set(by_file) - source_names)
+    if unknown_files:
+        raise FileNotFoundError(
+            f"Source H5 listed in assignments is missing: {source_root / unknown_files[0]}"
+        )
+    targets = [destination_root / path.name for path in source_paths]
     existing = [path for path in targets if path.exists()]
     if existing:
         raise FileExistsError(f"Refusing to overwrite existing cleaned H5: {existing[0]}")
 
     # 写入任何输出前完成全量源行校验，避免后续文件错误留下部分导出结果。
-    for filename, rows in by_file.items():
-        source_path = source_root / filename
-        if not source_path.is_file():
-            raise FileNotFoundError(f"Source H5 listed in assignments is missing: {source_path}")
-        source_rows = [int(row["source_row_idx"]) for row in rows]
-        if len(source_rows) != len(set(source_rows)):
-            raise ValueError(f"assignments.csv contains duplicate source rows for {filename}")
+    for source_path in source_paths:
+        filename = source_path.name
+        rows = by_file.get(filename, [])
         with h5py.File(source_path, "r") as source:
             source_count = source["stft"].shape[0]
+            labels = {int(value) for value in source["labels"][:]}
+            if len(labels) != 1:
+                raise ValueError(f"Each H5 file must contain exactly one label: {source_path}")
+            label = next(iter(labels))
+            if label == 0:
+                if rows:
+                    raise ValueError(f"T0000 must not have DCEC assignments: {filename}")
+                for source_row in range(source_count):
+                    passthrough = {field: "" for field in assignment_fields}
+                    passthrough.update({
+                        "sample_index": "",
+                        "source_file": filename,
+                        "source_row_idx": source_row,
+                        "original_label": 0,
+                        "rf_channel": int(source["rf_channel"][source_row]),
+                        "source_sample_idx": int(source["source_sample_idx"][source_row]),
+                        "cluster_id": "",
+                        "cluster_confidence": "",
+                        "background_score": "",
+                        "decision": "t0000_passthrough",
+                    })
+                    by_file[filename].append(passthrough)
+                    decisions["t0000_passthrough"] += 1
+                continue
+            source_rows = [int(row["source_row_idx"]) for row in rows]
+            if len(source_rows) != len(set(source_rows)):
+                raise ValueError(f"assignments.csv contains duplicate source rows for {filename}")
+            if set(source_rows) != set(range(source_count)):
+                raise ValueError(f"Assignments must cover every UAV row in {filename}")
             for row, source_row in zip(rows, source_rows):
-                if not 0 <= source_row < source_count:
-                    raise ValueError(f"Invalid source_row_idx for {filename}: {source_row}")
                 if int(source["labels"][source_row]) != int(row["original_label"]):
                     raise ValueError(
                         f"Assignment label does not match source H5: {filename} row {source_row}"
                     )
     destination_root.mkdir(parents=True, exist_ok=True)
 
-    for filename in sorted(by_file):
+    for filename in sorted(source_names):
         rows = sorted(by_file[filename], key=lambda row: int(row["source_row_idx"]))
         source_path = source_root / filename
-        if not source_path.is_file():
-            raise FileNotFoundError(f"Source H5 listed in assignments is missing: {source_path}")
-        selected = [row for row in rows if row["decision"] == "video"]
+        selected = [row for row in rows if row["decision"] != "background_removed"]
         source_rows = [int(row["source_row_idx"]) for row in selected]
         output_path = destination_root / filename
         temporary_path = output_path.with_name(f".{output_path.name}.tmp")
         try:
             with h5py.File(source_path, "r") as source, h5py.File(temporary_path, "w") as output:
+                count = source["stft"].shape[0]
                 for key, value in source.attrs.items():
                     output.attrs[key] = value
-                output.attrs["cleaning_method"] = "DCEC"
+                output.attrs["cleaning_method"] = "DCEC-background-filter"
                 output.attrs["cleaning_selected_k"] = len(semantics)
-                output.attrs["cleaning_video_threshold"] = threshold
+                output.attrs["cleaning_background_threshold"] = threshold
                 output.attrs["cleaning_checkpoint_sha256"] = checkpoint_hash
                 output.attrs["cleaning_source_file"] = filename
                 output.attrs["cleaning_cluster_semantics"] = json.dumps(semantics, sort_keys=True)
@@ -310,21 +364,33 @@ def export_clean_h5_files(
                 output.attrs["cleaning_clip_min"] = -5.0
                 output.attrs["cleaning_clip_max"] = 5.0
                 output.attrs["cleaning_scale_divisor"] = 5.0
-                for name in REQUIRED_SAMPLE_DATASETS:
-                    _copy_row_dataset(source[name], output, name, source_rows)
-                output.create_dataset("source_row_idx", data=np.asarray(source_rows, dtype=np.int64))
-                output.create_dataset(
-                    "cluster_id",
-                    data=np.asarray([int(row["cluster_id"]) for row in selected], dtype=np.int32),
-                )
-                output.create_dataset(
-                    "cluster_confidence",
-                    data=np.asarray([float(row["cluster_confidence"]) for row in selected], dtype=np.float32),
-                )
-                output.create_dataset(
-                    "video_score",
-                    data=np.asarray([float(row["video_score"]) for row in selected], dtype=np.float32),
-                )
+                for name, dataset in source.items():
+                    if dataset.shape[:1] == (count,):
+                        _copy_row_dataset(dataset, output, name, source_rows)
+                    else:
+                        source.copy(name, output)
+                if int(source["labels"][0]) != 0:
+                    output.create_dataset(
+                        "dec_source_row_idx", data=np.asarray(source_rows, dtype=np.int64)
+                    )
+                    output.create_dataset(
+                        "dec_cluster_id",
+                        data=np.asarray([int(row["cluster_id"]) for row in selected], dtype=np.int32),
+                    )
+                    output.create_dataset(
+                        "dec_cluster_confidence",
+                        data=np.asarray(
+                            [float(row["cluster_confidence"]) for row in selected],
+                            dtype=np.float32,
+                        ),
+                    )
+                    output.create_dataset(
+                        "dec_background_score",
+                        data=np.asarray(
+                            [float(row["background_score"]) for row in selected],
+                            dtype=np.float32,
+                        ),
+                    )
             os.replace(temporary_path, output_path)
         finally:
             if temporary_path.exists():
@@ -335,7 +401,9 @@ def export_clean_h5_files(
             source_row = int(row["source_row_idx"])
             manifest.append({
                 **row,
-                "output_file": filename if row["decision"] == "video" else "",
+                "output_file": (
+                    filename if row["decision"] != "background_removed" else ""
+                ),
                 "output_row_idx": output_index_by_source.get(source_row, ""),
             })
     return manifest, dict(decisions)
