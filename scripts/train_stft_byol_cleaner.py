@@ -25,7 +25,8 @@ from tqdm import tqdm
 from src.data.stft_byol_data import (
     BYOL_INPUT_SIZE, ROLES, ByolStftDataset, checkpoint_sha256, choose_threshold,
     join_reviews, load_block_roles, metrics, metrics_by_group, sample_block_id,
-    scan_clean_stft_h5, validate_label_counts, write_csv, write_json,
+    scan_clean_stft_h5, summarize_split_coverage, validate_label_counts,
+    write_csv, write_json,
 )
 from src.models.stft_byol_model import StftByol
 from src.training.stft_byol_training import (
@@ -76,6 +77,7 @@ def _log_dataset_summary(samples, roles, reviews):
     source_files = {sample.source_file for sample in samples}
     block_counts = Counter(roles.values())
     sample_counts = Counter(roles[sample_block_id(sample)] for sample in samples)
+    coverage = summarize_split_coverage(samples, roles)
     logger.info(
         "Dataset | source_files=%d | blocks=%d | samples=%d",
         len(source_files), len(roles), len(samples),
@@ -98,6 +100,14 @@ def _log_dataset_summary(samples, roles, reviews):
             labels["no_video"],
             labels["uncertain"],
         )
+    sparse_count = int(coverage["train_only_sparse_source_file_count"])
+    if sparse_count:
+        logger.warning(
+            "Split coverage | train_only_sparse_files=%d; "
+            "calibration/audit metrics do not cover these source files",
+            sparse_count,
+        )
+    return coverage
 
 
 def _reuse_checkpoint(model, path, *, seed, device):
@@ -295,7 +305,7 @@ def main() -> None:
         if roles[block_id] != row["review_role"]:
             raise ValueError(f"Split role mismatch for {row['review_id']}")
     validate_label_counts(reviews)
-    _log_dataset_summary(samples, roles, reviews)
+    split_coverage = _log_dataset_summary(samples, roles, reviews)
     train_pool = [
         index for index, sample in enumerate(samples)
         if roles[sample_block_id(sample)] == "train"
@@ -486,6 +496,7 @@ def main() -> None:
         "ensemble_weighted_audit_metrics": weighted_audit,
         "ensemble_audit_group_metrics": audit_group_metrics,
         "ensemble_weighted_audit_group_metrics": weighted_audit_group_metrics,
+        "split_coverage": split_coverage,
         "seed_reports": seed_reports, "seed_metric_summary": seed_metric_summary,
     }
     write_json(report_path, report)

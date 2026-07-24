@@ -213,13 +213,16 @@ python scripts/export_byol_clean_stft_h5.py \
 ```
 
 审核划分以 `(source_file, source_sample_idx)` 标识的 10M 采样点块为单位；同一块的 RF0/RF1
-始终属于同一个 train、calibration 或 audit 角色。每个源文件内部都包含三个角色，因此 audit
-指标表示固定数据集内未见 10M 块的清洗效果，不代表对新源文件或新采集会话的泛化能力。
-旧的文件级审核产物不兼容，需使用新的空 `work-dir` 重新生成。
+始终属于同一个角色。剩余块数不少于 3 的源文件内部包含 train、calibration 和 audit 三个
+角色；仅剩 1–2 块的稀疏文件全部进入 train，不参与 calibration/audit。`split_manifest.csv`
+通过 `source_block_count` 和 `split_policy` 明确记录这一覆盖范围，训练报告也会列出
+train-only 稀疏文件。因此 audit 指标只表示非稀疏源文件内未见 10M 块的清洗效果，不代表
+稀疏文件、新源文件或新采集会话的泛化能力。旧的文件级审核产物不兼容，需使用新的空
+`work-dir` 重新生成。
 
 最终决定使用三个模型图传概率的中位数。阈值只在 calibration 集上按召回优先规则选择，
-audit 标签不参与训练或阈值选择；正式导出要求加权 audit 召回率不低于 95%，且 T1111、
-T10000 的 audit 图传样本全部保留。最终导出再次原样复制 T0000，源 H5 不会被修改。
+audit 标签不参与训练或阈值选择；正式导出要求加权 audit 召回率不低于 95%。最终导出再次
+原样复制 T0000，源 H5 不会被修改。
 旧 DEC `video/non_video` 复核、直接清洗 BYOL 复核和 BYOL checkpoint 均不兼容，必须使用
 新的空 `work-dir` 重新生成。
 

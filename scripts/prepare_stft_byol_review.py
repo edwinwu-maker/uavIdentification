@@ -21,8 +21,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from src.data.stft_byol_data import (
-    group_samples_by_block, review_counts, sample_block_id, scan_clean_stft_h5,
-    select_reviews, split_blocks, write_csv,
+    FULL_SPLIT_POLICY, ROLES, SPARSE_SPLIT_POLICY, group_samples_by_block,
+    review_counts, sample_block_id, scan_clean_stft_h5, select_reviews,
+    split_blocks, summarize_split_coverage, write_csv,
 )
 from src.utils.cli import log_current_command
 from src.utils.logger import logger
@@ -51,6 +52,7 @@ def _render_artifacts(
     image_dir.mkdir(parents=True, exist_ok=True)
 
     groups = group_samples_by_block(samples)
+    source_block_counts = Counter(source_file for source_file, _source_sample_idx in groups)
     selected_counts = Counter(
         sample_block_id(samples[int(row["sample_index"])]) for row in selections
     )
@@ -63,6 +65,12 @@ def _render_artifacts(
             "source_file": block_id[0],
             "source_sample_idx": block_id[1],
             "original_label": next(iter(labels)),
+            "source_block_count": source_block_counts[block_id[0]],
+            "split_policy": (
+                SPARSE_SPLIT_POLICY
+                if source_block_counts[block_id[0]] < len(ROLES)
+                else FULL_SPLIT_POLICY
+            ),
             "review_role": block_roles[block_id],
             "input_row_count": len(member_indices),
             "review_row_count": selected_counts[block_id],
@@ -129,6 +137,14 @@ def main() -> None:
             raise FileExistsError(f"Refusing to overwrite {work_dir / filename}")
 
     block_roles = split_blocks(samples, targets, args.seed)
+    coverage = summarize_split_coverage(samples, block_roles)
+    sparse_count = int(coverage["train_only_sparse_source_file_count"])
+    if sparse_count:
+        logger.warning(
+            "%d sparse source H5 files are assigned to train only; "
+            "calibration/audit do not cover them. Details will be recorded in split_manifest.csv",
+            sparse_count,
+        )
     selections = select_reviews(
         samples, block_roles, targets, args.seed,
     )

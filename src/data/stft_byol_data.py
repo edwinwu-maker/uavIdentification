@@ -23,6 +23,8 @@ ROLES = ("train", "calibration", "audit")
 MANUAL_LABELS = frozenset(("video_present", "no_video", "uncertain"))
 BLOCK_SAMPLE_LENGTH = 10_000_000
 BYOL_INPUT_SIZE = 512
+FULL_SPLIT_POLICY = "full_three_role"
+SPARSE_SPLIT_POLICY = "train_only_sparse"
 BlockId = tuple[str, int]
 
 
@@ -152,10 +154,10 @@ def split_blocks(
     for source_file in sorted(blocks_by_file):
         block_ids = sorted(blocks_by_file[source_file], key=lambda value: value[1])
         if len(block_ids) < len(ROLES):
-            raise ValueError(
-                f"Each source H5 file requires at least three 10M blocks: "
-                f"{source_file} has {len(block_ids)}"
-            )
+            # 稀疏文件无法形成三路互斥划分，全部用于训练并从评估中排除。
+            for block_id in block_ids:
+                result[block_id] = "train"
+            continue
 
         # 文件名参与稳定种子，避免不同文件获得完全相同的块排列。
         digest = hashlib.sha256(f"{seed}:{source_file}".encode("utf-8")).digest()
@@ -180,6 +182,45 @@ def split_blocks(
                 result[block_id] = role
             offset += assigned[role]
     return result
+
+
+def summarize_split_coverage(
+    samples: list[ByolSample],
+    block_roles: dict[BlockId, str],
+) -> dict[str, object]:
+    """汇总稀疏文件覆盖范围，供训练日志和清洗报告审计。"""
+
+    groups = group_samples_by_block(samples)
+    blocks_by_file = Counter(source_file for source_file, _source_sample_idx in groups)
+    samples_by_file = Counter(sample.source_file for sample in samples)
+    roles_by_file: dict[str, set[str]] = defaultdict(set)
+    for block_id in groups:
+        roles_by_file[block_id[0]].add(block_roles[block_id])
+    labels_by_file: dict[str, int] = {}
+    for sample in samples:
+        previous = labels_by_file.setdefault(sample.source_file, sample.label)
+        if previous != sample.label:
+            raise ValueError(f"Source file contains multiple labels: {sample.source_file}")
+
+    sparse_files = []
+    for source_file, block_count in sorted(blocks_by_file.items()):
+        if block_count < len(ROLES):
+            if roles_by_file[source_file] != {"train"}:
+                raise ValueError(
+                    f"Sparse source file must be train-only: {source_file}"
+                )
+            sparse_files.append({
+                "source_file": source_file,
+                "original_label": labels_by_file[source_file],
+                "block_count": block_count,
+                "sample_count": samples_by_file[source_file],
+            })
+
+    return {
+        "full_three_role_source_file_count": len(blocks_by_file) - len(sparse_files),
+        "train_only_sparse_source_file_count": len(sparse_files),
+        "train_only_sparse_source_files": sparse_files,
+    }
 
 
 def select_reviews(
@@ -297,6 +338,7 @@ def load_block_roles(
         "source_file", "source_sample_idx", "original_label", "review_role",
         "input_row_count", "review_row_count",
     }
+    policy_fields = {"source_block_count", "split_policy"}
     if not rows:
         raise ValueError("split_manifest.csv is empty")
     if not required.issubset(rows[0]):
@@ -306,8 +348,17 @@ def load_block_roles(
                 "rebuild reviews with 10M block-level splitting"
             )
         raise ValueError(f"split_manifest.csv must contain columns: {sorted(required)}")
+    present_policy_fields = policy_fields.intersection(rows[0])
+    if present_policy_fields and present_policy_fields != policy_fields:
+        raise ValueError(
+            "split_manifest.csv must contain both source_block_count and split_policy"
+        )
 
     groups = group_samples_by_block(samples)
+    block_counts_by_file = Counter(
+        source_file for source_file, _source_sample_idx in groups
+    )
+    has_policy_fields = policy_fields.issubset(rows[0])
     roles: dict[BlockId, str] = {}
     for row in rows:
         block_id = (row["source_file"], int(row["source_sample_idx"]))
@@ -328,6 +379,17 @@ def load_block_roles(
             raise ValueError(f"Input row count changed for block_id {block_id}")
         if not 0 <= review_count <= input_count:
             raise ValueError(f"Invalid review row count for block_id {block_id}")
+        block_count = block_counts_by_file[block_id[0]]
+        expected_policy = (
+            SPARSE_SPLIT_POLICY
+            if block_count < len(ROLES)
+            else FULL_SPLIT_POLICY
+        )
+        if has_policy_fields:
+            if int(row["source_block_count"]) != block_count:
+                raise ValueError(f"Source block count changed for block_id {block_id}")
+            if row["split_policy"] != expected_policy:
+                raise ValueError(f"Invalid split policy for block_id {block_id}")
         roles[block_id] = role
 
     missing = sorted(set(groups) - set(roles))
@@ -336,16 +398,25 @@ def load_block_roles(
     roles_by_file: dict[str, set[str]] = defaultdict(set)
     for (source_file, _source_sample_idx), role in roles.items():
         roles_by_file[source_file].add(role)
-    incomplete = {
-        source_file: sorted(set(ROLES) - file_roles)
-        for source_file, file_roles in roles_by_file.items()
-        if file_roles != set(ROLES)
-    }
-    if incomplete:
-        source_file = sorted(incomplete)[0]
-        raise ValueError(
-            f"Source file {source_file} is missing block roles {incomplete[source_file]}"
-        )
+    for source_file, file_roles in sorted(roles_by_file.items()):
+        block_count = block_counts_by_file[source_file]
+        if block_count < len(ROLES):
+            # 旧 manifest 没有显式稀疏策略，不能静默放宽其完整性约束。
+            if not has_policy_fields:
+                raise ValueError(
+                    "Sparse source files require a sparse-aware split manifest; "
+                    "rebuild reviews"
+                )
+            if file_roles != {"train"}:
+                raise ValueError(
+                    f"Sparse source file must be train-only: {source_file}"
+                )
+            continue
+        if file_roles != set(ROLES):
+            missing_roles = sorted(set(ROLES) - file_roles)
+            raise ValueError(
+                f"Source file {source_file} is missing block roles {missing_roles}"
+            )
     return roles
 
 
