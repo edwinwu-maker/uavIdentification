@@ -3,7 +3,7 @@ from dataclasses import dataclass
 import torch
 from tqdm import tqdm
 
-from src.training.checkpoint import save_checkpoint
+from src.training.model_io import save_model
 from src.training.evaluator import evaluate
 
 
@@ -11,7 +11,7 @@ from src.training.evaluator import evaluate
 class TrainResult:
     best_val_acc: float
     stopped_epoch: int
-    checkpoint_path: str
+    model_path: str
 
 
 def train_model(
@@ -23,14 +23,14 @@ def train_model(
     device,
     epochs,
     patience,
-    checkpoint_name,
+    model_path_or_name,
     logger=None,
     train_desc="Training Epochs",
     eval_desc="Evaluating",
 ):
     best_val_acc = 0.0
     patience_counter = 0
-    checkpoint_path = None
+    model_path = None
 
     epoch_bar = tqdm(total=epochs, desc=train_desc, unit="epoch")
     stopped_epoch = epochs
@@ -78,7 +78,7 @@ def train_model(
             if val_acc > best_val_acc:
                 best_val_acc = val_acc
                 patience_counter = 0
-                checkpoint_path = save_checkpoint(model.state_dict(), checkpoint_name)
+                model_path = save_model(model.state_dict(), model_path_or_name)
                 if logger is not None:
                     logger.info("  -> saved best model (val_acc=%.4f)", val_acc)
             else:
@@ -97,5 +97,5 @@ def train_model(
     return TrainResult(
         best_val_acc=best_val_acc,
         stopped_epoch=stopped_epoch,
-        checkpoint_path="" if checkpoint_path is None else str(checkpoint_path),
+        model_path="" if model_path is None else str(model_path),
     )

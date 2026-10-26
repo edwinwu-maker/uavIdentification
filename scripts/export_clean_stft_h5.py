@@ -18,10 +18,10 @@ import numpy as np
 
 from src.data.stft_cleaning_export import (
     calibrate_background_threshold,
-    checkpoint_sha256,
     evaluate_background_audit,
     export_clean_h5_files,
     map_cluster_semantics,
+    model_sha256,
     read_csv,
     validate_and_join_reviews,
     write_json,
@@ -49,8 +49,8 @@ def main() -> None:
     review_path = Path(args.review_csv).expanduser() if args.review_csv else work_dir / "review.csv"
     lookup_path = work_dir / "review_lookup.csv"
     assignments_path = work_dir / "assignments.csv"
-    checkpoint_path = work_dir / "stft_dcec.pt"
-    for path in (review_path, lookup_path, assignments_path, checkpoint_path):
+    model_path = work_dir / "stft_dcec.pt"
+    for path in (review_path, lookup_path, assignments_path, model_path):
         if not path.is_file():
             raise FileNotFoundError(f"Required clustering artifact does not exist: {path}")
 
@@ -118,7 +118,7 @@ def main() -> None:
         assignment_rows=assignment_rows,
         semantics=semantics,
         threshold=threshold,
-        checkpoint_hash=checkpoint_sha256(checkpoint_path),
+        model_hash=model_sha256(model_path),
     )
     write_manifest(work_dir / "cleaning_manifest.csv", manifest)
     total_decisions = sum(decision_counts.values())

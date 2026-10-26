@@ -342,7 +342,7 @@ def main() -> None:
             logger=logger,
         )
         final_embeddings, probabilities = infer_dcec(model, inference_loader, device=device)
-        checkpoint = {
+        model_artifact = {
             "model_state_dict": model.state_dict(),
             "selected_k": selected_k,
             "latent_dim": autoencoder.latent_dim,
@@ -351,7 +351,7 @@ def main() -> None:
             "scale_divisor": 5.0,
             "seed": SEED,
         }
-        torch.save(checkpoint, work_dir / "stft_dcec.pt")
+        torch.save(model_artifact, work_dir / "stft_dcec.pt")
         write_assignments(work_dir / "assignments.csv", samples, probabilities)
         selections = select_review_indices(
             samples,
@@ -373,7 +373,7 @@ def main() -> None:
         }
         with (work_dir / "training_report.json").open("w", encoding="utf-8") as file_obj:
             json.dump(report, file_obj, ensure_ascii=False, indent=2)
-        logger.info("Checkpoint, assignments, and blinded review set saved to %s", work_dir)
+        logger.info("Model artifact, assignments, and blinded review set saved to %s", work_dir)
     finally:
         dataset.close()
 

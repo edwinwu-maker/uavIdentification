@@ -77,7 +77,7 @@ python <script-or-command>
 │   │   ├── cpp.py                    # 单通道 CPP/FAM 网格生成
 │   │   └── fam_torch.py              # PyTorch FAM/SCF 计算工具，支持 CPU/CUDA/MPS
 │   ├── training/
-│   │   ├── checkpoint.py             # 模型 checkpoint 保存与加载
+│   │   ├── model_io.py               # 模型权重保存与加载
 │   │   ├── evaluator.py              # 验证/测试循环
 │   │   ├── metrics.py                # 训练评估指标计算
 │   │   ├── stft_deep_cluster.py      # 自编码器预训练、K 选择和 DCEC 训练
@@ -165,7 +165,7 @@ python scripts/generate_cpp_png.py --h5-dir ~/Desktop/dataset/droneRFa/cpp_h5
 H5 生成的 STFT 图片默认保存到 H5 目录旁的 `stft_png/`，CPP/FAM 图片默认保存到 H5
 目录旁的 `cpp_png/`。
 
-新实验使用带 `16class` 的独立目录和文件名，不覆盖历史产物。原始标签及单通道格式正确的旧 17 类 H5 可显式指定为输入，加载时自动跳过 `T0001`；应重新生成 split manifest，旧 17 类 manifest 和 checkpoint 不用于当前实验。旧 14 类 H5 的压缩标签及文件级 `rf_channel` 属性与当前格式不兼容。DEC 也应使用新的空 `work-dir` 重新生成审核、训练和导出产物。
+新实验使用带 `16class` 的独立目录和文件名，不覆盖历史产物。原始标签及单通道格式正确的旧 17 类 H5 可显式指定为输入，加载时自动跳过 `T0001`；应重新生成 split manifest，旧 17 类 manifest 和模型权重不用于当前实验。旧 14 类 H5 的压缩标签及文件级 `rf_channel` 属性与当前格式不兼容。DEC 也应使用新的空 `work-dir` 重新生成审核、训练和导出产物。
 
 ### DEC 单阶段 STFT 清洗
 
@@ -248,6 +248,6 @@ python scripts/evaluate.py --feature cpp --data-dir "$CPP_H5" \
   --split-manifest "$MANIFEST" --exclude-labels 13 14 --device cuda:0
 ```
 
-未显式指定 checkpoint 或混淆矩阵路径时，屏蔽实验自动在文件名中附加排除标签。固定 SNR 评估同样传入
+未显式指定模型路径或混淆矩阵路径时，屏蔽实验自动在文件名中附加排除标签。固定 SNR 评估同样传入
 `--exclude-labels 13 14`，并应显式指定对应的 CSV、PNG、混淆矩阵前缀和诊断 CSV；
 其余 STFT/CPP 参数必须与预计算配置保持一致。

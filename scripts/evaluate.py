@@ -24,7 +24,7 @@ from src.data.drone_rfa_io import NUM_ORIGINAL_CLASSES
 from src.data.splits import load_test_subset
 from src.data.class_filter import RemappedSubset, add_exclusion_suffix, build_class_mapping
 from src.models.resnet import DroneRFaResNet18
-from src.training.checkpoint import load_checkpoint
+from src.training.model_io import load_model
 from src.training.evaluator import evaluate_with_predictions
 from src.training.metrics import compute_metrics, save_confusion_matrix_image
 
@@ -41,7 +41,7 @@ def build_parser():
     parser = argparse.ArgumentParser(description="Evaluate ResNet on pre-computed DroneRFa features", allow_abbrev=False)
     parser.add_argument("--feature", type=str, default="stft", choices=("stft", "cpp"))
     parser.add_argument("--data-dir", type=str, default=None, help="Directory containing feature .h5 files")
-    parser.add_argument("--model-path", type=str, default=None, help="Path to model checkpoint")
+    parser.add_argument("--model-path", type=str, default=None, help="Path to model weights")
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
     parser.add_argument("--num-workers", type=int, default=0,
                         help="DataLoader workers (0 = main process only)")
@@ -64,7 +64,7 @@ def parse_args(argv=None):
     args.model_path = (
         os.path.expanduser(args.model_path)
         if args.model_path is not None
-        else add_exclusion_suffix(spec.checkpoint_name, args.exclude_labels)
+        else add_exclusion_suffix(spec.model_name, args.exclude_labels)
     )
     args.cm_image_path = (
         os.path.expanduser(args.cm_image_path)
@@ -120,7 +120,7 @@ def evaluate(args):
 
         model = DroneRFaResNet18(num_classes=mapping.num_classes).to(device)
         logger.info("Loading model from %s", args.model_path)
-        state_dict = load_checkpoint(args.model_path, map_location=device)
+        state_dict = load_model(args.model_path, map_location=device)
         model.load_state_dict(state_dict)
 
         criterion = nn.CrossEntropyLoss()

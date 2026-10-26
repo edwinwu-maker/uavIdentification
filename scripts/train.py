@@ -50,7 +50,7 @@ def build_parser():
     parser.add_argument("--patience", type=int, default=PATIENCE)
     parser.add_argument("--device", type=str, default=default_device(),
                         help="Device, e.g. 'cuda:0', 'cuda:1', 'mps', 'cpu'")
-    parser.add_argument("--checkpoint-path", type=str, default=None, help="Checkpoint path or name")
+    parser.add_argument("--model-path", type=str, default=None, help="Model weights path or name")
     parser.add_argument("--files-per-class", type=int, default=None,
                         help="Randomly select this many source files per class before file-level splitting")
     parser.add_argument("--split-manifest", type=str, required=True,
@@ -66,10 +66,10 @@ def parse_args(argv=None):
 
     spec = get_feature_spec(args.feature)
     args.data_dir = os.path.expanduser(args.data_dir) if args.data_dir is not None else spec.default_data_dir
-    args.checkpoint_path = (
-        os.path.expanduser(args.checkpoint_path)
-        if args.checkpoint_path is not None
-        else add_exclusion_suffix(spec.checkpoint_name, args.exclude_labels)
+    args.model_path = (
+        os.path.expanduser(args.model_path)
+        if args.model_path is not None
+        else add_exclusion_suffix(spec.model_name, args.exclude_labels)
     )
     args.split_manifest = os.path.expanduser(args.split_manifest)
     return args
@@ -147,7 +147,7 @@ def train(args):
             device=device,
             epochs=args.epochs,
             patience=args.patience,
-            checkpoint_name=args.checkpoint_path,
+            model_path_or_name=args.model_path,
             logger=logger,
             train_desc="Training Epochs",
             eval_desc="Evaluating",

@@ -54,7 +54,7 @@ from src.evaluation.snr_accuracy import (
 )
 from src.models.resnet import DroneRFaResNet18
 from src.preprocess.cpp import compute_cpp, normalize_cpp
-from src.training.checkpoint import load_checkpoint
+from src.training.model_io import load_model
 from src.utils.cli import log_current_command
 from src.utils.device import default_device
 from src.utils.logger import logger
@@ -141,7 +141,7 @@ def evaluate_snr_accuracy(
     logger.info("Class mapping (model -> original): %s", mapping.original_labels)
     model = DroneRFaResNet18(num_classes=mapping.num_classes).to(torch_device)
     logger.info("Loading model from %s", model_path)
-    state_dict = load_checkpoint(model_path, map_location=torch_device)
+    state_dict = load_model(model_path, map_location=torch_device)
     model.load_state_dict(state_dict)
     model.eval()
 
@@ -254,7 +254,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--data-dir", type=str, default=default_raw_data_dir(),
                         help="Directory containing raw .mat files")
     parser.add_argument("--model-path", type=str, default=str(model_dir() / DEFAULT_MODEL_NAME),
-                        help="Path to the trained CPP checkpoint")
+                        help="Path to the trained CPP model weights")
     parser.add_argument("--output-csv", type=str, default=str(DEFAULT_OUTPUT_CSV),
                         help="CSV path for SNR results")
     parser.add_argument("--output-png", type=str, default=str(DEFAULT_OUTPUT_PNG),

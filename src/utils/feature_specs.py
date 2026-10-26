@@ -16,7 +16,7 @@ class FeatureSpec:
     dataset_class: Type[Dataset]
     feature_key: str
     default_data_dir: str
-    checkpoint_name: str
+    model_name: str
     cm_array_name: str
     cm_image_name: str
     train_description: str
@@ -31,7 +31,7 @@ def _build_specs() -> dict[str, FeatureSpec]:
             dataset_class=StftDataset,
             feature_key="stft",
             default_data_dir=str(Path(base_dir).parent / "DroneRFa_stft_awgn_random_16class_h5"),
-            checkpoint_name="best_stft_16class_model.pth",
+            model_name="best_stft_16class_model.pth",
             cm_array_name="stft_16class_confusion_matrix.npy",
             cm_image_name="stft_16class_confusion_matrix.png",
             train_description="Single-GPU training on pre-computed .h5 stfts",
@@ -42,7 +42,7 @@ def _build_specs() -> dict[str, FeatureSpec]:
             dataset_class=CppDataset,
             feature_key="cpp",
             default_data_dir=str(Path(base_dir).parent / "DroneRFa_cpp_awgn_random_16class_h5"),
-            checkpoint_name="best_cpp_16class_model.pth",
+            model_name="best_cpp_16class_model.pth",
             cm_array_name="cpp_16class_confusion_matrix.npy",
             cm_image_name="cpp_16class_confusion_matrix.png",
             train_description="Single-GPU training on pre-computed CPP/FAM .h5 matrices",

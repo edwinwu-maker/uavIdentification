@@ -217,7 +217,7 @@ def evaluate_background_audit(
     }
 
 
-def checkpoint_sha256(path: str | Path) -> str:
+def model_sha256(path: str | Path) -> str:
     digest = hashlib.sha256()
     with Path(path).open("rb") as file_obj:
         for chunk in iter(lambda: file_obj.read(1024 * 1024), b""):
@@ -255,7 +255,7 @@ def export_clean_h5_files(
     assignment_rows: list[dict[str, str]],
     semantics: dict[int, str],
     threshold: float,
-    checkpoint_hash: str,
+    model_hash: str,
 ) -> tuple[list[dict[str, object]], dict[str, int]]:
     source_root = Path(data_dir).expanduser().resolve()
     destination_root = Path(output_dir).expanduser().resolve()
@@ -362,7 +362,8 @@ def export_clean_h5_files(
                 output.attrs["cleaning_method"] = "DCEC-background-filter"
                 output.attrs["cleaning_selected_k"] = len(semantics)
                 output.attrs["cleaning_background_threshold"] = threshold
-                output.attrs["cleaning_checkpoint_sha256"] = checkpoint_hash
+                # 保留历史属性名，兼容已有 H5 的模型溯源格式。
+                output.attrs["cleaning_checkpoint_sha256"] = model_hash
                 output.attrs["cleaning_source_file"] = filename
                 output.attrs["cleaning_cluster_semantics"] = json.dumps(semantics, sort_keys=True)
                 output.attrs["cleaning_input_size"] = 256

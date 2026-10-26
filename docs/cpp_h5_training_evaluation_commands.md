@@ -12,7 +12,7 @@ RAW=/path/to/DroneRFa
 H5=/path/to/DroneRFa_cpp_awgn_mixed3x_16class_h5
 
 MANIFEST=outputs/splits/cpp_random12_seed42.csv
-CHECKPOINT=outputs/models/best_cpp_16class_model.pth
+MODEL_PATH=outputs/models/best_cpp_16class_model.pth
 ```
 
 将 `/path/to/DroneRFa` 替换为实际原始数据目录。
@@ -50,7 +50,7 @@ $PY scripts/train.py \
   --data-dir "$H5" \
   --files-per-class 12 \
   --split-manifest "$MANIFEST" \
-  --checkpoint-path "$CHECKPOINT" \
+  --model-path "$MODEL_PATH" \
   --batch-size 64 \
   --lr 0.001 \
   --epochs 200 \
@@ -73,7 +73,7 @@ $PY scripts/train.py \
 $PY scripts/evaluate.py \
   --feature cpp \
   --data-dir "$H5" \
-  --model-path "$CHECKPOINT" \
+  --model-path "$MODEL_PATH" \
   --split-manifest "$MANIFEST" \
   --batch-size 64 \
   --num-workers 4 \
@@ -88,7 +88,7 @@ $PY scripts/evaluate.py \
 ```bash
 $PY scripts/eval_snr_accuracy_cpp.py \
   --data-dir "$RAW" \
-  --model-path "$CHECKPOINT" \
+  --model-path "$MODEL_PATH" \
   --split-manifest "$MANIFEST" \
   --snrs -15 -10 -7.5 -5 -2.5 0 2.5 5 7.5 10 15 \
   --sample-length 1000000 \
