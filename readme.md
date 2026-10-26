@@ -4,7 +4,7 @@
 
 无人机信号研究对象为 `T0010-T10000` 共 15 类，保留 `T0000` 背景类，训练和评估共 16 类。`T0001` 的时频图经人工鉴定为基于 WiFi 的射频信号，易与 WiFi 混淆，不作为研究对象；`T10001-T11000` 飞控器也不纳入研究。
 
-原始标签仍为 T 编码的二进制整数值，即 `0、2-16`，H5 和 split manifest 保留原始标签；模型内部连续映射为 `0-15`，混淆矩阵显示原始标签。原始文件选择、H5 加载、可视化、DEC/BYOL 清洗和 SNR 评估均排除 `T0001`，无需额外指定 `--exclude-labels 1`。
+原始标签仍为 T 编码的二进制整数值，即 `0、2-16`，H5 和 split manifest 保留原始标签；模型内部连续映射为 `0-15`，混淆矩阵显示原始标签。原始文件选择、H5 加载、可视化、DEC 清洗和 SNR 评估均排除 `T0001`，无需额外指定 `--exclude-labels 1`。
 
 `T0000` 的 `RF0` 和 `RF1` 分别生成独立单通道样本；其他文件按 `S` 编码选择通道：`S0000-S0111` 使用 `RF0`，`S1000-S1111` 使用 `RF1`。STFT 和 CPP/FAM 特征均为 `(N, 1, H, W)`，H5 通过逐样本 `/rf_channel` 数据集记录实际通道。
 
@@ -53,7 +53,7 @@ python <script-or-command>
 │   ├── generate_stft_png.py          # 从 STFT .h5 生成单通道频谱图 PNG
 │   ├── generate_cpp_png.py           # 从 CPP/FAM .h5 生成单通道 CPP/FAM PNG
 │   ├── train_stft_deep_cluster.py    # 训练 STFT DCEC 并生成盲审样本
-│   └── export_clean_stft_h5.py       # 根据人工审核结果导出图传正样本 H5
+│   └── export_clean_stft_h5.py       # 根据人工审核结果剔除纯背景并导出 H5
 ├── src/
 │   ├── data/
 │   │   ├── drone_rfa_io.py           # DroneRFa 原始 .mat 数据读取工具
@@ -165,12 +165,14 @@ python scripts/generate_cpp_png.py --h5-dir ~/Desktop/dataset/droneRFa/cpp_h5
 H5 生成的 STFT 图片默认保存到 H5 目录旁的 `stft_png/`，CPP/FAM 图片默认保存到 H5
 目录旁的 `cpp_png/`。
 
-新实验使用带 `16class` 的独立目录和文件名，不覆盖历史产物。原始标签及单通道格式正确的旧 17 类 H5 可显式指定为输入，加载时自动跳过 `T0001`；应重新生成 split manifest，旧 17 类 manifest 和 checkpoint 不用于当前实验。旧 14 类 H5 的压缩标签及文件级 `rf_channel` 属性与当前格式不兼容。DEC/BYOL 也应使用新的空 `work-dir` 重新生成审核、训练和导出产物。
+新实验使用带 `16class` 的独立目录和文件名，不覆盖历史产物。原始标签及单通道格式正确的旧 17 类 H5 可显式指定为输入，加载时自动跳过 `T0001`；应重新生成 split manifest，旧 17 类 manifest 和 checkpoint 不用于当前实验。旧 14 类 H5 的压缩标签及文件级 `rf_channel` 属性与当前格式不兼容。DEC 也应使用新的空 `work-dir` 重新生成审核、训练和导出产物。
 
-### DEC → BYOL 两阶段 STFT 清洗
+### DEC 单阶段 STFT 清洗
 
-第一阶段 DEC 只负责从 T0010-T10000 中剔除纯背景。训练会跳过 `T0000`，并生成 250 条
-盲审图片及 `review.csv`：
+项目仅使用 DEC（DCEC 实现）从 T0010-T10000 中剔除高置信纯背景，保留其他可见信号。
+输入 H5 须由 `precompute_stft_h5.py --clean` 生成；`--clean` 仅表示不额外添加 AWGN，
+不表示已完成数据清洗。训练会跳过 `T0000`，并生成 250 条盲审图片及 `review.csv`，
+其中 150 条用于簇语义映射、50 条用于阈值校准、50 条用于独立审核：
 
 ```bash
 python scripts/train_stft_deep_cluster.py \
@@ -190,43 +192,12 @@ python scripts/export_clean_stft_h5.py \
   --output-dir ~/Desktop/dataset/DroneRFa_stft_dec_filtered_h5
 ```
 
-DEC 仅删除高置信纯背景，`signal`、混合簇和低置信样本全部保留给 BYOL；T0000 原样复制。
-全量决定和独立审核指标分别保存在 `cleaning_manifest.csv` 与 `cleaning_report.json`。
-
-第二阶段 BYOL 读取 DEC 输出，只索引 T0010-T10000。源矩阵保持 `1024×1024`，训练时临时
-池化到 `512×512`；人工审核中 `video_present` 表示存在图传，`no_video` 表示 WiFi、跳频、
-脉冲等非图传信号，`uncertain` 只参与自监督预训练：
-
-```bash
-python scripts/prepare_stft_byol_review.py \
-  --data-dir ~/Desktop/dataset/DroneRFa_stft_dec_filtered_h5 \
-  --work-dir outputs/stft_byol_cleaning \
-  --review-count 600
-
-python scripts/train_stft_byol_cleaner.py \
-  --data-dir ~/Desktop/dataset/DroneRFa_stft_dec_filtered_h5 \
-  --work-dir outputs/stft_byol_cleaning \
-  --seeds 42 43 44 --batch-size 8 --device mps
-
-python scripts/export_byol_clean_stft_h5.py \
-  --data-dir ~/Desktop/dataset/DroneRFa_stft_dec_filtered_h5 \
-  --work-dir outputs/stft_byol_cleaning \
-  --output-dir ~/Desktop/dataset/DroneRFa_stft_byol_video_h5
-```
-
-审核划分以 `(source_file, source_sample_idx)` 标识的 10M 采样点块为单位；同一块的 RF0/RF1
-始终属于同一个角色。剩余块数不少于 3 的源文件内部包含 train、calibration 和 audit 三个
-角色；仅剩 1–2 块的稀疏文件全部进入 train，不参与 calibration/audit。`split_manifest.csv`
-通过 `source_block_count` 和 `split_policy` 明确记录这一覆盖范围，训练报告也会列出
-train-only 稀疏文件。因此 audit 指标只表示非稀疏源文件内未见 10M 块的清洗效果，不代表
-稀疏文件、新源文件或新采集会话的泛化能力。旧的文件级审核产物不兼容，需使用新的空
-`work-dir` 重新生成。
-
-最终决定使用三个模型图传概率的中位数。阈值只在 calibration 集上按召回优先规则选择，
-audit 标签不参与训练或阈值选择；正式导出要求加权 audit 召回率不低于 95%。最终导出再次
-原样复制 T0000，源 H5 不会被修改。
-旧 DEC `video/non_video` 复核、直接清洗 BYOL 复核和 BYOL checkpoint 均不兼容，必须使用
-新的空 `work-dir` 重新生成。
+DEC 仅删除归属于背景簇且背景分数达到校准阈值的样本；信号簇、混合簇和未达到阈值的
+样本全部保留，`T0000` 的全部样本原样保留。清洗不会按图传与非图传进一步筛选信号。
+正式导出要求独立审核样本上的信号保留率为 100%、背景召回率不低于 90%；这些门槛只代表
+审核样本上的结果。全量决定和独立审核指标分别保存在 `cleaning_manifest.csv` 与
+`cleaning_report.json`，结果写入新 H5 目录，源 H5 不会被修改。
+旧 DEC `video/non_video` 复核不兼容，必须使用新的空 `work-dir` 重新生成。
 
 ### 训练模型
 
