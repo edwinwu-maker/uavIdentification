@@ -1,8 +1,8 @@
 """Train ResNet on pre-computed DroneRFa features.
 
 Usage:
-  python scripts/train.py --feature stft --data-dir ~/Desktop/dataset/DroneRFa_stft_awgn_random_17class_h5 --split-manifest outputs/splits/full_17class_seed42.csv --batch-size 64
-  python scripts/train.py --feature cpp --data-dir ~/Desktop/dataset/DroneRFa_cpp_awgn_random_17class_h5 --split-manifest outputs/splits/full_17class_seed42.csv --model resnet18-small-stem --batch-size 64
+  python scripts/train.py --feature stft --data-dir ~/Desktop/dataset/DroneRFa_stft_awgn_random_16class_h5 --split-manifest outputs/splits/full_16class_seed42.csv --batch-size 64
+  python scripts/train.py --feature cpp --data-dir ~/Desktop/dataset/DroneRFa_cpp_awgn_random_16class_h5 --split-manifest outputs/splits/full_16class_seed42.csv --model resnet18-small-stem --batch-size 64
   python scripts/train.py --feature cpp --data-dir ... --files-per-class 12 --split-manifest outputs/splits/random12_seed42.csv
 
 """
@@ -19,9 +19,10 @@ from torch.utils.data import DataLoader
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
+from src.data.drone_rfa_io import NUM_ORIGINAL_CLASSES
 from src.data.splits import prepare_training_split
 from src.data.class_filter import RemappedSubset, add_exclusion_suffix, build_class_mapping
-from src.models.resnet import NUM_CLASSES, build_model
+from src.models.resnet import build_model
 from src.training.trainer import train_model
 
 from src.utils.cli import log_current_command
@@ -106,7 +107,7 @@ def train(args):
             seed=SPLIT_SEED,
             files_per_class=args.files_per_class,
         )
-        mapping = build_class_mapping(NUM_CLASSES, args.exclude_labels)
+        mapping = build_class_mapping(NUM_ORIGINAL_CLASSES, args.exclude_labels)
         train_ds = RemappedSubset(train_ds, mapping)
         val_ds = RemappedSubset(val_ds, mapping)
         _test_ds = RemappedSubset(_test_ds, mapping)

@@ -19,6 +19,8 @@ from sklearn.metrics import (
     recall_score,
 )
 
+from src.data.drone_rfa_io import EXCLUDED_CLASS_CODES
+
 MANUAL_LABELS = frozenset(("background", "signal", "uncertain"))
 REVIEW_ROLES = frozenset(("mapping", "calibration", "audit"))
 
@@ -262,7 +264,10 @@ def export_clean_h5_files(
     if not math.isfinite(threshold) or not 0.0 <= threshold <= 1.0:
         raise ValueError("threshold must be finite and within [0, 1]")
 
-    source_paths = sorted(source_root.glob("*.h5"))
+    source_paths = [
+        path for path in sorted(source_root.glob("*.h5"))
+        if path.stem.split("_")[0] not in EXCLUDED_CLASS_CODES
+    ]
     if not source_paths:
         raise ValueError(f"No H5 files found in {source_root}")
     background_clusters = {

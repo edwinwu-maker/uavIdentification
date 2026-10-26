@@ -8,7 +8,7 @@ Usage:
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --device mps
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --device cuda:0 --pair-chunk-size 4096
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --files-per-class 1 --fam-nfft 64 --fam-hop 64
-  python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --include-labels 0 1 2 3 4 --files-per-class 12
+  python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --include-labels 0 2 3 4 --files-per-class 12
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --noise-profile mixed-3x --snr-low-min -15 --snr-low-max 0 --snr-high-min 0 --snr-high-max 15
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --snr-min -5 --snr-max 15 --noise-seed 42
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --clean
@@ -54,9 +54,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-dir", type=str, default=default_raw_data_dir(),
                         help="Directory containing .mat files")
     parser.add_argument("--output-dir", type=str, default=None,
-                        help="Directory for output .h5 files (default: <data-dir-parent>/DroneRFa_cpp_awgn_random_17class_h5, "
-                             "DroneRFa_cpp_awgn_mixed3x_17class_h5 for mixed-3x, or "
-                             "DroneRFa_cpp_17class_h5 with --clean)")
+                        help="Directory for output .h5 files (default: <data-dir-parent>/DroneRFa_cpp_awgn_random_16class_h5, "
+                             "DroneRFa_cpp_awgn_mixed3x_16class_h5 for mixed-3x, or "
+                             "DroneRFa_cpp_16class_h5 with --clean)")
     parser.add_argument("--sample-length", type=int, default=SAMPLE_LENGTH,
                         help="Number of IQ samples per output CPP sample")
     parser.add_argument("--segment-samples", type=int, default=DEFAULT_SEGMENT_SAMPLES,
@@ -82,7 +82,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--files-per-class", type=int, default=None,
                         help="Process at most this many .mat files per selected class")
     parser.add_argument("--include-labels", type=int, nargs="+", default=None,
-                        help="Only process these original class labels, e.g. --include-labels 0 1 2 3 4")
+                        help="Only process these original class labels, e.g. --include-labels 0 2 3 4")
     parser.add_argument("--max-samples-per-file", type=int, default=None,
                         help="Process at most this many samples from each .mat file")
     parser.add_argument("--clean", action="store_true",
@@ -272,11 +272,11 @@ def main() -> None:
     if args.output_dir:
         output_dir = os.path.expanduser(args.output_dir)
     elif args.clean:
-        output_dir = str(Path(data_dir).parent / "DroneRFa_cpp_17class_h5")
+        output_dir = str(Path(data_dir).parent / "DroneRFa_cpp_16class_h5")
     elif args.noise_profile == "mixed-3x":
-        output_dir = str(Path(data_dir).parent / "DroneRFa_cpp_awgn_mixed3x_17class_h5")
+        output_dir = str(Path(data_dir).parent / "DroneRFa_cpp_awgn_mixed3x_16class_h5")
     else:
-        output_dir = str(Path(data_dir).parent / "DroneRFa_cpp_awgn_random_17class_h5")
+        output_dir = str(Path(data_dir).parent / "DroneRFa_cpp_awgn_random_16class_h5")
     os.makedirs(output_dir, exist_ok=True)
     run_precompute_batch(
         data_dir,

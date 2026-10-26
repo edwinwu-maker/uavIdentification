@@ -2,7 +2,9 @@
 
 本项目基于 DroneRFa 无人机射频信号数据集，提供 STFT 频谱图和 CPP/FAM 特征的预计算、可视化、训练与测试脚本。
 
-研究对象为 `T0000-T10000` 共 17 类：`T0000` 背景类与 16 种无人机，标签为 T 编码的二进制整数值 0-16。`T10001-T11000` 飞控器不纳入研究。
+无人机信号研究对象为 `T0010-T10000` 共 15 类，保留 `T0000` 背景类，训练和评估共 16 类。`T0001` 的时频图经人工鉴定为基于 WiFi 的射频信号，易与 WiFi 混淆，不作为研究对象；`T10001-T11000` 飞控器也不纳入研究。
+
+原始标签仍为 T 编码的二进制整数值，即 `0、2-16`，H5 和 split manifest 保留原始标签；模型内部连续映射为 `0-15`，混淆矩阵显示原始标签。原始文件选择、H5 加载、可视化、DEC/BYOL 清洗和 SNR 评估均排除 `T0001`，无需额外指定 `--exclude-labels 1`。
 
 `T0000` 的 `RF0` 和 `RF1` 分别生成独立单通道样本；其他文件按 `S` 编码选择通道：`S0000-S0111` 使用 `RF0`，`S1000-S1111` 使用 `RF1`。STFT 和 CPP/FAM 特征均为 `(N, 1, H, W)`，H5 通过逐样本 `/rf_channel` 数据集记录实际通道。
 
@@ -114,7 +116,7 @@ python <script-or-command>
 ```bash
 python scripts/precompute_stft_h5.py \
   --data-dir ~/Desktop/dataset/droneRFa \
-  --output-dir ~/Desktop/dataset/DroneRFa_stft_awgn_random_17class_h5 \
+  --output-dir ~/Desktop/dataset/DroneRFa_stft_awgn_random_16class_h5 \
   --device mps
 ```
 
@@ -123,7 +125,7 @@ python scripts/precompute_stft_h5.py \
 ```bash
 python scripts/precompute_cpp_h5.py \
   --data-dir ~/Desktop/dataset/droneRFa \
-  --output-dir ~/Desktop/dataset/DroneRFa_cpp_awgn_random_17class_h5 \
+  --output-dir ~/Desktop/dataset/DroneRFa_cpp_awgn_random_16class_h5 \
   --device mps
 ```
 
@@ -163,16 +165,16 @@ python scripts/generate_cpp_png.py --h5-dir ~/Desktop/dataset/droneRFa/cpp_h5
 H5 生成的 STFT 图片默认保存到 H5 目录旁的 `stft_png/`，CPP/FAM 图片默认保存到 H5
 目录旁的 `cpp_png/`。
 
-旧 14 类 H5 的压缩标签、文件级 `rf_channel` 属性、split manifest 和 checkpoint 均与新格式不兼容。新实验使用带 `17class` 的独立目录和文件名，不覆盖历史产物。
+新实验使用带 `16class` 的独立目录和文件名，不覆盖历史产物。原始标签及单通道格式正确的旧 17 类 H5 可显式指定为输入，加载时自动跳过 `T0001`；应重新生成 split manifest，旧 17 类 manifest 和 checkpoint 不用于当前实验。旧 14 类 H5 的压缩标签及文件级 `rf_channel` 属性与当前格式不兼容。DEC/BYOL 也应使用新的空 `work-dir` 重新生成审核、训练和导出产物。
 
 ### DEC → BYOL 两阶段 STFT 清洗
 
-第一阶段 DEC 只负责从 T0001-T10000 中剔除纯背景。训练会跳过 `T0000`，并生成 250 条
+第一阶段 DEC 只负责从 T0010-T10000 中剔除纯背景。训练会跳过 `T0000`，并生成 250 条
 盲审图片及 `review.csv`：
 
 ```bash
 python scripts/train_stft_deep_cluster.py \
-  --data-dir ~/Desktop/dataset/DroneRFa_stft_17class_h5 \
+  --data-dir ~/Desktop/dataset/DroneRFa_stft_16class_h5 \
   --work-dir outputs/stft_dec_background \
   --device mps
 ```
@@ -183,7 +185,7 @@ python scripts/train_stft_deep_cluster.py \
 
 ```bash
 python scripts/export_clean_stft_h5.py \
-  --data-dir ~/Desktop/dataset/DroneRFa_stft_17class_h5 \
+  --data-dir ~/Desktop/dataset/DroneRFa_stft_16class_h5 \
   --work-dir outputs/stft_dec_background \
   --output-dir ~/Desktop/dataset/DroneRFa_stft_dec_filtered_h5
 ```
@@ -191,7 +193,7 @@ python scripts/export_clean_stft_h5.py \
 DEC 仅删除高置信纯背景，`signal`、混合簇和低置信样本全部保留给 BYOL；T0000 原样复制。
 全量决定和独立审核指标分别保存在 `cleaning_manifest.csv` 与 `cleaning_report.json`。
 
-第二阶段 BYOL 读取 DEC 输出，只索引 T0001-T10000。源矩阵保持 `1024×1024`，训练时临时
+第二阶段 BYOL 读取 DEC 输出，只索引 T0010-T10000。源矩阵保持 `1024×1024`，训练时临时
 池化到 `512×512`；人工审核中 `video_present` 表示存在图传，`no_video` 表示 WiFi、跳频、
 脉冲等非图传信号，`uncertain` 只参与自监督预训练：
 
@@ -229,10 +231,10 @@ audit 标签不参与训练或阈值选择；正式导出要求加权 audit 召�
 ### 训练模型
 
 ```bash
-python scripts/train.py --feature stft --data-dir ~/Desktop/dataset/DroneRFa_stft_awgn_random_17class_h5 \
-  --split-manifest outputs/splits/full_17class_seed42.csv --batch-size 64
-python scripts/train.py --feature cpp --data-dir ~/Desktop/dataset/DroneRFa_cpp_awgn_random_17class_h5 \
-  --split-manifest outputs/splits/full_17class_seed42.csv --batch-size 64
+python scripts/train.py --feature stft --data-dir ~/Desktop/dataset/DroneRFa_stft_awgn_random_16class_h5 \
+  --split-manifest outputs/splits/full_16class_seed42.csv --batch-size 64
+python scripts/train.py --feature cpp --data-dir ~/Desktop/dataset/DroneRFa_cpp_awgn_random_16class_h5 \
+  --split-manifest outputs/splits/full_16class_seed42.csv --batch-size 64
 ```
 
 可通过 `--device` 指定设备，例如 `cuda:0`、`mps` 或 `cpu`。
@@ -242,22 +244,22 @@ python scripts/train.py --feature cpp --data-dir ~/Desktop/dataset/DroneRFa_cpp_
 ```bash
 python scripts/evaluate.py \
   --feature stft \
-  --data-dir ~/Desktop/dataset/DroneRFa_stft_awgn_random_17class_h5 \
-  --split-manifest outputs/splits/full_17class_seed42.csv \
-  --model-path outputs/checkpoints/best_stft_17class_model.pth
+  --data-dir ~/Desktop/dataset/DroneRFa_stft_awgn_random_16class_h5 \
+  --split-manifest outputs/splits/full_16class_seed42.csv \
+  --model-path outputs/checkpoints/best_stft_16class_model.pth
 
 python scripts/evaluate.py \
   --feature cpp \
-  --data-dir ~/Desktop/dataset/DroneRFa_cpp_awgn_random_17class_h5 \
-  --split-manifest outputs/splits/full_17class_seed42.csv \
-  --model-path outputs/checkpoints/best_cpp_17class_model.pth
+  --data-dir ~/Desktop/dataset/DroneRFa_cpp_awgn_random_16class_h5 \
+  --split-manifest outputs/splits/full_16class_seed42.csv \
+  --model-path outputs/checkpoints/best_cpp_16class_model.pth
 ```
 
 测试脚本会输出 accuracy、precision、recall、F1-score 和 loss，并将混淆矩阵数组保存到 `outputs/metrics/`，混淆矩阵图片保存到 `outputs/figures/`。
 
 ## 可选类别屏蔽实验
 
-可通过 `--exclude-labels` 排除任意原始标签。标签现在与 T 编码的二进制值一致，例如 `T1101` 和 `T1110` 对应 `--exclude-labels 13 14`。程序会在模型内部重映射为连续标签，混淆矩阵坐标仍显示原始标签。
+在固定排除 `T0001` 的基础上，可通过 `--exclude-labels` 额外排除原始标签。标签现在与 T 编码的二进制值一致，例如 `T1101` 和 `T1110` 对应 `--exclude-labels 13 14`。程序会在模型内部重映射为连续标签，混淆矩阵坐标仍显示原始标签。
 
 ```bash
 # STFT：训练与常规评估

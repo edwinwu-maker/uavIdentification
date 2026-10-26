@@ -12,7 +12,7 @@ Usage:
   from scripts.eval_snr_accuracy_cpp import evaluate_snr_accuracy
   rows = evaluate_snr_accuracy(
       data_dir="E:/dataSet/DroneRFa",
-      model_path="outputs/checkpoints/best_cpp_17class_model.pth",
+      model_path="outputs/checkpoints/best_cpp_16class_model.pth",
       split_manifest="outputs/splits/full.csv",
       snrs=[0, 10, 20],
       max_samples=50,
@@ -35,6 +35,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from src.data.drone_rfa_io import (
     H5FileHandleCache,
+    NUM_ORIGINAL_CLASSES,
     build_sample_index,
     default_raw_data_dir,
     list_mat_file_labels,
@@ -51,7 +52,7 @@ from src.evaluation.snr_accuracy import (
     save_snr_confusion_matrix,
     save_prediction_diagnostics,
 )
-from src.models.resnet import NUM_CLASSES, build_model
+from src.models.resnet import build_model
 from src.preprocess.cpp import compute_cpp, normalize_cpp
 from src.training.checkpoint import load_checkpoint
 from src.utils.cli import log_current_command
@@ -69,10 +70,10 @@ DEFAULT_ALPHA_BINS = 257
 DEFAULT_PAIR_CHUNK_SIZE = 8192
 DEFAULT_BATCH_SIZE = 1
 DEFAULT_SEED = 42
-DEFAULT_MODEL_NAME = "best_cpp_17class_model.pth"
-DEFAULT_OUTPUT_CSV = metrics_dir() / "cpp_17class_snr_accuracy.csv"
-DEFAULT_OUTPUT_PNG = figures_dir() / "cpp_17class_snr_accuracy.png"
-DEFAULT_OUTPUT_CM_PREFIX = "cpp_17class_snr_confusion_matrix"
+DEFAULT_MODEL_NAME = "best_cpp_16class_model.pth"
+DEFAULT_OUTPUT_CSV = metrics_dir() / "cpp_16class_snr_accuracy.csv"
+DEFAULT_OUTPUT_PNG = figures_dir() / "cpp_16class_snr_accuracy.png"
+DEFAULT_OUTPUT_CM_PREFIX = "cpp_16class_snr_confusion_matrix"
 
 
 def evaluate_snr_accuracy(
@@ -107,7 +108,7 @@ def evaluate_snr_accuracy(
 
     if not Path(split_manifest).is_file():
         raise FileNotFoundError(f"Split manifest does not exist: {split_manifest}")
-    mapping = build_class_mapping(NUM_CLASSES, exclude_labels)
+    mapping = build_class_mapping(NUM_ORIGINAL_CLASSES, exclude_labels)
     allowed_labels = set(mapping.original_labels)
     path_labels = list_mat_file_labels(data_dir)
     test_file_ids = load_test_file_ids(

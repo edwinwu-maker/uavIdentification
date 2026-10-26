@@ -1,8 +1,8 @@
 """Evaluate ResNet on pre-computed DroneRFa features.
 
 Usage:
-  python scripts/evaluate.py --feature stft --data-dir ~/Desktop/dataset/DroneRFa_stft_awgn_random_17class_h5 --model-path outputs/checkpoints/best_stft_17class_model.pth --split-manifest outputs/splits/full_17class_seed42.csv
-  python scripts/evaluate.py --feature cpp --data-dir ~/Desktop/dataset/DroneRFa_cpp_awgn_random_17class_h5 --model resnet18-small-stem --model-path outputs/checkpoints/best_cpp_17class_model.pth --split-manifest outputs/splits/full_17class_seed42.csv
+  python scripts/evaluate.py --feature stft --data-dir ~/Desktop/dataset/DroneRFa_stft_awgn_random_16class_h5 --model-path outputs/checkpoints/best_stft_16class_model.pth --split-manifest outputs/splits/full_16class_seed42.csv
+  python scripts/evaluate.py --feature cpp --data-dir ~/Desktop/dataset/DroneRFa_cpp_awgn_random_16class_h5 --model resnet18-small-stem --model-path outputs/checkpoints/best_cpp_16class_model.pth --split-manifest outputs/splits/full_16class_seed42.csv
 
 """
 
@@ -20,9 +20,10 @@ from torch.utils.data import DataLoader
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
+from src.data.drone_rfa_io import NUM_ORIGINAL_CLASSES
 from src.data.splits import load_test_subset
 from src.data.class_filter import RemappedSubset, add_exclusion_suffix, build_class_mapping
-from src.models.resnet import NUM_CLASSES, build_model
+from src.models.resnet import build_model
 from src.training.checkpoint import load_checkpoint
 from src.training.evaluator import evaluate_with_predictions
 from src.training.metrics import compute_metrics, save_confusion_matrix_image
@@ -102,7 +103,7 @@ def evaluate(args):
             dataset,
             manifest_path=args.split_manifest,
         )
-        mapping = build_class_mapping(NUM_CLASSES, args.exclude_labels)
+        mapping = build_class_mapping(NUM_ORIGINAL_CLASSES, args.exclude_labels)
         test_ds = RemappedSubset(test_ds, mapping)
         logger.info("Class mapping (model -> original): %s", mapping.original_labels)
         test_file_count = len({dataset.index[index][0] for index in test_ds.indices})

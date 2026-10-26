@@ -18,6 +18,7 @@ from sklearn.metrics import confusion_matrix, f1_score, precision_score, recall_
 from torch.utils.data import Dataset
 
 from src.data.stft_clustering import REQUIRED_SAMPLE_DATASETS, preprocess_stft
+from src.data.drone_rfa_io import EXCLUDED_CLASS_CODES, RESEARCH_LABELS
 
 ROLES = ("train", "calibration", "audit")
 MANUAL_LABELS = frozenset(("video_present", "no_video", "uncertain"))
@@ -58,7 +59,7 @@ def group_samples_by_block(samples: list[ByolSample]) -> dict[BlockId, list[int]
 
 
 def scan_clean_stft_h5(data_dir: str | Path) -> list[ByolSample]:
-    """Validate DEC-filtered H5 files and index only T0001-T10000 rows."""
+    """校验 DEC 过滤后的 H5，仅索引 T0010-T10000。"""
 
     root = Path(data_dir).expanduser()
     if not root.is_dir():
@@ -68,6 +69,8 @@ def scan_clean_stft_h5(data_dir: str | Path) -> list[ByolSample]:
         raise ValueError(f"No H5 files found in {root}")
     samples: list[ByolSample] = []
     for path in paths:
+        if path.stem.split("_")[0] in EXCLUDED_CLASS_CODES:
+            continue
         with h5py.File(path, "r") as h5f:
             missing = [name for name in REQUIRED_SAMPLE_DATASETS if name not in h5f]
             if missing:
@@ -107,7 +110,7 @@ def scan_clean_stft_h5(data_dir: str | Path) -> list[ByolSample]:
                     "Duplicate (source_sample_idx, rf_channel) rows in "
                     f"{path}"
                 )
-            if int(labels[0]) == 0:
+            if int(labels[0]) == 0 or int(labels[0]) not in RESEARCH_LABELS:
                 continue
             cleaning_method = _text(h5f.attrs.get("cleaning_method", ""))
             if "DCEC-background-filter" not in cleaning_method:
@@ -637,7 +640,10 @@ def export_clean_h5(data_dir, output_dir, prediction_rows, threshold, checkpoint
         raise ValueError("output-dir must differ from data-dir")
     if not math.isfinite(threshold) or not 0 <= threshold <= 1:
         raise ValueError("threshold must be finite and within [0, 1]")
-    paths = sorted(source_root.glob("*.h5"))
+    paths = [
+        path for path in sorted(source_root.glob("*.h5"))
+        if path.stem.split("_")[0] not in EXCLUDED_CLASS_CODES
+    ]
     existing = [target_root / path.name for path in paths if (target_root / path.name).exists()]
     if existing:
         raise FileExistsError(f"Refusing to overwrite {existing[0]}")

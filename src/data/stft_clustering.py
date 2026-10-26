@@ -11,6 +11,8 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import Dataset
 
+from src.data.drone_rfa_io import EXCLUDED_CLASS_CODES, RESEARCH_LABELS
+
 REQUIRED_SAMPLE_DATASETS = (
     "stft",
     "labels",
@@ -38,7 +40,7 @@ def _text_attr(value) -> str:
 
 
 def scan_clean_stft_h5(data_dir: str) -> list[StftClusterSample]:
-    """Index clean UAV STFT rows, excluding the T0000 background class."""
+    """索引 T0010-T10000 的 clean STFT，排除背景和 T0001。"""
 
     root = Path(data_dir).expanduser()
     if not root.is_dir():
@@ -46,6 +48,8 @@ def scan_clean_stft_h5(data_dir: str) -> list[StftClusterSample]:
 
     samples: list[StftClusterSample] = []
     for path in sorted(root.glob("*.h5")):
+        if path.stem.split("_")[0] in EXCLUDED_CLASS_CODES:
+            continue
         with h5py.File(path, "r") as h5f:
             missing = [name for name in REQUIRED_SAMPLE_DATASETS if name not in h5f]
             if missing:
@@ -76,7 +80,7 @@ def scan_clean_stft_h5(data_dir: str) -> list[StftClusterSample]:
 
             for row_idx, label in enumerate(labels):
                 label = int(label)
-                if label == 0:
+                if label == 0 or label not in RESEARCH_LABELS:
                     continue
                 samples.append(
                     StftClusterSample(
@@ -88,7 +92,7 @@ def scan_clean_stft_h5(data_dir: str) -> list[StftClusterSample]:
                     )
                 )
     if not samples:
-        raise ValueError(f"No clean T0001-T10000 STFT samples found in {root}")
+        raise ValueError(f"No clean T0010-T10000 STFT samples found in {root}")
     return samples
 
 

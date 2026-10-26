@@ -5,6 +5,8 @@ from pathlib import Path
 
 from torch.utils.data import Dataset
 
+from src.data.drone_rfa_io import RESEARCH_LABELS
+
 
 @dataclass(frozen=True)
 class ClassMapping:
@@ -30,11 +32,15 @@ class ClassMapping:
 
 
 def build_class_mapping(num_classes: int, excluded_labels: list[int] | tuple[int, ...] | None) -> ClassMapping:
+    """从原始标签空间选择研究类别，再应用额外的类别排除。"""
     excluded = set(excluded_labels or ())
     invalid = sorted(label for label in excluded if label < 0 or label >= num_classes)
     if invalid:
         raise ValueError(f"Excluded labels are outside [0, {num_classes - 1}]: {invalid}")
-    original_labels = tuple(label for label in range(num_classes) if label not in excluded)
+    original_labels = tuple(
+        label for label in range(num_classes)
+        if label in RESEARCH_LABELS and label not in excluded
+    )
     if len(original_labels) < 2:
         raise ValueError("At least two classes must remain after exclusion")
     return ClassMapping(original_labels=original_labels)

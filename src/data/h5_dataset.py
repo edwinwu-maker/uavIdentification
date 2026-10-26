@@ -4,6 +4,8 @@ import h5py
 import torch
 from torch.utils.data import Dataset
 
+from src.data.drone_rfa_io import EXCLUDED_CLASS_CODES, RESEARCH_LABELS
+
 
 class H5FeatureDataset(Dataset):
     """Load one feature array and labels from pre-computed .h5 files."""
@@ -25,6 +27,8 @@ class H5FeatureDataset(Dataset):
 
         for fname in sorted(os.listdir(cache_dir)):
             if fname.endswith(".h5"):
+                if os.path.splitext(fname)[0].split("_")[0] in EXCLUDED_CLASS_CODES:
+                    continue
                 path = os.path.join(cache_dir, fname)
                 with h5py.File(path, "r") as f:
                     if feature_key not in f:
@@ -47,7 +51,8 @@ class H5FeatureDataset(Dataset):
                     ):
                         raise ValueError(f"{dataset_name} cache has invalid rf_channel values: {path}")
                 for row_idx, label in enumerate(labels):
-                    self.index.append((path, row_idx, int(label)))
+                    if int(label) in RESEARCH_LABELS:
+                        self.index.append((path, row_idx, int(label)))
 
     def __len__(self) -> int:
         return len(self.index)

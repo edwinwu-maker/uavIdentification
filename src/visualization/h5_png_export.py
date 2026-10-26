@@ -11,6 +11,7 @@ import h5py
 import tqdm
 
 from src.utils.logger import logger
+from src.data.drone_rfa_io import EXCLUDED_CLASS_CODES
 
 
 def default_num_workers() -> int:
@@ -41,6 +42,7 @@ def list_h5_files(h5_dir: str, max_files: int | None = None) -> list[str]:
         os.path.join(h5_dir, filename)
         for filename in sorted(os.listdir(h5_dir))
         if filename.endswith(".h5")
+        and os.path.splitext(filename)[0].split("_")[0] not in EXCLUDED_CLASS_CODES
     ]
     if max_files is not None:
         return h5_files[:max_files]

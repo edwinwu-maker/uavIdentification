@@ -9,7 +9,15 @@ import numpy as np
 DRONE_CLASS_CODES = tuple(f"T{label:04b}" for label in range(17))
 CONTROLLER_CLASS_CODES = tuple(f"T{label:b}" for label in range(17, 25))
 DATASET_CLASS_CODES = frozenset((*DRONE_CLASS_CODES, *CONTROLLER_CLASS_CODES))
-LABEL_MAPPING = {class_code: label for label, class_code in enumerate(DRONE_CLASS_CODES)}
+# T0001 经人工鉴定为基于 WiFi 的射频信号，易与 WiFi 混淆，不纳入研究。
+EXCLUDED_CLASS_CODES = frozenset(("T0001",))
+NUM_ORIGINAL_CLASSES = len(DRONE_CLASS_CODES)
+# 保留 T 编码的原始整数标签；连续模型标签由 ClassMapping 生成。
+LABEL_MAPPING = {
+    class_code: label for label, class_code in enumerate(DRONE_CLASS_CODES)
+    if class_code not in EXCLUDED_CLASS_CODES
+}
+RESEARCH_LABELS = tuple(LABEL_MAPPING.values())
 
 
 @dataclass(frozen=True)
@@ -70,7 +78,7 @@ def rf_channels_for_file(path: str | os.PathLike[str]) -> tuple[int, ...]:
 def group_mat_files_by_class(mat_files: list[str]) -> dict[str, list[str]]:
     """按 DroneRFa 类别代码分组 .mat 文件，并保持每组文件名排序稳定。"""
 
-    # 这里循环遍历的是字典的 keys："T0000", "T0001", ..., "T10000"
+    # 保留 T0000 背景及 T0010-T10000 无人机类别。
     grouped = {class_code: [] for class_code in LABEL_MAPPING}
     for mat_file in sorted(mat_files):
         class_code = os.path.basename(mat_file).split("_")[0]
