@@ -23,7 +23,7 @@ import tqdm
 from src.utils.cli import log_current_command
 from src.utils.feature_specs import get_feature_spec
 from src.utils.logger import logger
-from src.visualization.h5_png_export import (
+from src.visualization.h5_to_png_utils import (
     limited_sample_count,
     list_h5_files,
     process_h5_samples,

@@ -83,7 +83,7 @@ python <script-or-command>
 │   │   ├── stft_deep_cluster.py      # 自编码器预训练、K 选择和 DCEC 训练
 │   │   └── trainer.py                # 模型训练循环
 │   ├── visualization/
-│   │   ├── h5_png_export.py          # 从 .h5 样本批量导出 PNG 的通用工具
+│   │   ├── h5_to_png_utils.py        # 从 .h5 样本批量导出 PNG 的通用工具
 │   │   └── plot_utils.py             # 通用时域、频域和 STFT 可视化工具
 │   └── utils/
 │       ├── logger.py                 # 全局日志工具
