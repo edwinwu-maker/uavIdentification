@@ -2,7 +2,7 @@
 
 Usage:
   python scripts/evaluate.py --feature stft --data-dir ~/Desktop/dataset/DroneRFa_stft_awgn_random_16class_h5 --model-path outputs/checkpoints/best_stft_16class_model.pth --split-manifest outputs/splits/full_16class_seed42.csv
-  python scripts/evaluate.py --feature cpp --data-dir ~/Desktop/dataset/DroneRFa_cpp_awgn_random_16class_h5 --model resnet18-small-stem --model-path outputs/checkpoints/best_cpp_16class_model.pth --split-manifest outputs/splits/full_16class_seed42.csv
+  python scripts/evaluate.py --feature cpp --data-dir ~/Desktop/dataset/DroneRFa_cpp_awgn_random_16class_h5 --model-path outputs/checkpoints/best_cpp_16class_model.pth --split-manifest outputs/splits/full_16class_seed42.csv
 
 """
 
@@ -23,7 +23,7 @@ sys.path.insert(0, str(REPO_ROOT))
 from src.data.drone_rfa_io import NUM_ORIGINAL_CLASSES
 from src.data.splits import load_test_subset
 from src.data.class_filter import RemappedSubset, add_exclusion_suffix, build_class_mapping
-from src.models.resnet import build_model
+from src.models.resnet import DroneRFaResNet18
 from src.training.checkpoint import load_checkpoint
 from src.training.evaluator import evaluate_with_predictions
 from src.training.metrics import compute_metrics, save_confusion_matrix_image
@@ -35,17 +35,11 @@ from src.utils.logger import logger
 from src.utils.paths import figures_dir, metrics_dir
 
 BATCH_SIZE = 64
-DEFAULT_MODEL_BY_FEATURE = {
-    "stft": "resnet18",
-    "cpp": "resnet18-small-stem",
-}
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(description="Evaluate ResNet on pre-computed DroneRFa features")
+    parser = argparse.ArgumentParser(description="Evaluate ResNet on pre-computed DroneRFa features", allow_abbrev=False)
     parser.add_argument("--feature", type=str, default="stft", choices=("stft", "cpp"))
-    parser.add_argument("--model", type=str, default=None, choices=("resnet18", "resnet18-small-stem"),
-                        help="Model architecture (default: resnet18 for STFT, resnet18-small-stem for CPP)")
     parser.add_argument("--data-dir", type=str, default=None, help="Directory containing feature .h5 files")
     parser.add_argument("--model-path", type=str, default=None, help="Path to model checkpoint")
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
@@ -66,7 +60,6 @@ def parse_args(argv=None):
     args = parser.parse_args(argv)
 
     spec = get_feature_spec(args.feature)
-    args.model = args.model if args.model is not None else DEFAULT_MODEL_BY_FEATURE[args.feature]
     args.data_dir = os.path.expanduser(args.data_dir) if args.data_dir is not None else spec.default_data_dir
     args.model_path = (
         os.path.expanduser(args.model_path)
@@ -125,7 +118,7 @@ def evaluate(args):
 
         test_loader = DataLoader(test_ds, **loader_kwargs)
 
-        model = build_model(args.model, num_classes=mapping.num_classes).to(device)
+        model = DroneRFaResNet18(num_classes=mapping.num_classes).to(device)
         logger.info("Loading model from %s", args.model_path)
         state_dict = load_checkpoint(args.model_path, map_location=device)
         model.load_state_dict(state_dict)

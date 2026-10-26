@@ -47,7 +47,6 @@ $PY scripts/precompute_cpp_h5.py \
 ```bash
 $PY scripts/train.py \
   --feature cpp \
-  --model resnet18-small-stem \
   --data-dir "$H5" \
   --files-per-class 12 \
   --split-manifest "$MANIFEST" \
@@ -73,7 +72,6 @@ $PY scripts/train.py \
 ```bash
 $PY scripts/evaluate.py \
   --feature cpp \
-  --model resnet18-small-stem \
   --data-dir "$H5" \
   --model-path "$CHECKPOINT" \
   --split-manifest "$MANIFEST" \
@@ -91,7 +89,6 @@ $PY scripts/evaluate.py \
 $PY scripts/eval_snr_accuracy_cpp.py \
   --data-dir "$RAW" \
   --model-path "$CHECKPOINT" \
-  --model resnet18-small-stem \
   --split-manifest "$MANIFEST" \
   --snrs -15 -10 -7.5 -5 -2.5 0 2.5 5 7.5 10 15 \
   --sample-length 1000000 \

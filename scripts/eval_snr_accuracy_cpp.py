@@ -52,7 +52,7 @@ from src.evaluation.snr_accuracy import (
     save_snr_confusion_matrix,
     save_prediction_diagnostics,
 )
-from src.models.resnet import build_model
+from src.models.resnet import DroneRFaResNet18
 from src.preprocess.cpp import compute_cpp, normalize_cpp
 from src.training.checkpoint import load_checkpoint
 from src.utils.cli import log_current_command
@@ -84,7 +84,6 @@ def evaluate_snr_accuracy(
     output_png: str | Path = DEFAULT_OUTPUT_PNG,
     output_cm_prefix: str = DEFAULT_OUTPUT_CM_PREFIX,
     device: str = default_device(),
-    model_name: str = "resnet18-small-stem",
     batch_size: int = DEFAULT_BATCH_SIZE,
     snrs: list[float] | tuple[float, ...] = DEFAULT_SNRS,
     sample_length: int = DEFAULT_SAMPLE_LENGTH,
@@ -140,7 +139,7 @@ def evaluate_snr_accuracy(
         torch.cuda.set_device(torch_device)
 
     logger.info("Class mapping (model -> original): %s", mapping.original_labels)
-    model = build_model(model_name, num_classes=mapping.num_classes).to(torch_device)
+    model = DroneRFaResNet18(num_classes=mapping.num_classes).to(torch_device)
     logger.info("Loading model from %s", model_path)
     state_dict = load_checkpoint(model_path, map_location=torch_device)
     model.load_state_dict(state_dict)
@@ -251,13 +250,11 @@ def evaluate_snr_accuracy(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Evaluate CPP SNR-accuracy curve on raw DroneRFa IQ files")
+    parser = argparse.ArgumentParser(description="Evaluate CPP SNR-accuracy curve on raw DroneRFa IQ files", allow_abbrev=False)
     parser.add_argument("--data-dir", type=str, default=default_raw_data_dir(),
                         help="Directory containing raw .mat files")
     parser.add_argument("--model-path", type=str, default=str(checkpoint_dir() / DEFAULT_MODEL_NAME),
                         help="Path to the trained CPP checkpoint")
-    parser.add_argument("--model", type=str, default="resnet18-small-stem", choices=("resnet18", "resnet18-small-stem"),
-                        help="Model architecture used by the CPP checkpoint")
     parser.add_argument("--output-csv", type=str, default=str(DEFAULT_OUTPUT_CSV),
                         help="CSV path for SNR results")
     parser.add_argument("--output-png", type=str, default=str(DEFAULT_OUTPUT_PNG),
@@ -315,7 +312,6 @@ def main() -> None:
         output_png=args.output_png,
         output_cm_prefix=args.output_cm_prefix,
         device=args.device,
-        model_name=args.model,
         batch_size=args.batch_size,
         snrs=args.snrs,
         sample_length=args.sample_length,

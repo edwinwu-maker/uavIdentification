@@ -2,7 +2,7 @@
 
 Usage:
   python scripts/train.py --feature stft --data-dir ~/Desktop/dataset/DroneRFa_stft_awgn_random_16class_h5 --split-manifest outputs/splits/full_16class_seed42.csv --batch-size 64
-  python scripts/train.py --feature cpp --data-dir ~/Desktop/dataset/DroneRFa_cpp_awgn_random_16class_h5 --split-manifest outputs/splits/full_16class_seed42.csv --model resnet18-small-stem --batch-size 64
+  python scripts/train.py --feature cpp --data-dir ~/Desktop/dataset/DroneRFa_cpp_awgn_random_16class_h5 --split-manifest outputs/splits/full_16class_seed42.csv --batch-size 64
   python scripts/train.py --feature cpp --data-dir ... --files-per-class 12 --split-manifest outputs/splits/random12_seed42.csv
 
 """
@@ -22,7 +22,7 @@ sys.path.insert(0, str(REPO_ROOT))
 from src.data.drone_rfa_io import NUM_ORIGINAL_CLASSES
 from src.data.splits import prepare_training_split
 from src.data.class_filter import RemappedSubset, add_exclusion_suffix, build_class_mapping
-from src.models.resnet import build_model
+from src.models.resnet import DroneRFaResNet18
 from src.training.trainer import train_model
 
 from src.utils.cli import log_current_command
@@ -36,17 +36,11 @@ TRAIN_RATIO = 0.6
 VAL_RATIO = 0.2
 PATIENCE = 10
 SPLIT_SEED = 42
-DEFAULT_MODEL_BY_FEATURE = {
-    "stft": "resnet18",
-    "cpp": "resnet18-small-stem",
-}
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(description="Train ResNet on pre-computed DroneRFa features")
+    parser = argparse.ArgumentParser(description="Train ResNet on pre-computed DroneRFa features", allow_abbrev=False)
     parser.add_argument("--feature", type=str, default="stft", choices=("stft", "cpp"))
-    parser.add_argument("--model", type=str, default=None, choices=("resnet18", "resnet18-small-stem"),
-                        help="Model architecture (default: resnet18 for STFT, resnet18-small-stem for CPP)")
     parser.add_argument("--data-dir", type=str, default=None, help="Directory containing feature .h5 files")
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
     parser.add_argument("--lr", type=float, default=LEARNING_RATE)
@@ -71,7 +65,6 @@ def parse_args(argv=None):
     args = parser.parse_args(argv)
 
     spec = get_feature_spec(args.feature)
-    args.model = args.model if args.model is not None else DEFAULT_MODEL_BY_FEATURE[args.feature]
     args.data_dir = os.path.expanduser(args.data_dir) if args.data_dir is not None else spec.default_data_dir
     args.checkpoint_path = (
         os.path.expanduser(args.checkpoint_path)
@@ -141,7 +134,7 @@ def train(args):
         train_loader = DataLoader(train_ds, shuffle=True, **loader_kwargs)
         val_loader = DataLoader(val_ds, shuffle=False, **loader_kwargs)
 
-        model = build_model(args.model, num_classes=mapping.num_classes).to(device)
+        model = DroneRFaResNet18(num_classes=mapping.num_classes).to(device)
         optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
         criterion = nn.CrossEntropyLoss()
 

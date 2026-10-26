@@ -230,6 +230,8 @@ audit 标签不参与训练或阈值选择；正式导出要求加权 audit 召�
 
 ### 训练模型
 
+STFT 与 CPP 统一使用单通道输入的 `DroneRFaResNet18`，保持对比实验的网络结构一致。
+
 ```bash
 python scripts/train.py --feature stft --data-dir ~/Desktop/dataset/DroneRFa_stft_awgn_random_16class_h5 \
   --split-manifest outputs/splits/full_16class_seed42.csv --batch-size 64
@@ -269,9 +271,9 @@ python scripts/evaluate.py --feature stft --data-dir "$STFT_H5" \
   --split-manifest "$MANIFEST" --exclude-labels 13 14 --device cuda:0
 
 # CPP：训练与常规评估
-python scripts/train.py --feature cpp --model resnet18-small-stem --data-dir "$CPP_H5" \
+python scripts/train.py --feature cpp --data-dir "$CPP_H5" \
   --split-manifest "$MANIFEST" --exclude-labels 13 14 --device cuda:0
-python scripts/evaluate.py --feature cpp --model resnet18-small-stem --data-dir "$CPP_H5" \
+python scripts/evaluate.py --feature cpp --data-dir "$CPP_H5" \
   --split-manifest "$MANIFEST" --exclude-labels 13 14 --device cuda:0
 ```
 
