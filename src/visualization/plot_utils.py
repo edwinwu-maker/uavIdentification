@@ -7,6 +7,11 @@ from src.utils.logger import logger
 
 
 def _import_pyplot(show: bool):
+    """按显示需求选择绘图后端，并延迟导入、返回 pyplot 模块。
+
+    show=False 时在导入 pyplot 前设置无界面的 Agg 后端，适用于服务器
+    或批量保存图片；show=True 时沿用 Matplotlib 当前的后端配置。
+    """
     if not show:
         import matplotlib
 
