@@ -13,8 +13,8 @@ def log_dir() -> Path:
     return output_dir() / "logs"
 
 
-def checkpoint_dir() -> Path:
-    return output_dir() / "checkpoints"
+def model_dir() -> Path:
+    return output_dir() / "models"
 
 
 def figures_dir() -> Path:

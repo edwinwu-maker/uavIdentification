@@ -6,7 +6,7 @@ Recommended layout:
 
 ```text
 outputs/
-├── checkpoints/  # Model weights and checkpoint files
+├── models/       # Trained model weights
 ├── logs/         # Training, preprocessing, and evaluation logs
 ├── figures/      # Generated plots and confusion matrix images
 └── metrics/      # Saved metrics, confusion matrices, and reports

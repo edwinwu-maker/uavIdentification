@@ -2,11 +2,11 @@ from pathlib import Path
 
 import torch
 
-from src.utils.paths import checkpoint_dir
+from src.utils.paths import model_dir
 
 
 def default_checkpoint_path(checkpoint_name: str) -> Path:
-    return checkpoint_dir() / checkpoint_name
+    return model_dir() / checkpoint_name
 
 
 def _resolve_checkpoint_path(checkpoint_path_or_name) -> Path:

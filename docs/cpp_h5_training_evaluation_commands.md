@@ -12,7 +12,7 @@ RAW=/path/to/DroneRFa
 H5=/path/to/DroneRFa_cpp_awgn_mixed3x_16class_h5
 
 MANIFEST=outputs/splits/cpp_random12_seed42.csv
-CHECKPOINT=outputs/checkpoints/best_cpp_16class_model.pth
+CHECKPOINT=outputs/models/best_cpp_16class_model.pth
 ```
 
 将 `/path/to/DroneRFa` 替换为实际原始数据目录。

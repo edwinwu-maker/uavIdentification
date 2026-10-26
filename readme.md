@@ -97,13 +97,13 @@ python <script-or-command>
 │   └── DroneRFa：用于侦测低空无人机的大规模无人机射频信号数据集.pdf
 └── outputs/
     ├── README.md                     # 统一实验输出目录规划
-    ├── checkpoints/                  # 模型 checkpoint 输出目录
+    ├── models/                       # 模型权重输出目录
     ├── figures/                      # 图片和曲线输出目录
     ├── logs/                         # 训练与评估日志输出目录
     └── metrics/                      # 指标、曲线数据和混淆矩阵输出目录
 ```
 
-`outputs/` 是统一实验输出目录。日志默认写入 `outputs/logs/`，模型 checkpoint 默认写入 `outputs/checkpoints/`，图片默认写入 `outputs/figures/`，指标和混淆矩阵数组默认写入 `outputs/metrics/`。
+`outputs/` 是统一实验输出目录。日志默认写入 `outputs/logs/`，模型权重默认写入 `outputs/models/`，图片默认写入 `outputs/figures/`，指标和混淆矩阵数组默认写入 `outputs/metrics/`。
 
 仓库内代码默认使用 `src.*` 导入路径，不使用 `drone_rfa.*` 别名。FAM 相关实现位于 `src.preprocess`，绘图工具位于 `src.visualization`。
 
@@ -219,13 +219,13 @@ python scripts/evaluate.py \
   --feature stft \
   --data-dir ~/Desktop/dataset/DroneRFa_stft_awgn_random_16class_h5 \
   --split-manifest outputs/splits/full_16class_seed42.csv \
-  --model-path outputs/checkpoints/best_stft_16class_model.pth
+  --model-path outputs/models/best_stft_16class_model.pth
 
 python scripts/evaluate.py \
   --feature cpp \
   --data-dir ~/Desktop/dataset/DroneRFa_cpp_awgn_random_16class_h5 \
   --split-manifest outputs/splits/full_16class_seed42.csv \
-  --model-path outputs/checkpoints/best_cpp_16class_model.pth
+  --model-path outputs/models/best_cpp_16class_model.pth
 ```
 
 测试脚本会输出 accuracy、precision、recall、F1-score 和 loss，并将混淆矩阵数组保存到 `outputs/metrics/`，混淆矩阵图片保存到 `outputs/figures/`。

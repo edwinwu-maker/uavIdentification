@@ -12,7 +12,7 @@ Usage:
   from scripts.eval_snr_accuracy_cpp import evaluate_snr_accuracy
   rows = evaluate_snr_accuracy(
       data_dir="E:/dataSet/DroneRFa",
-      model_path="outputs/checkpoints/best_cpp_16class_model.pth",
+      model_path="outputs/models/best_cpp_16class_model.pth",
       split_manifest="outputs/splits/full.csv",
       snrs=[0, 10, 20],
       max_samples=50,
@@ -58,7 +58,7 @@ from src.training.checkpoint import load_checkpoint
 from src.utils.cli import log_current_command
 from src.utils.device import default_device
 from src.utils.logger import logger
-from src.utils.paths import checkpoint_dir, figures_dir, metrics_dir
+from src.utils.paths import model_dir, figures_dir, metrics_dir
 
 DEFAULT_SNRS = [-15, -10, -7.5, -5, -2.5, 0, 2.5, 5, 7.5, 10]
 DEFAULT_SAMPLE_LENGTH = 1_000_000
@@ -253,7 +253,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Evaluate CPP SNR-accuracy curve on raw DroneRFa IQ files", allow_abbrev=False)
     parser.add_argument("--data-dir", type=str, default=default_raw_data_dir(),
                         help="Directory containing raw .mat files")
-    parser.add_argument("--model-path", type=str, default=str(checkpoint_dir() / DEFAULT_MODEL_NAME),
+    parser.add_argument("--model-path", type=str, default=str(model_dir() / DEFAULT_MODEL_NAME),
                         help="Path to the trained CPP checkpoint")
     parser.add_argument("--output-csv", type=str, default=str(DEFAULT_OUTPUT_CSV),
                         help="CSV path for SNR results")
@@ -291,7 +291,7 @@ def build_parser() -> argparse.ArgumentParser:
 def parse_args(argv=None):
     args = build_parser().parse_args(argv)
     if args.exclude_labels:
-        if args.model_path == str(checkpoint_dir() / DEFAULT_MODEL_NAME):
+        if args.model_path == str(model_dir() / DEFAULT_MODEL_NAME):
             args.model_path = add_exclusion_suffix(args.model_path, args.exclude_labels)
         if args.output_csv == str(DEFAULT_OUTPUT_CSV):
             args.output_csv = add_exclusion_suffix(args.output_csv, args.exclude_labels)
