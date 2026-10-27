@@ -30,7 +30,7 @@ from src.training.metrics import compute_metrics, save_confusion_matrix_image
 
 from src.utils.cli import log_current_command
 from src.utils.device import default_device
-from src.utils.feature_specs import get_feature_config
+from src.utils.feature_config import get_feature_config
 from src.utils.logger import logger
 from src.utils.paths import figures_dir, metrics_dir
 
@@ -59,24 +59,24 @@ def parse_args(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    spec = get_feature_config(args.feature)
-    args.data_dir = os.path.expanduser(args.data_dir) if args.data_dir is not None else spec.default_data_dir
+    config = get_feature_config(args.feature)
+    args.data_dir = os.path.expanduser(args.data_dir) if args.data_dir is not None else config.default_data_dir
     args.model_path = (
         os.path.expanduser(args.model_path)
         if args.model_path is not None
-        else add_exclusion_suffix(spec.model_name, args.exclude_labels)
+        else add_exclusion_suffix(config.model_name, args.exclude_labels)
     )
     args.cm_image_path = (
         os.path.expanduser(args.cm_image_path)
         if args.cm_image_path is not None
-        else add_exclusion_suffix(figures_dir() / spec.cm_image_name, args.exclude_labels)
+        else add_exclusion_suffix(figures_dir() / config.cm_image_name, args.exclude_labels)
     )
     args.split_manifest = os.path.expanduser(args.split_manifest)
     return args
 
 
 def evaluate(args):
-    spec = get_feature_config(args.feature)
+    config = get_feature_config(args.feature)
     if not Path(args.split_manifest).is_file():
         raise FileNotFoundError(f"Split manifest does not exist: {args.split_manifest}")
     device = torch.device(args.device)
@@ -87,10 +87,10 @@ def evaluate(args):
     if device.type == "cuda":
         logger.info("GPU: %s", torch.cuda.get_device_name(0))
 
-    dataset = spec.dataset_class(args.data_dir)
+    dataset = config.dataset_class(args.data_dir)
     try:
         logger.info("Loaded %d %s samples from %d .h5 files in %s",
-                    len(dataset), spec.name, len(set(s[0] for s in dataset.index)), args.data_dir)
+                    len(dataset), config.name, len(set(s[0] for s in dataset.index)), args.data_dir)
 
         test_ds = load_test_subset(
             dataset,
@@ -130,7 +130,7 @@ def evaluate(args):
 
         metrics = compute_metrics(preds, labels)
         logger.info("=" * 55)
-        logger.info("%s Test Results:", spec.name.upper())
+        logger.info("%s Test Results:", config.name.upper())
         logger.info("  Accuracy:  %.4f", metrics["accuracy"])
         logger.info("  Precision: %.4f", metrics["precision"])
         logger.info("  Recall:    %.4f", metrics["recall"])
@@ -141,7 +141,7 @@ def evaluate(args):
         cm = confusion_matrix(labels, preds, labels=range(mapping.num_classes))
         metric_path = metrics_dir()
         os.makedirs(metric_path, exist_ok=True)
-        cm_path = Path(add_exclusion_suffix(metric_path / spec.cm_array_name, args.exclude_labels))
+        cm_path = Path(add_exclusion_suffix(metric_path / config.cm_array_name, args.exclude_labels))
         np.save(cm_path, cm)
         logger.info("Confusion matrix saved to %s", cm_path)
 

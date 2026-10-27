@@ -86,7 +86,7 @@ python <script-or-command>
 │   │   └── trainer.py                # 模型训练循环
 │   └── utils/
 │       ├── logger.py                 # 全局日志工具
-│       ├── feature_specs.py          # STFT/CPP 特征配置定义
+│       ├── feature_config.py         # STFT/CPP 特征配置定义
 │       ├── device.py                 # 设备选择辅助函数
 │       ├── h5topng.py                # 从 .h5 样本批量导出 PNG 的通用工具
 │       ├── plot.py                   # 通用时域、频域和 STFT 可视化工具

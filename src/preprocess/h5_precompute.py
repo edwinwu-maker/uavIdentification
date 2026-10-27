@@ -11,12 +11,7 @@ from tqdm import tqdm
 from src.data.drone_rfa_io import select_mat_files
 from src.utils.logger import logger
 
-__all__ = ["output_h5_path", "run_precompute_batch"]
-
-
-def output_h5_path(mat_path: str, output_dir: str) -> str:
-    mat_name = os.path.basename(mat_path)
-    return os.path.join(output_dir, mat_name.replace(".mat", ".h5"))
+__all__ = ["run_precompute_batch"]
 
 
 def run_precompute_batch(

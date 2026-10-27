@@ -51,11 +51,12 @@ from src.data.drone_rfa_io import (
     read_iq_batch,
     rf_channels_for_file,
 )
-from src.preprocess.h5_precompute import run_precompute_batch, output_h5_path
+from src.preprocess.h5_precompute import run_precompute_batch
 from src.preprocess.random_snr_awgn import add_random_snr_awgn_with_snr
 from src.preprocess.stft import compute_stft
 from src.utils.cli import log_current_command
 from src.utils.device import default_device
+from src.utils.files import get_filename_with_suffix
 from src.utils.logger import logger
 
 # ── Paper parameters (match transforms.py) ──
@@ -150,7 +151,7 @@ def process_one_mat(
         raise ValueError("snr_high_min must be less than snr_high_max")
 
     mat_file = os.path.basename(mat_path)
-    out_path = output_h5_path(mat_path, output_dir)
+    out_path = os.path.join(output_dir, get_filename_with_suffix(mat_path, ".h5"))
     label = parse_label(mat_file)
     rf_channels = rf_channels_for_file(mat_file)
 

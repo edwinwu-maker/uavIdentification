@@ -35,9 +35,10 @@ from src.preprocess.cpp import (
     normalize_cpp,
     SUPPORTED_FAM_MERGE_MODES,
 )
-from src.preprocess.h5_precompute import run_precompute_batch, output_h5_path
+from src.preprocess.h5_precompute import run_precompute_batch
 from src.preprocess.random_snr_awgn import add_random_snr_awgn_with_snr
 from src.utils.cli import log_current_command
+from src.utils.files import get_filename_with_suffix
 from src.utils.logger import logger
 from src.utils.device import default_device
 
@@ -151,7 +152,7 @@ def process_one_mat(
         raise ValueError("snr_high_min must be less than snr_high_max")
 
     mat_name = os.path.basename(mat_path)
-    out_path = output_h5_path(mat_path, output_dir)
+    out_path = os.path.join(output_dir, get_filename_with_suffix(mat_path, ".h5"))
     label = parse_label(mat_name)
     rf_channels = rf_channels_for_file(mat_name)
 

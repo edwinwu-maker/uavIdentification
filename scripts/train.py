@@ -27,7 +27,7 @@ from src.training.trainer import train_model
 
 from src.utils.cli import log_current_command
 from src.utils.device import default_device
-from src.utils.feature_specs import get_feature_config
+from src.utils.feature_config import get_feature_config
 from src.utils.logger import logger
 
 BATCH_SIZE = 64
@@ -64,19 +64,19 @@ def parse_args(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    spec = get_feature_config(args.feature)
-    args.data_dir = os.path.expanduser(args.data_dir) if args.data_dir is not None else spec.default_data_dir
+    config = get_feature_config(args.feature)
+    args.data_dir = os.path.expanduser(args.data_dir) if args.data_dir is not None else config.default_data_dir
     args.model_path = (
         os.path.expanduser(args.model_path)
         if args.model_path is not None
-        else add_exclusion_suffix(spec.model_name, args.exclude_labels)
+        else add_exclusion_suffix(config.model_name, args.exclude_labels)
     )
     args.split_manifest = os.path.expanduser(args.split_manifest)
     return args
 
 
 def train(args):
-    spec = get_feature_config(args.feature)
+    config = get_feature_config(args.feature)
     device = torch.device(args.device)
     if device.type == "cuda":
         torch.cuda.set_device(device)
@@ -86,10 +86,10 @@ def train(args):
     if device.type == "cuda":
         logger.info("GPU: %s", torch.cuda.get_device_name(0))
 
-    dataset = spec.dataset_class(args.data_dir)
+    dataset = config.dataset_class(args.data_dir)
     try:
         logger.info("Loaded %d %s samples from %d .h5 files in %s",
-                    len(dataset), spec.name, len(set(s[0] for s in dataset.index)), args.data_dir)
+                    len(dataset), config.name, len(set(s[0] for s in dataset.index)), args.data_dir)
 
         manifest_exists = Path(args.split_manifest).is_file()
         train_ds, val_ds, _test_ds = prepare_training_split(
