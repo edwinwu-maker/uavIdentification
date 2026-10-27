@@ -25,7 +25,7 @@ import tqdm
 from src.data.drone_rfa_io import EXCLUDED_CLASS_CODES
 from src.utils.logger import logger
 from src.utils.cli import log_current_command
-from src.utils.feature_specs import get_feature_spec
+from src.utils.feature_specs import get_feature_config
 from src.utils.files import list_files_by_suffix
 from src.utils.samples import limited_samples
 from src.visualization.h5_to_png_utils import (
@@ -45,7 +45,7 @@ def _pooled_axis(values, output_bins):
 
 
 def _default_h5_dir() -> str:
-    return get_feature_spec("stft").default_data_dir
+    return get_feature_config("stft").default_data_dir
 
 
 def _default_save_root(h5_dir: str) -> str:

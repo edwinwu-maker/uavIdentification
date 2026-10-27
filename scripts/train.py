@@ -27,7 +27,7 @@ from src.training.trainer import train_model
 
 from src.utils.cli import log_current_command
 from src.utils.device import default_device
-from src.utils.feature_specs import get_feature_spec
+from src.utils.feature_specs import get_feature_config
 from src.utils.logger import logger
 
 BATCH_SIZE = 64
@@ -64,7 +64,7 @@ def parse_args(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    spec = get_feature_spec(args.feature)
+    spec = get_feature_config(args.feature)
     args.data_dir = os.path.expanduser(args.data_dir) if args.data_dir is not None else spec.default_data_dir
     args.model_path = (
         os.path.expanduser(args.model_path)
@@ -76,7 +76,7 @@ def parse_args(argv=None):
 
 
 def train(args):
-    spec = get_feature_spec(args.feature)
+    spec = get_feature_config(args.feature)
     device = torch.device(args.device)
     if device.type == "cuda":
         torch.cuda.set_device(device)
