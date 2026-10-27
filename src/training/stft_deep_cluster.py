@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import copy
-import random
 from dataclasses import dataclass
 
 import numpy as np
@@ -19,20 +18,14 @@ from src.models.stft_deep_cluster import StftAutoencoder, StftDcec, target_distr
 
 @dataclass(frozen=True)
 class ClusterCandidate:
-    num_clusters: int
-    silhouette: float
-    stability_ari: float
-    min_cluster_share: float
-    score: float
-    accepted: bool
+    """保存一个候选簇数的聚类质量评估结果；实例创建后字段不可修改。"""
 
-
-def set_random_seed(seed: int) -> None:
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
+    num_clusters: int           # 候选簇数 K。
+    silhouette: float           # 首次 KMeans 结果的轮廓系数，最多使用 2000 个样本计算。
+    stability_ari: float        # 三次不同种子 KMeans 结果两两比较的平均调整兰德指数（ARI）。
+    min_cluster_share: float    # 三次运行中最小的单簇样本占比，用于排除过小的簇。
+    score: float                # 综合得分：0.5 * (silhouette + stability_ari)。
+    accepted: bool              # 最小簇占比是否达到 1%，决定候选是否参与最终选择。
 
 
 def pretrain_autoencoder(
@@ -45,6 +38,22 @@ def pretrain_autoencoder(
     patience: int,
     logger=None,
 ) -> list[float]:
+    """以输入 STFT 为重建目标预训练自编码器，并恢复最佳训练损失对应的权重。
+
+    参数：
+        model: 待训练的 StftAutoencoder，会被迁移到 device 并原地更新参数。
+        loader: 非空数据加载器，每批返回 (inputs, indices)；inputs 为已预处理的
+            (B, 1, 256, 256) 浮点张量，B 为批次大小，indices 在本函数中不参与计算。
+        device: 模型和输入张量的计算设备。
+        epochs: 最大训练轮数。
+        learning_rate: AdamW 优化器的学习率，权重衰减固定为 1e-4。
+        patience: 允许连续未改善的轮数；损失须比最佳值下降超过 1e-6 才视为改善。
+        logger: 可选日志对象，需提供 info 方法；None 时不记录每轮损失日志。
+
+    返回：
+        各实际训练轮次的平均 Smooth L1 重建损失列表，按样本数加权。
+        model 的参数恢复为该训练过程中最佳损失对应的状态，不写入模型文件。
+    """
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
     model.to(device)
     best_loss = float("inf")
@@ -88,6 +97,19 @@ def encode_dataset(
     *,
     device: torch.device,
 ) -> np.ndarray:
+    """关闭梯度计算，将完整数据集编码为按全局样本索引排列的潜在向量。
+
+    参数：
+        model: 已放到 device 上的 StftAutoencoder；本函数设为 eval 模式并保持该模式。
+        loader: 每批返回 (inputs, indices) 的数据加载器；inputs 的形状为
+            (B, 1, 256, 256)，indices 为 CPU 整数张量，表示数据集中的全局样本索引。
+            须完整覆盖 0～N-1，其中 N = len(loader.dataset)，不能丢弃末批；可打乱顺序。
+        device: 输入张量迁移到的设备，须与模型所在设备一致。
+
+    返回：
+        形状为 (N, D) 的 float32 NumPy 数组，D = model.latent_dim；
+        第 i 行保存全局索引 i 的潜在向量，结果位于 CPU 内存中。
+    """
     model.eval()
     embeddings = np.empty((len(loader.dataset), model.latent_dim), dtype=np.float32)
     for inputs, indices in tqdm(loader, desc="Encoding STFT", leave=False):
@@ -103,6 +125,19 @@ def select_cluster_count(
     sample_size: int = 5000,
     seed: int = 42,
 ) -> tuple[int, list[ClusterCandidate]]:
+    """根据轮廓系数、聚类稳定性和最小簇占比选择簇数 K。
+
+    参数：
+        embeddings: 形状为 (N, D) 的 NumPy 潜在向量数组，每行对应一个样本。
+        candidates: 非空候选簇数元组，默认 (4, 6, 8, 10)；跳过不小于抽样数量的 K。
+        sample_size: 无放回抽样的数量上限，实际使用 min(sample_size, N) 个样本。
+        seed: 抽样和轮廓系数计算的种子；KMeans 分别使用 seed、seed+1、seed+2。
+
+    返回：
+        (selected_k, reports)：选中的整数簇数，以及各已评估候选的 ClusterCandidate 列表。
+        仅从最小簇占比达到 1% 的候选中选择；与最高综合得分之差小于 0.01 时取最小 K。
+        输入非二维、样本不足或没有候选通过筛选时抛出 ValueError。
+    """
     if embeddings.ndim != 2:
         raise ValueError("embeddings must be a two-dimensional array")
     if len(embeddings) < min(candidates):
@@ -169,6 +204,21 @@ def infer_dcec(
     *,
     device: torch.device,
 ) -> tuple[np.ndarray, np.ndarray]:
+    """关闭梯度计算，推理完整数据集的潜在向量和聚类软分配概率。
+
+    参数：
+        model: 已放到 device 上的 StftDcec；本函数设为 eval 模式并保持该模式。
+        loader: 每批返回 (inputs, indices) 的数据加载器；inputs 的形状为
+            (B, 1, 256, 256)，indices 为 CPU 整数张量，表示数据集中的全局样本索引。
+            须完整覆盖 0～N-1，其中 N = len(loader.dataset)，不能丢弃末批；可打乱顺序。
+        device: 输入张量迁移到的设备，须与模型所在设备一致。
+
+    返回：
+        (embeddings, probabilities)，均为 CPU 内存中的 float32 NumPy 数组：
+        embeddings 的形状为 (N, D)，D 为自编码器潜在维度；probabilities 的形状为
+        (N, K)，K 为簇数，第 i 行第 j 列表示样本 i 属于簇 j 的软分配概率。
+        两个数组均按全局样本索引排列，不返回重建图像。
+    """
     model.eval()
     latent_dim = model.autoencoder.latent_dim
     cluster_count = model.clustering.centers.shape[0]

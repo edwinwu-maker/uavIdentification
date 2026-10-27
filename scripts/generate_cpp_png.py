@@ -26,7 +26,7 @@ from src.utils.feature_specs import get_feature_config
 from src.utils.files import list_files_by_suffix
 from src.utils.logger import logger
 from src.utils.samples import limited_samples
-from src.visualization.h5_to_png_utils import (
+from src.utils.h5topng import (
     process_h5_samples,
     build_sample_png_path,
 )

@@ -82,13 +82,12 @@ python <script-or-command>
 │   │   ├── metrics.py                # 训练评估指标计算
 │   │   ├── stft_deep_cluster.py      # 自编码器预训练、K 选择和 DCEC 训练
 │   │   └── trainer.py                # 模型训练循环
-│   ├── visualization/
-│   │   ├── h5_to_png_utils.py        # 从 .h5 样本批量导出 PNG 的通用工具
-│   │   └── plot_utils.py             # 通用时域、频域和 STFT 可视化工具
 │   └── utils/
 │       ├── logger.py                 # 全局日志工具
 │       ├── feature_specs.py          # STFT/CPP 特征配置定义
 │       ├── device.py                 # 设备选择辅助函数
+│       ├── h5topng.py                # 从 .h5 样本批量导出 PNG 的通用工具
+│       ├── plot.py                   # 通用时域、频域和 STFT 可视化工具
 │       └── paths.py                  # 输出目录路径约定
 ├── docs/
 │   ├── TODO.md
@@ -105,7 +104,7 @@ python <script-or-command>
 
 `outputs/` 是统一实验输出目录。日志默认写入 `outputs/logs/`，模型权重默认写入 `outputs/models/`，图片默认写入 `outputs/figures/`，指标和混淆矩阵数组默认写入 `outputs/metrics/`。
 
-仓库内代码默认使用 `src.*` 导入路径，不使用 `drone_rfa.*` 别名。FAM 相关实现位于 `src.preprocess`，绘图工具位于 `src.visualization`。
+仓库内代码默认使用 `src.*` 导入路径，不使用 `drone_rfa.*` 别名。FAM 相关实现位于 `src.preprocess`，绘图和 H5 导图工具位于 `src.utils`。
 
 ## 常用命令
 

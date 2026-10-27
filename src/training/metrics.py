@@ -1,7 +1,7 @@
 import numpy as np
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 
-from src.visualization.plot_utils import import_pyplot
+from src.utils.plot import import_pyplot
 
 
 def save_confusion_matrix_image(cm, save_path, title="Confusion Matrix", class_labels=None):

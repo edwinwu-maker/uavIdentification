@@ -38,12 +38,12 @@ from src.training.stft_deep_cluster import (
     infer_dcec,
     pretrain_autoencoder,
     select_cluster_count,
-    set_random_seed,
     train_dcec,
 )
 from src.utils.cli import log_current_command
 from src.utils.device import default_device
 from src.utils.logger import logger
+from src.utils.seed import set_random_seed
 
 SEED = 42
 REVIEW_ROLES = (("mapping", 150), ("calibration", 50), ("audit", 50))
