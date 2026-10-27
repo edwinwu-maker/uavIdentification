@@ -1,12 +1,23 @@
 import numpy as np
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 
+from src.visualization.plot_utils import import_pyplot
+
 
 def save_confusion_matrix_image(cm, save_path, title="Confusion Matrix", class_labels=None):
-    import matplotlib
+    """使用无界面后端保存带计数标注的混淆矩阵图片，并关闭图形。
 
-    matplotlib.use("Agg", force=True)
-    import matplotlib.pyplot as plt
+    参数：
+        cm: 形状为 (C, C) 的非空 NumPy 混淆矩阵； C 为类别数。
+        save_path: 输出图片的 Path ，父目录须已存在；格式由扩展名决定。
+        title: 图片标题，默认为 "Confusion Matrix"。
+        class_labels: 两个坐标轴的类别标签序列，顺序须与矩阵行列一致；
+            None 时使用 0～C-1，长度不等于 C 时抛出 ValueError。
+
+    返回：
+        None；图片以 300 DPI 保存到 save_path。
+    """
+    plt = import_pyplot(show=False)
 
     fig, ax = plt.subplots(figsize=(12, 10))
     im = ax.imshow(cm, interpolation="nearest", cmap="Blues")
@@ -44,6 +55,17 @@ def save_confusion_matrix_image(cm, save_path, title="Confusion Matrix", class_l
 
 
 def compute_metrics(preds, labels):
+    """计算单标签分类指标。
+
+    参数：
+        preds: 一维预测类别序列，与 labels 长度相同且逐项对应。
+        labels: 一维真实类别序列，非空；类别编码须与 preds 一致。
+
+    返回：
+        包含 accuracy、precision、recall、f1 的字典，各值为 0～1。
+        accuracy 为正确样本比例，其余指标对真实或预测中出现的各类别做不加权
+        宏平均（macro）；计算中未定义的精确率、召回率或 F1 按 0 处理。
+    """
     return {
         "accuracy": accuracy_score(labels, preds),
         "precision": precision_score(labels, preds, average="macro", zero_division=0),

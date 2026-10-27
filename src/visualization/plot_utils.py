@@ -6,7 +6,7 @@ import numpy as np
 from src.utils.logger import logger
 
 
-def _import_pyplot(show: bool):
+def import_pyplot(show: bool):
     """按显示需求选择绘图后端，并延迟导入、返回 pyplot 模块。
 
     show=False 时在导入 pyplot 前设置无界面的 Agg 后端，适用于服务器
@@ -34,7 +34,7 @@ def plot_iq_time_domain(
     输出：3 张子图(I路, Q路, abs)
     """
 
-    plt = _import_pyplot(show)
+    plt = import_pyplot(show)
 
     logger.debug("plot waveform in time domain")
     sample_end = sample_start + sample_limit
@@ -84,7 +84,7 @@ def plot_iq_frequency_domain(
     输出：1 张子图(FFT abs)
     """
 
-    plt = _import_pyplot(show)
+    plt = import_pyplot(show)
 
     logger.info("plot spectrum in frequency domain")
     sample_end = sample_start + sample_limit
@@ -126,7 +126,7 @@ def plot_stft(
     绘制时频矩阵（频谱图）。
     """
 
-    plt = _import_pyplot(show)
+    plt = import_pyplot(show)
 
     title = "stft (STFT)"
     fig, ax = plt.subplots(figsize=(14, 6))
