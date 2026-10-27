@@ -5,6 +5,8 @@ from __future__ import annotations
 import torch
 import torch.nn.functional as F
 
+from src.preprocess.window import create_window
+
 # 声明模块的公开接口
 __all__ = ["compute_stft"]
 
@@ -18,7 +20,9 @@ _WINDOW_DEVICE: str | None = None
 def _get_window(device: str, win_length: int) -> torch.Tensor:
     global _WINDOW, _WINDOW_DEVICE
     if _WINDOW is None or _WINDOW_DEVICE != device or _WINDOW.numel() != win_length:
-        _WINDOW = torch.hann_window(win_length, device=device)
+        _WINDOW = create_window(
+            "hann", win_length, device=device, dtype=torch.get_default_dtype(), periodic=True
+        )
         _WINDOW_DEVICE = device
     return _WINDOW
 

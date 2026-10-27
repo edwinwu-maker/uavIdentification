@@ -30,3 +30,16 @@ def default_device(
     if mps_available:
         return "mps"
     return "cpu"
+
+
+def resolve_device(device: str | torch.device) -> torch.device:
+    """将指定设备解析为 torch.device，并检查 CUDA/MPS 后端是否可用。
+
+    指定的 CUDA/MPS 不可用时抛出 RuntimeError，不自动切换设备。
+    """
+    resolved = torch.device(device)
+    if resolved.type == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError("CUDA is not available")
+    if resolved.type == "mps" and not torch.backends.mps.is_available():
+        raise RuntimeError("MPS is not available")
+    return resolved
