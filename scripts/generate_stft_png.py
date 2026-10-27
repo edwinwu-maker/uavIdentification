@@ -22,14 +22,15 @@ import matplotlib.pyplot as plt
 import numpy as np
 import tqdm
 
+from src.data.drone_rfa_io import EXCLUDED_CLASS_CODES
 from src.utils.logger import logger
 from src.utils.cli import log_current_command
 from src.utils.feature_specs import get_feature_spec
+from src.utils.files import list_files_by_suffix
+from src.utils.samples import limited_samples
 from src.visualization.h5_to_png_utils import (
-    limited_sample_count,
-    list_h5_files,
     process_h5_samples,
-    sample_save_path,
+    build_sample_png_path,
 )
 
 FS = 100e6
@@ -97,11 +98,11 @@ def _task_generator(h5f, name_no_extension, drone_code, save_root, max_samples_p
         "hop_length": int(h5f.attrs.get("hop_length", 1024)),
         "source_time_bins": int(h5f.attrs.get("source_time_bins", 0)) or None,
     }
-    num_samples = limited_sample_count(stft.shape[0], max_samples_per_file)
+    num_samples = limited_samples(stft.shape[0], max_samples_per_file)
 
     for i in range(num_samples):
         rf_channel = int(rf_channels[i])
-        save_path = sample_save_path(save_root, drone_code, name_no_extension, i, rf_channel)
+        save_path = build_sample_png_path(save_root, drone_code, name_no_extension, i, rf_channel)
         yield (stft[i], i, rf_channel, int(labels[i]), save_path, stft_metadata)
 
 
@@ -154,7 +155,13 @@ def main() -> None:
         save_root = os.path.expanduser(args.save_root)
     os.makedirs(save_root, exist_ok=True)
 
-    h5_files = list_h5_files(h5_dir, args.max_files)
+    h5_files = [
+        path for path in list_files_by_suffix(h5_dir, ".h5")
+        if Path(path).stem.split("_")[0] not in EXCLUDED_CLASS_CODES
+    ]
+    # 先排除不纳入研究的类别，再应用文件数量限制。
+    if args.max_files is not None:
+        h5_files = h5_files[:args.max_files]
 
     logger.info(f"Found {len(h5_files)} .h5 files")
     logger.info(f"Output directory: {save_root}")

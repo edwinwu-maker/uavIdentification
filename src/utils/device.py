@@ -1,4 +1,12 @@
+import multiprocessing
+
 import torch
+
+
+def default_cpu_cores() -> int:
+    """取 CPU 核心数的一半并限制在 1～2，作为默认使用核数以控制并发内存占用。"""
+
+    return min(2, max(1, multiprocessing.cpu_count() // 2))
 
 
 def default_device(

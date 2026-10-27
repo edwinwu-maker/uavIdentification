@@ -11,23 +11,11 @@ import h5py
 import tqdm
 
 from src.utils.logger import logger
-from src.data.drone_rfa_io import EXCLUDED_CLASS_CODES
+from src.utils.device import default_cpu_cores
+from src.utils.samples import limited_samples
 
 
-def default_num_workers() -> int:
-    """取 CPU 核心数的一半并限制在 1～2 个进程，控制并发导图的内存占用。"""
-
-    return min(2, max(1, multiprocessing.cpu_count() // 2))
-
-
-def limited_sample_count(total_samples: int, max_samples_per_file: int | None) -> int:
-    """返回文件总样本数与指定上限的较小值；上限为 None 时处理全部样本。"""
-    if max_samples_per_file is None:
-        return total_samples
-    return min(total_samples, max_samples_per_file)
-
-
-def sample_save_path(
+def build_sample_png_path(
     save_root: str,
     drone_code: str,
     name_no_extension: str,
@@ -40,22 +28,6 @@ def sample_save_path(
     """
     png_name = f"{name_no_extension}_RF{rf_channel}_sample_{sample_idx:04d}.png"
     return os.path.join(save_root, drone_code, png_name)
-
-
-def list_h5_files(h5_dir: str, max_files: int | None = None) -> list[str]:
-    """扫描当前目录中的 .h5 文件，按文件名排序并排除不纳入研究的类别。
-
-    先筛选再应用 max_files 数量限制；None 表示返回全部匹配路径。
-    """
-    h5_files = [
-        os.path.join(h5_dir, filename)
-        for filename in sorted(os.listdir(h5_dir))
-        if filename.endswith(".h5")
-        and os.path.splitext(filename)[0].split("_")[0] not in EXCLUDED_CLASS_CODES
-    ]
-    if max_files is not None:
-        return h5_files[:max_files]
-    return h5_files
 
 
 def process_h5_samples(
@@ -95,7 +67,7 @@ def process_h5_samples(
             int(channel) in (0, 1) for channel in rf_channels
         ):
             raise ValueError(f"Invalid rf_channel dataset in {h5_path}; re-run precomputation")
-        num_samples = limited_sample_count(h5f[feature_key].shape[0], max_samples_per_file)
+        num_samples = limited_samples(h5f[feature_key].shape[0], max_samples_per_file)
         tasks = build_tasks(
             h5f,
             name_no_extension,
@@ -105,7 +77,7 @@ def process_h5_samples(
         )
 
         if num_workers is None:
-            num_workers = default_num_workers()
+            num_workers = default_cpu_cores()
         if num_workers == 1:
             for task in tqdm.tqdm(tasks, total=num_samples, desc=f"  {h5_name}"):
                 process_sample(task)
