@@ -67,7 +67,9 @@ python <script-or-command>
 │   │   └── snr_accuracy.py           # 不同 SNR 条件下的准确率评估工具
 │   ├── models/
 │   │   ├── resnet.py                 # 适配单通道特征输入的 ResNet-18
-│   │   └── stft_deep_cluster.py      # STFT 卷积自编码器与 DCEC 模型
+│   │   ├── autoencoder.py            # STFT 卷积自编码器
+│   │   ├── clustering.py             # DEC/DCEC 聚类层与目标分布计算
+│   │   └── dcec.py                   # STFT DCEC 模型
 │   ├── preprocess/
 │   │   ├── h5_precompute.py          # STFT/CPP .h5 预计算通用流程
 │   │   ├── random_snr_awgn.py        # 随机 SNR 加性高斯白噪声增强

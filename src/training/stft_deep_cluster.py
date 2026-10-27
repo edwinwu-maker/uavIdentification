@@ -13,7 +13,9 @@ from sklearn.metrics import adjusted_rand_score, silhouette_score
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from src.models.stft_deep_cluster import StftAutoencoder, StftDcec, target_distribution
+from src.models.autoencoder import StftAutoencoder
+from src.models.clustering import target_distribution
+from src.models.dcec import StftDcec
 
 
 @dataclass(frozen=True)

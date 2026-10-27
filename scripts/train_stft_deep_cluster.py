@@ -32,7 +32,8 @@ from src.data.stft_clustering import (
     scan_clean_stft_h5,
     source_filename,
 )
-from src.models.stft_deep_cluster import StftAutoencoder, StftDcec
+from src.models.autoencoder import StftAutoencoder
+from src.models.dcec import StftDcec
 from src.training.stft_deep_cluster import (
     encode_dataset,
     infer_dcec,
