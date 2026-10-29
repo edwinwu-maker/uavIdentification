@@ -1,61 +1,8 @@
 from __future__ import annotations
 
-import zlib
-
-import numpy as np
 import torch
 
-
-def _stable_file_seed(file_id: str) -> int:
-    """用文件名生成跨进程稳定的 32-bit seed 片段。"""
-
-    return zlib.crc32(file_id.encode("utf-8")) & 0xFFFFFFFF
-
-
-def _batch_seed(noise_seed: int, file_id: str, start_idx: int, variant_idx: int = 0) -> int:
-    # 吞吐优先：随机性绑定到 batch 身份，保证同一 batch 可复现。
-    seed_parts = [int(noise_seed), _stable_file_seed(file_id), int(start_idx)]
-    # variant_idx=0 保持原有随机序列不变；扩增版本追加独立种子维度。
-    if variant_idx != 0:
-        seed_parts.append(int(variant_idx))
-    seed_seq = np.random.SeedSequence(seed_parts)
-    return int(seed_seq.generate_state(1, dtype=np.uint64)[0] & np.uint64(0x7FFFFFFFFFFFFFFF))
-
-
-def _make_generator(device: torch.device, seed: int) -> tuple[torch.Generator, torch.device]:
-    try:
-        generator = torch.Generator(device=device)
-        generator.manual_seed(seed)
-        return generator, device
-    except RuntimeError:
-        generator = torch.Generator(device="cpu")
-        generator.manual_seed(seed)
-        return generator, torch.device("cpu")
-
-
-def _uniform(
-    shape: tuple[int, ...],
-    *,
-    low: float,
-    high: float,
-    device: torch.device,
-    generator: torch.Generator,
-    generator_device: torch.device,
-) -> torch.Tensor:
-    values = torch.empty(shape, dtype=torch.float32, device=generator_device)
-    values.uniform_(low, high, generator=generator)
-    return values.to(device)
-
-
-def _randn(
-    shape: tuple[int, ...],
-    *,
-    device: torch.device,
-    generator: torch.Generator,
-    generator_device: torch.device,
-) -> torch.Tensor:
-    values = torch.randn(shape, dtype=torch.float32, device=generator_device, generator=generator)
-    return values.to(device)
+from src.utils.random import batch_seed, make_generator, randn, uniform
 
 
 def add_random_snr_awgn(
@@ -100,13 +47,13 @@ def add_random_snr_awgn_with_snr(
 
     target_device = torch.device(device)
     iq = iq_batch.to(device=target_device, dtype=torch.complex64)
-    generator, generator_device = _make_generator(
+    generator, generator_device = make_generator(
         target_device,
-        _batch_seed(noise_seed, file_id, start_idx, variant_idx),
+        batch_seed(noise_seed, file_id, start_idx, variant_idx),
     )
 
     batch_size = iq.shape[0]
-    snr_db = _uniform(
+    snr_db = uniform(
         (batch_size,),
         low=snr_min,
         high=snr_max,
@@ -118,13 +65,13 @@ def add_random_snr_awgn_with_snr(
     noise_power = signal_power / (10.0 ** (snr_db / 10.0))
     scale = torch.sqrt(noise_power / 2.0).reshape(batch_size, 1, 1)
 
-    real_noise = _randn(
+    real_noise = randn(
         tuple(iq.shape),
         device=target_device,
         generator=generator,
         generator_device=generator_device,
     )
-    imag_noise = _randn(
+    imag_noise = randn(
         tuple(iq.shape),
         device=target_device,
         generator=generator,
