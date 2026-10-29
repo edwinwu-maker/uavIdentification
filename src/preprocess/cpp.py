@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-
 import numpy as np
 import torch
 
-from src.preprocess.fam_defaults import FAM_ALPHA_RANGE, FAM_F_RANGE
-from src.preprocess.fam_torch import fam_grid_torch
+from src.preprocess.fam_torch import FAM_ALPHA_RANGE, FAM_F_RANGE, fam_grid_torch
+from src.utils.samples import iter_padded_segments
 
 SUPPORTED_FAM_MERGE_MODES = ("mean", "max")
 DEFAULT_SEGMENT_SAMPLES = 262144
@@ -68,7 +66,7 @@ def compute_segmented_fam_grid(
     f_axis: np.ndarray | None = None
     alpha_axis: np.ndarray | None = None
 
-    for segment in _iter_padded_segments(
+    for segment in iter_padded_segments(
         x,
         segment_samples=segment_samples,
         segment_hop_samples=segment_hop_samples,
@@ -109,31 +107,6 @@ def compute_segmented_fam_grid(
         merged = merged / max_value
 
     return merged, f_axis, alpha_axis
-
-
-def _iter_padded_segments(
-    x: torch.Tensor,
-    *,
-    segment_samples: int,
-    segment_hop_samples: int,
-) -> Iterator[torch.Tensor]:
-    """Yield fixed-length IQ segments, padding the last segment with zeros."""
-
-    if not isinstance(x, torch.Tensor):
-        raise TypeError("x must be a torch.Tensor")
-
-    for start in range(0, x.numel(), segment_hop_samples):
-        segment = x[start : start + segment_samples]
-        if segment.numel() == 0:
-            continue
-        if segment.numel() < segment_samples:
-            pad = torch.zeros(
-                segment_samples - segment.numel(),
-                dtype=segment.dtype,
-                device=segment.device,
-            )
-            segment = torch.cat((segment, pad))
-        yield segment
 
 
 def compute_cpp(

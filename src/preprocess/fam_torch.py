@@ -6,17 +6,17 @@ from typing import Final, Optional
 import numpy as np
 import torch
 
-from src.preprocess.fam_defaults import (
-    FAM_ALPHA_RANGE,
-    FAM_F_RANGE,
-)
 from src.preprocess.window import create_window
 from src.utils.device import resolve_device
 from src.utils.dtype import get_real_dtype
 
 
 # 声明模块的公开接口，IDE 和静态检查工具依此识别公开 API。
-__all__ = ["fam_grid_torch"]
+__all__ = ["FAM_F_RANGE", "FAM_ALPHA_RANGE", "fam_grid_torch"]
+
+# FAM/SCF 网格默认的归一化频率 f 与循环频率 alpha 范围。
+FAM_F_RANGE: Final[tuple[float, float]] = (-0.5, 0.5)
+FAM_ALPHA_RANGE: Final[tuple[float, float]] = (-1.0, 1.0)
 
 _PRINCIPAL_DOMAIN_BOUNDARY: Final[float] = 0.5
 _FAM_NYQUIST_BIN: Final[float] = -0.5
