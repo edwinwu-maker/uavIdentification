@@ -16,8 +16,17 @@ __all__ = ["compute_stft"]
 _WINDOW: torch.Tensor | None = None
 _WINDOW_DEVICE: str | None = None
 
-
 def _get_window(device: str, win_length: int) -> torch.Tensor:
+    """
+    获取指定设备上的周期 Hann 窗，并缓存最近一次结果。
+    设备和窗口长度均与缓存一致时，直接返回缓存张量；否则重新创建。
+
+    输入：
+    device 为设备字符串（如 "cpu"、"cuda:0"、"mps"）
+    win_length 为窗口长度。
+    输出：
+    形状为 (win_length,) 的实数张量，位于 device ，创建时使用 torch 默认浮点类型。
+    """
     global _WINDOW, _WINDOW_DEVICE
     if _WINDOW is None or _WINDOW_DEVICE != device or _WINDOW.numel() != win_length:
         _WINDOW = create_window(

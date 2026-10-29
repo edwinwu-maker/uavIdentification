@@ -8,18 +8,20 @@ import torch.nn as nn
 
 def _encoder_block(in_channels: int, out_channels: int) -> nn.Sequential:
     """
+    卷积编码模块
     输入 (B, in_channels, H, W)
     输出 (B, out_channels, H // 2, W // 2)
     """
     return nn.Sequential(
         nn.Conv2d(in_channels, out_channels, kernel_size=4, stride=2, padding=1),
-        nn.GroupNorm(8, out_channels),
-        nn.LeakyReLU(0.2, inplace=True),
+        nn.GroupNorm(8, out_channels),      # 组归一化
+        nn.LeakyReLU(0.2, inplace=True),    # 激活函数
     )
 
 
 def _decoder_block(in_channels: int, out_channels: int) -> nn.Sequential:
     """
+    卷积解码模块
     输入 (B, in_channels, H, W)
     输出 (B, out_channels, 2H, 2W)
     """
