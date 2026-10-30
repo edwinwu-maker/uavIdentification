@@ -34,7 +34,7 @@ import matplotlib.pyplot as plt
 from src.data.drone_rfa_io import (
     count_iq_samples,
     parse_label,
-    read_iq_batch,
+    read_iq_samples,
     rf_channels_from_filename,
     select_mat_files,
 )
@@ -169,9 +169,9 @@ def process_one_mat(
                 range(num_samples), total=num_samples,
                 desc=f"  {filename} RF{rf_channel}", leave=False,
             ):
-                iq = read_iq_batch(
+                iq = read_iq_samples(
                     src, rf_channel=rf_channel, sample_length=sample_length,
-                    start_idx=sample_idx, end_idx=sample_idx + 1,
+                    start_sample_idx=sample_idx, end_sample_idx=sample_idx + 1,
                 )
                 iq_tensor = torch.as_tensor(iq, dtype=torch.complex64, device=device)
 

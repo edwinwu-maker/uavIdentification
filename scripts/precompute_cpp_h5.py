@@ -27,7 +27,7 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-from src.data.drone_rfa_io import count_iq_samples, parse_label, read_iq_batch, rf_channels_from_filename
+from src.data.drone_rfa_io import count_iq_samples, parse_label, read_iq_samples, rf_channels_from_filename
 from src.preprocess.cpp import (
     compute_cpp,
     DEFAULT_SEGMENT_SAMPLES,
@@ -195,12 +195,12 @@ def process_one_mat(
                     total=num_source_samples,
                     desc=f"  {mat_name} RF{rf_channel}",
                 ):
-                    iq = read_iq_batch(
+                    iq = read_iq_samples(
                         src,
                         rf_channel=rf_channel,
                         sample_length=sample_length,
-                        start_idx=sample_idx,
-                        end_idx=sample_idx + 1,
+                        start_sample_idx=sample_idx,
+                        end_sample_idx=sample_idx + 1,
                     )
                     iq = torch.as_tensor(iq, dtype=torch.complex64, device=device)
                     if noise_profile == "mixed-3x":

@@ -38,7 +38,7 @@ from src.data.drone_rfa_io import (
     NUM_ORIGINAL_CLASSES,
     build_sample_index,
     list_mat_file_labels,
-    load_iq_sample,
+    read_iq_samples,
 )
 from src.data.splits import load_test_file_ids
 from src.data.class_filter import add_exclusion_suffix, build_class_mapping
@@ -167,11 +167,13 @@ def evaluate_snr_accuracy(
                     cpp_batch = []
                     labels = []
                     for record in batch_records:
-                        iq = load_iq_sample(
+                        iq = read_iq_samples(
                             file_cache.get(record.path),
-                            record,
+                            rf_channel=record.rf_channel,
                             sample_length=sample_length,
-                        )
+                            start_sample_idx=record.sample_idx,
+                            end_sample_idx=record.sample_idx + 1,
+                        )[0]
                         noisy_iq = add_awgn_for_snr(iq, snr_db, rng)
                         noisy_iq = torch.as_tensor(noisy_iq, dtype=torch.complex64, device=device)
                         signal = noisy_iq[0]

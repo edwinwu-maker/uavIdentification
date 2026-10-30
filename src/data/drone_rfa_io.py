@@ -119,7 +119,7 @@ def select_mat_files(
         data_dir: 原始数据目录，仅扫描该目录下以 .mat 结尾的名称。
         max_files: 总文件数上限; None 表示不限制，仅 files_per_class 为 None 时生效。
         files_per_class: 每类文件数上限, 须为正整数; None 表示不按类别限量。
-        include_labels: 要保留的原始整数标签集合或序列; None 表示全部研究类别。
+        include_labels: 要保留的原始整数标签集合; None 表示全部研究类别。
     输出：
         筛选后的文件名列表，不含目录前缀；跳过 T0001 和遥控器类别。
         未按类别限量时按文件名字典序排列，否则按 LABEL_MAPPING 的类别顺序
@@ -129,37 +129,33 @@ def select_mat_files(
     if not os.path.isdir(data_dir):
         raise FileNotFoundError(f"Raw data directory does not exist: {data_dir}")
 
+    # 规范化并校验 include_labels：None 不额外筛选，指定标签转为整数并去重，非法标签排序后报错。
     allowed_labels = None
     if include_labels is not None:
-        allowed_labels = set(int(label) for label in include_labels)
-        valid_labels = set(LABEL_MAPPING.values())
-        invalid = sorted(allowed_labels - valid_labels)
+        allowed_labels = {int(label) for label in include_labels}
+        invalid = sorted(allowed_labels.difference(LABEL_MAPPING.values()))
         if invalid:
             raise ValueError(f"include_labels contains unknown labels: {invalid}")
 
+    # 按名称排序扫描 .mat 条目，并按研究类别和指定标签筛选；未知类别编码报错。
     mat_files: list[str] = []
     for filename in sorted(os.listdir(data_dir)):
         if not filename.endswith(".mat"):
             continue
-        class_code = os.path.basename(filename).split("_")[0]
-        if class_code not in DATASET_CLASS_CODES:
-            raise ValueError(f"Unknown class code in .mat file: {class_code}")
+        class_code = filename.split("_", 1)[0]
         if class_code in LABEL_MAPPING:
-            mat_files.append(filename)
-    if allowed_labels is not None:
-        filtered_files: list[str] = []
-        for filename in mat_files:
-            class_code = os.path.basename(filename).split("_")[0]
-            if class_code not in LABEL_MAPPING:
-                raise ValueError(f"Unknown class code in .mat file: {class_code}")
-            if LABEL_MAPPING[class_code] in allowed_labels:
-                filtered_files.append(filename)
-        mat_files = filtered_files
+            if allowed_labels is None or LABEL_MAPPING[class_code] in allowed_labels:
+                mat_files.append(filename)
+        elif class_code not in DATASET_CLASS_CODES:
+            raise ValueError(f"Unknown class code in .mat file: {class_code}")
+
+    # 未按类别限量时按 max_files 截取并返回（None 不限量），否则校验 files_per_class 为正数。
     if files_per_class is None:
         return mat_files[:max_files] if max_files is not None else mat_files
     if files_per_class <= 0:
         raise ValueError("files_per_class must be positive")
 
+    # 按类别顺序收集允许类别中排序靠前的 files_per_class 个文件，此模式忽略 max_files。
     grouped = group_mat_files_by_class(mat_files)
     selected: list[str] = []
     for class_code in LABEL_MAPPING:
@@ -192,7 +188,16 @@ def count_iq_samples(
     sample_length: int,
     max_samples: int | None = None,
 ) -> int:
-    """根据 HDF5 文件(原始.mat)里的总点数，计算能切出多少个固定长度的 IQ 样本"""
+    """根据所选 RF 通道的采样点数，计算完整定长 IQ 样本数.
+
+    输入：
+        src: 已打开的原始 .mat HDF5 文件.
+        rf_channel: RF 通道编号，取 0 或 1.
+        sample_length: 每个样本的采样点数(正整数).
+        max_samples: 返回样本数上限, 非负整数; None 表示不限制.
+    输出：
+        完整样本数 int.
+    """
     if rf_channel not in (0, 1):
         raise ValueError(f"rf_channel must be 0 or 1, got {rf_channel}")
     total_points = int(src[f"RF{rf_channel}_I"].shape[1])
@@ -202,68 +207,41 @@ def count_iq_samples(
     return num_samples
 
 
-def read_iq_batch(
-    src: h5py.File,
+def read_iq_samples(
+    h5_file: h5py.File,
     *,
     rf_channel: int,
     sample_length: int,
-    start_idx: int,
-    end_idx: int,
+    start_sample_idx: int,
+    end_sample_idx: int,
 ) -> np.ndarray:
-    """按样本区间读取 HDF5 格式 .mat 文件中的 IQ 数据，组装为复数数组。
+    """按样本区间读取 .mat(HDF5 格式) 文件中的 IQ 数据，组装为复数数组。
 
     输入：
-        src：已打开的 HDF5 文件，所选通道的 RF{rf_channel}_I 和
+        h5_file: 已打开的 HDF5 文件，所选通道的 RF{rf_channel}_I 和
             RF{rf_channel}_Q 数据集形状须为 (1, 总采样点数)。
-        rf_channel：RF 通道编号，取 0 或 1；其他值抛出 ValueError。
-        sample_length：每个样本的采样点数，须为正整数。
-        start_idx：起始样本编号，从 0 开始，包含该样本。
-        end_idx：结束样本编号，不包含该样本；须满足
-            0 <= start_idx <= end_idx，且对应数据区间不超出所选通道。
+        rf_channel: RF 通道编号，取 0 或 1。
+        sample_length: 每个样本的采样点数，须为正整数。
+        start_sample_idx: 起始样本编号, 从 0 开始，包含该样本。
+        end_sample_idx: 结束样本编号，不包含该样本；须满足
+            0 <= start_sample_idx <= end_sample_idx, 且对应数据区间不超出所选通道。
     输出：
-        形状为 (end_idx - start_idx, 1, sample_length) 的 np.complex64 数组，
-        实部为 I、虚部为 Q；中间维度表示单个已选 RF 通道。
+        形状为 (end_sample_idx - start_sample_idx, 1, sample_length) 的 np.complex64 数组，
+        实部为 I、虚部为 Q; 中间维度表示单个已选 RF 通道。
     """
-    batch_size = end_idx - start_idx
-    offset = start_idx * sample_length
-    end = end_idx * sample_length
+    num_samples = end_sample_idx - start_sample_idx
+    start_point_idx = start_sample_idx * sample_length
+    end_point_idx = end_sample_idx * sample_length
 
     if rf_channel not in (0, 1):
         raise ValueError(f"rf_channel must be 0 or 1, got {rf_channel}")
-    rf_i = src[f"RF{rf_channel}_I"][0, offset:end].reshape(batch_size, sample_length)
-    rf_q = src[f"RF{rf_channel}_Q"][0, offset:end].reshape(batch_size, sample_length)
+    i_samples = h5_file[f"RF{rf_channel}_I"][0, start_point_idx:end_point_idx].reshape(num_samples, sample_length)
+    q_samples = h5_file[f"RF{rf_channel}_Q"][0, start_point_idx:end_point_idx].reshape(num_samples, sample_length)
 
-    iq_batch = np.empty((batch_size, 1, sample_length), dtype=np.complex64)
-    iq_batch[:, 0, :].real = rf_i
-    iq_batch[:, 0, :].imag = rf_q
-    return iq_batch
-
-
-def load_iq_sample(
-    src: h5py.File,
-    record: SampleRecord,
-    *,
-    sample_length: int,
-) -> np.ndarray:
-    """从已打开的 HDF5 文件中读取一条复数 IQ 样本。
-
-    输入：
-        src：已打开的原始 .mat HDF5 文件，须与 record.path 对应。
-        record：样本索引记录，使用其中的 rf_channel 和 sample_idx 定位数据；
-            本函数不使用 path 打开文件，也不使用 label。
-        sample_length：每个样本的采样点数，须与构建 record 时使用的长度一致。
-    输出：
-        形状为 (1, sample_length) 的 np.complex64 数组，实部为 I、虚部为 Q。
-    """
-
-    iq_batch = read_iq_batch(
-        src,
-        rf_channel=record.rf_channel,
-        sample_length=sample_length,
-        start_idx=record.sample_idx,
-        end_idx=record.sample_idx + 1,
-    )
-    return iq_batch[0]
+    iq_samples = np.empty((num_samples, 1, sample_length), dtype=np.complex64)
+    iq_samples[:, 0, :].real = i_samples
+    iq_samples[:, 0, :].imag = q_samples
+    return iq_samples
 
 
 def build_sample_index(
@@ -278,32 +256,34 @@ def build_sample_index(
     """扫描原始 .mat 文件，生成稳定的样本索引。
 
     输入：
-        data_dir：原始 .mat 数据目录。
-        sample_length：每个样本的采样点数，须为正整数；各 RF 通道独立切分，
-            不足一个完整样本的尾部数据不计入索引。
-        max_files：总文件数上限；None 表示不限制，仅 files_per_class 为 None 时生效。
-        files_per_class：每类文件数上限，须为正整数；None 表示不按类别限量。
-        max_samples_per_file：每个文件的每个所选 RF 通道的样本数上限，
-            应为非负整数；None 表示不限制，背景文件双通道分别应用此上限。
-        file_ids：要保留的文件标识集合，标识为不含路径及扩展名的文件名；
+        data_dir: 原始 .mat 数据目录。
+        sample_length: 每个样本的采样点数；各 RF 通道独立切分，不足一个完整样本的尾部数据不计入索引。
+        max_files: 总文件数上限； None 表示不限制，仅 files_per_class 为 None 时生效。
+        files_per_class: 每类文件数上限； None 表示不按类别限量。
+        max_samples_per_file: 每个文件的每个所选 RF 通道的样本数上限;
+            None 表示不限制，背景文件双通道分别应用此上限。
+        file_ids: 要保留的文件标识集合，标识为不含路径及扩展名的文件名；
             None 表示不额外筛选，此筛选在文件数量限制之后应用。
     输出：
-        SampleRecord 列表，按选定文件顺序、RF 通道顺序和样本编号递增顺序排列；
+        SampleRecord 列表， 按选定文件顺序、RF 通道顺序和样本编号递增顺序排列；
         每条记录保存文件路径、从 0 开始的通道内样本编号、原始整数标签和 RF 通道。
         仅读取数据集形状以计算样本数，不加载 IQ 数据；读取样本时须沿用 sample_length。
     """
 
     sample_index: list[SampleRecord] = []
+    # 稳定选择研究类别的 .mat 文件，优先应用每类文件数限制，否则应用总文件数限制。
     mat_files = select_mat_files(
         data_dir,
         max_files=max_files,
         files_per_class=files_per_class,
     )
+    # 在文件数量限制后按不含扩展名的文件标识筛选；file_ids 为 None 时保留全部已选文件。
     if file_ids is not None:
         mat_files = [
             filename for filename in mat_files
             if os.path.splitext(filename)[0] in file_ids
         ]
+    # 逐文件按选定 RF 通道统计完整样本数，依次记录路径、原始标签、通道及样本编号，不读取 IQ 数据。
     for filename in mat_files:
         path = os.path.join(data_dir, filename)
         label = parse_label(filename)

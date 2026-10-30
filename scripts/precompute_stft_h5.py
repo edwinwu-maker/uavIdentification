@@ -47,7 +47,7 @@ from tqdm import tqdm
 from src.data.drone_rfa_io import (
     count_iq_samples,
     parse_label,
-    read_iq_batch,
+    read_iq_samples,
     rf_channels_from_filename,
 )
 from src.preprocess.h5_precompute import run_precompute_batch
@@ -214,12 +214,12 @@ def process_one_mat(
                     desc=f"  {mat_file} RF{rf_channel}",
                 ):
                     batch_end = min(sample_idx + batch_size, num_source_samples)
-                    chunk_iq = read_iq_batch(
+                    chunk_iq = read_iq_samples(
                         src,
                         rf_channel=rf_channel,
                         sample_length=sample_length,
-                        start_idx=sample_idx,
-                        end_idx=batch_end,
+                        start_sample_idx=sample_idx,
+                        end_sample_idx=batch_end,
                     )
                     chunk_iq = torch.as_tensor(chunk_iq, dtype=torch.complex64, device=device)
                     source_indices = np.arange(sample_idx, batch_end, dtype=np.int64)
