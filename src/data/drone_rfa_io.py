@@ -33,23 +33,6 @@ class SampleRecord:
     rf_channel: int  # RF 通道编号，取 0 或 1，用于选择对应的 I/Q 数据集。
 
 
-class H5FileHandleCache:
-    """缓存并统一关闭 HDF5 文件句柄。"""
-
-    def __init__(self) -> None:
-        self._files: dict[str, h5py.File] = {}
-
-    def get(self, path: str) -> h5py.File:
-        if path not in self._files:
-            self._files[path] = h5py.File(path, "r", rdcc_nbytes=64 * 1024 * 1024)
-        return self._files[path]
-
-    def close(self) -> None:
-        for file_obj in self._files.values():
-            file_obj.close()
-        self._files.clear()
-
-
 def parse_label(mat_file: str) -> int:
     """从 DroneRFa 文件名中解析原始整数类别标签。
 

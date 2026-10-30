@@ -12,6 +12,7 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset
 
 from src.data.drone_rfa_io import EXCLUDED_CLASS_CODES, RESEARCH_LABELS
+from src.utils.files import h5_attr_to_text
 
 REQUIRED_SAMPLE_DATASETS = (
     "stft",
@@ -31,12 +32,6 @@ class StftClusterSample:
     label: int
     rf_channel: int
     source_sample_idx: int
-
-
-def _text_attr(value) -> str:
-    if isinstance(value, bytes):
-        return value.decode("utf-8")
-    return str(value)
 
 
 def scan_clean_stft_h5(data_dir: str) -> list[StftClusterSample]:
@@ -63,7 +58,7 @@ def scan_clean_stft_h5(data_dir: str) -> list[StftClusterSample]:
             for name in REQUIRED_SAMPLE_DATASETS[1:]:
                 if h5f[name].shape[:1] != (count,):
                     raise ValueError(f"Dataset '{name}' has invalid length in {path}")
-            if _text_attr(h5f.attrs.get("noise_profile", "")) != "clean":
+            if h5_attr_to_text(h5f.attrs.get("noise_profile", "")) != "clean":
                 raise ValueError(f"Only noise_profile=clean is supported: {path}")
 
             labels = h5f["labels"][:]

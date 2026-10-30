@@ -34,7 +34,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from src.data.drone_rfa_io import (
-    H5FileHandleCache,
     NUM_ORIGINAL_CLASSES,
     build_sample_index,
     list_mat_file_labels,
@@ -56,6 +55,7 @@ from src.training.model_io import load_model
 from src.preprocess.stft import compute_stft
 from src.utils.cli import log_current_command
 from src.utils.device import default_device
+from src.utils.files import H5FileHandleCache
 from src.utils.logger import logger
 from src.utils.paths import default_raw_data_dir, model_dir, figures_dir, metrics_dir
 

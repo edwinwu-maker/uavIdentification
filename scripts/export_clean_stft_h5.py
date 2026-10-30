@@ -22,12 +22,12 @@ from src.data.stft_cleaning_export import (
     export_clean_h5_files,
     map_cluster_semantics,
     model_sha256,
-    read_csv,
     validate_and_join_reviews,
     write_json,
     write_manifest,
 )
 from src.utils.cli import log_current_command
+from src.utils.files import read_csv_records
 from src.utils.logger import logger
 
 
@@ -54,9 +54,9 @@ def main() -> None:
         if not path.is_file():
             raise FileNotFoundError(f"Required clustering artifact does not exist: {path}")
 
-    review_rows = read_csv(review_path)
-    lookup_rows = read_csv(lookup_path)
-    assignment_rows = read_csv(assignments_path)
+    review_rows = read_csv_records(review_path)
+    lookup_rows = read_csv_records(lookup_path)
+    assignment_rows = read_csv_records(assignments_path)
     joined_reviews = validate_and_join_reviews(review_rows, lookup_rows)
     if not assignment_rows:
         raise ValueError("assignments.csv is empty")

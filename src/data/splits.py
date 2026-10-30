@@ -11,7 +11,7 @@ __all__ = ["load_test_file_ids", "load_test_subset", "prepare_training_split"]
 SPLIT_NAMES = ("train", "val", "test")
 
 
-def _file_split_counts(
+def _compute_file_split_counts(
     file_count: int,
     *,
     train_ratio: float,
@@ -67,7 +67,7 @@ def _build_file_split(
         generator = torch.Generator().manual_seed(seed + label)
         order = torch.randperm(len(file_ids), generator=generator).tolist()
         file_ids = [file_ids[index] for index in order]
-        train_count, val_count, _ = _file_split_counts(
+        train_count, val_count, _ = _compute_file_split_counts(
             len(file_ids),
             train_ratio=train_ratio,
             val_ratio=val_ratio,
@@ -136,8 +136,7 @@ def _save_file_split_manifest(
         file_labels: 待写入的 {文件 ID: 整数标签}。
         split_by_file: {文件 ID: 子集名称}，须包含 file_labels 中的全部 ID。
     输出：
-        返回 None；按文件 ID 排序写入 file_id、label、split 三列。
-        自动创建父目录，目标文件已存在时覆盖。
+        返回 None ；按文件 ID 排序写入 file_id、label、split 三列。
     """
     path = Path(manifest_path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -159,23 +158,22 @@ def _load_file_split_manifest(
     files_per_class: int | None,
     include_labels: set[int] | None = None,
 ) -> dict[str, str]:
-    """读取并校验已有 CSV manifest，可按类别筛选划分记录。
+    """读取并校验已有 CSV manifest ，可按类别筛选划分记录。
 
     输入：
-        manifest_path: 已存在的 CSV 路径，接受字符串或 os.PathLike。
-        file_labels: 当前数据集的 {文件 ID: 整数标签}，用于校验文件和标签。
-        files_per_class: 每类文件数的校验值，None 表示不校验数量。
-        include_labels: 要保留的整数标签集合，None 表示不筛选类别。
+        manifest_path: 已存在的 CSV 路径。
+        file_labels: 数据集的 {文件 ID: 整数标签}。
+        files_per_class: 每类文件数的校验值， None 表示不校验数量。
+        include_labels: 要保留的整数标签集合， None 表示不筛选类别。
     输出：
         校验并筛选后的 {文件 ID: 子集名称} 字典。
-        CSV 必须包含 file_id、label、split 列，所选每类须覆盖三个子集。
-        路径不存在时抛出 FileNotFoundError，记录不符合校验要求时抛出 ValueError。
     """
     path = Path(manifest_path)
     if not path.is_file():
         raise FileNotFoundError(f"Split manifest does not exist: {path}")
 
-    split_by_file: dict[str, str] = {}
+    # 文件 ID 映射到所属子集名称：train、val 或 test。
+    file_id_to_split: dict[str, str] = {}
     manifest_labels: dict[str, int] = {}
     with path.open(newline="", encoding="utf-8") as file_obj:
         reader = csv.DictReader(file_obj)
@@ -189,15 +187,15 @@ def _load_file_split_manifest(
             split_name = row["split"]
             if split_name not in SPLIT_NAMES:
                 raise ValueError(f"Unknown split '{split_name}' for file {file_id}")
-            if file_id in split_by_file:
+            if file_id in file_id_to_split:
                 raise ValueError(f"Duplicate file_id in split manifest: {file_id}")
-            split_by_file[file_id] = split_name
+            file_id_to_split[file_id] = split_name
             manifest_labels[file_id] = int(row["label"])
 
-    if not split_by_file:
+    if not file_id_to_split:
         raise ValueError(f"Split manifest is empty: {path}")
 
-    missing = sorted(set(split_by_file) - set(file_labels))
+    missing = sorted(set(file_id_to_split) - set(file_labels))
     if missing:
         raise ValueError(
             "Split manifest contains files missing from the dataset: "
@@ -213,9 +211,9 @@ def _load_file_split_manifest(
     dataset_labels = set(file_labels.values())
     if include_labels is not None:
         dataset_labels &= include_labels
-        split_by_file = {
+        file_id_to_split = {
             file_id: split_name
-            for file_id, split_name in split_by_file.items()
+            for file_id, split_name in file_id_to_split.items()
             if manifest_labels[file_id] in include_labels
         }
         manifest_labels = {
@@ -234,7 +232,7 @@ def _load_file_split_manifest(
         )
 
     grouped_splits: dict[int, set[str]] = defaultdict(set)
-    for file_id, split_name in split_by_file.items():
+    for file_id, split_name in file_id_to_split.items():
         grouped_splits[manifest_labels[file_id]].add(split_name)
     incomplete = {
         label: sorted(set(SPLIT_NAMES) - grouped_splits[label])
@@ -259,7 +257,7 @@ def _load_file_split_manifest(
                 "Split manifest file counts do not match files_per_class="
                 f"{files_per_class}: {invalid}"
             )
-    return split_by_file
+    return file_id_to_split
 
 
 def _collect_file_labels(path_labels: list[tuple[str, int]]) -> dict[str, int]:
@@ -268,19 +266,20 @@ def _collect_file_labels(path_labels: list[tuple[str, int]]) -> dict[str, int]:
     输入：
         path_labels: 按样本排列的 (文件路径, 整数标签) 列表，同文件可重复出现。
     输出：
-        {文件 ID: 整数标签} 字典，ID 为不含最后一个扩展名的文件名。
-        同 ID 的记录合并；标签不一致时抛出 ValueError。
+        {文件 ID: 整数标签} 字典， ID 不含最后一个扩展名。
     """
     file_labels: dict[str, int] = {}
-    for path, label in path_labels:
-        file_id = Path(path).stem
-        previous_label = file_labels.setdefault(file_id, label)
+    # 同一文件可对应大量样本，按路径与标签去重以减少路径解析，并保留标签冲突检查。
+    for path, label in dict.fromkeys(path_labels):
+        file_id = Path(path).stem   # 提取文件名（不包含目录路径和最后一个扩展名）
+        # 检查字典 file_labels 中是否存在键 file_id。如果存在，返回原来的值；如果不存在，则添加 {file_id, label}，并返回 label。
+        previous_label = file_labels.setdefault(file_id, label) 
         if previous_label != label:
             raise ValueError(f"File has multiple labels: {file_id}")
     return file_labels
 
 
-def _indices_by_split(
+def _group_indices_by_split(
     path_labels: list[tuple[str, int]],
     split_by_file: dict[str, str],
 ) -> dict[str, list[int]]:
@@ -315,14 +314,13 @@ def prepare_training_split(
     输入：
         dataset: 带 index 属性的数据集，每项 entry[0] 为路径、entry[2] 为标签。
         manifest_path: CSV 路径；已存在时校验并复用，不存在时创建。
-        train_ratio: 新建划分时每类训练文件的比例，默认 0.6。
-        val_ratio: 新建划分时每类验证文件的比例，默认 0.2。
-        seed: 新建划分及抽取文件时的随机种子，默认 42。
+        train_ratio: 新建划分时每类训练文件的比例。
+        val_ratio: 新建划分时每类验证文件的比例。
+        seed: 新建划分及抽取文件时的随机种子。
         files_per_class: 新建时每类抽取的文件数，复用时校验每类文件数。
             None 表示新建时使用全部文件、复用时不校验数量。
     输出：
         按 (训练集, 验证集, 测试集) 顺序返回三个 torch.utils.data.Subset。
-        子集引用原始 dataset，同一源文件的样本不会跨子集。
     """
 
     path_labels = [(entry[0], int(entry[2])) for entry in dataset.index]
@@ -347,7 +345,7 @@ def prepare_training_split(
         )
         _save_file_split_manifest(manifest_path, selected_file_labels, split_by_file)
 
-    indices = _indices_by_split(path_labels, split_by_file)
+    indices = _group_indices_by_split(path_labels, split_by_file)
     return (
         Subset(dataset, indices["train"]),
         Subset(dataset, indices["val"]),
@@ -361,15 +359,15 @@ def load_test_file_ids(
     manifest_path: str | os.PathLike[str],
     include_labels: list[int] | tuple[int, ...] | set[int] | None = None,
 ) -> set[str]:
-    """严格读取已有 manifest，并返回指定类别的测试文件 ID。
+    """严格读取已有 manifest ，并返回指定类别的测试文件 ID。
 
     输入：
         path_labels: 当前数据集的 (文件路径, 整数标签) 列表，同文件可重复出现。
-        manifest_path: 已存在的 CSV manifest 路径，接受字符串或 os.PathLike。
-        include_labels: 要保留的标签列表、元组或集合，None 表示不筛选类别。
+        manifest_path: 已存在的 CSV manifest 路径。
+        include_labels: 要保留的标签列表、元组或集合， None 表示不筛选类别。
     输出：
-        测试文件 ID 集合 set[str]，ID 为不含最后一个扩展名的文件名。
-        原始 .mat 与同名预计算 .h5 可匹配相同 ID；本函数不创建或修改 manifest。
+        测试文件 ID 集合 set[str], ID 为不含最后一个扩展名的文件名。
+        原始 .mat 与同名预计算 .h5 可匹配相同 ID。
     """
 
     file_labels = _collect_file_labels(path_labels)
@@ -396,8 +394,7 @@ def load_test_subset(
         dataset: 带 index 属性的数据集，每项 entry[0] 为路径、entry[2] 为标签。
         manifest_path: 已存在的 CSV manifest 路径，接受字符串或 os.PathLike。
     输出：
-        引用原始 dataset 的 torch.utils.data.Subset，按原始索引顺序包含测试样本。
-        不创建或修改 manifest；没有可用测试样本时抛出 ValueError。
+        引用原始 dataset 的 torch.utils.data.Subset ，按原始索引顺序包含测试样本。
     """
 
     path_labels = [(entry[0], int(entry[2])) for entry in dataset.index]

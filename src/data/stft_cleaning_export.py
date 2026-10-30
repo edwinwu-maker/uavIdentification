@@ -25,11 +25,6 @@ MANUAL_LABELS = frozenset(("background", "signal", "uncertain"))
 REVIEW_ROLES = frozenset(("mapping", "calibration", "audit"))
 
 
-def read_csv(path: str | Path) -> list[dict[str, str]]:
-    with Path(path).open(newline="", encoding="utf-8") as file_obj:
-        return list(csv.DictReader(file_obj))
-
-
 def validate_and_join_reviews(
     review_rows: list[dict[str, str]],
     lookup_rows: list[dict[str, str]],
