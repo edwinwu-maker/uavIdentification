@@ -1,4 +1,5 @@
 import csv
+import hashlib
 import os
 from collections.abc import Iterator
 from pathlib import Path
@@ -65,6 +66,21 @@ def read_csv_records(path: str | Path) -> list[dict[str, str]]:
     """
     with Path(path).open(newline="", encoding="utf-8") as file_obj:
         return list(csv.DictReader(file_obj))
+
+
+def compute_file_sha256(path: str | Path) -> str:
+    """按 1 MiB 分块读取文件内容，计算 SHA-256 指纹。
+
+    输入：
+        path: 待计算文件的路径，接受字符串或 Path。
+    输出：
+        64 字符的小写十六进制字符串；文件读取异常直接向调用方传播。
+    """
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as file_obj:
+        for chunk in iter(lambda: file_obj.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def h5_attr_to_text(value: object) -> str:

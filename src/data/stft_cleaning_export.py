@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import csv
-import hashlib
 import json
 import math
 import os
@@ -21,7 +20,9 @@ from sklearn.metrics import (
 
 from src.data.drone_rfa_io import EXCLUDED_CLASS_CODES
 
+# 允许的人工复核标签：background=背景，signal=信号，uncertain=无法判定。
 MANUAL_LABELS = frozenset(("background", "signal", "uncertain"))
+# 复核样本用途：mapping=聚类语义映射，calibration=背景阈值校准，audit=清洗效果审计。
 REVIEW_ROLES = frozenset(("mapping", "calibration", "audit"))
 
 
@@ -29,19 +30,31 @@ def validate_and_join_reviews(
     review_rows: list[dict[str, str]],
     lookup_rows: list[dict[str, str]],
 ) -> list[dict[str, str]]:
+    """校验人工复核记录，并按 review_id 关联样本定位信息。
+
+    输入：
+        review_rows: 已填写的 review.csv 记录列表(人工标签)。
+        lookup_rows: review_lookup.csv 记录列表(程序生成)。
+    输出：
+        按 review_rows 顺序返回关联后的记录列表
+    """
+    # 按 review_id 建立程序生成表的索引，拒绝重复 ID，并要求两表记录数一致。
     lookup = {row["review_id"]: row for row in lookup_rows}
     if len(lookup) != len(lookup_rows):
         raise ValueError("review_lookup.csv contains duplicate review_id values")
     if len(review_rows) != len(lookup_rows):
         raise ValueError("review.csv and review_lookup.csv must contain the same rows")
-
+    # 按人工复核表顺序保存关联后的记录，包含样本定位信息和人工标签。
     joined: list[dict[str, str]] = []
+    # 已处理的 review_id，用于检测人工复核表中的重复记录。
     seen: set[str] = set()
     for row in review_rows:
+        # 拒绝重复或未在程序生成表中登记的 review_id，并记录本次已处理的 ID。
         review_id = row.get("review_id", "")
         if review_id in seen or review_id not in lookup:
             raise ValueError(f"Unknown or duplicate review_id: {review_id}")
         seen.add(review_id)
+        # 人工标签去除首尾空白并转为小写；复核用途和标签均须属于各自的允许集合。
         role = row.get("review_role", "")
         label = row.get("manual_label", "").strip().lower()
         if role not in REVIEW_ROLES:
@@ -50,9 +63,11 @@ def validate_and_join_reviews(
             raise ValueError(
                 f"manual_label for {review_id} must be background, signal, or uncertain"
             )
+        # 核对程序生成表中的原始复核用途，防止人工修改样本的 mapping/calibration/audit 角色。
         lookup_row = lookup[review_id]
         if lookup_row.get("review_role") != role:
             raise ValueError(f"review_role was changed for {review_id}")
+        # 复制原始索引记录并写入已校验的角色和规范化标签，保留样本定位字段。
         joined.append({**lookup_row, "review_role": role, "manual_label": label})
     return joined
 
@@ -93,6 +108,15 @@ def map_cluster_semantics(
 
 
 def _background_score(assignment: dict[str, str], background_clusters: set[int]) -> float:
+    """汇总单个样本分配到所有背景簇的软分配权重，计算背景评分。
+
+    输入：
+        assignment: assignments.csv 中的一条样本记录，须包含各背景簇对应的
+            q_<cluster_id> 字段，字段值为数值字符串。
+        background_clusters: 经聚类语义映射确定为背景的簇编号集合。
+    输出：
+        将各背景簇的权重转为 float 后累加的评分。
+    """
     return sum(float(assignment[f"q_{cluster_id}"]) for cluster_id in background_clusters)
 
 
@@ -210,14 +234,6 @@ def evaluate_background_audit(
         "balanced_accuracy": balanced,
         "confusion_matrix": confusion_matrix(y_true, y_pred, labels=(0, 1)).tolist(),
     }
-
-
-def model_sha256(path: str | Path) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as file_obj:
-        for chunk in iter(lambda: file_obj.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _copy_row_dataset(

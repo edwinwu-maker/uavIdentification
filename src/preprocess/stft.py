@@ -1,4 +1,4 @@
-"""STFT precompute helpers."""
+"""STFT 计算与特征预处理工具。"""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import torch.nn.functional as F
 from src.preprocess.window import create_window
 
 # 声明模块的公开接口
-__all__ = ["compute_stft"]
+__all__ = ["compute_stft", "clip_scale_and_pool_stft"]
 
 # 进程内缓存 Hann window，避免重复调用 STFT 时每次都重新创建。
 # `_WINDOW_DEVICE` 记录缓存所在设备；同一个设备、同一个窗口长度
@@ -90,3 +90,25 @@ def compute_stft(
         Zxx_norm = (Zxx_db - mean) / (std + 1e-8)
         Zxx_norm = Zxx_norm.reshape(B, C, out_f, target_time_bins)
     return Zxx_norm
+
+
+def clip_scale_and_pool_stft(stft: torch.Tensor, output_size: int = 256) -> torch.Tensor:
+    """对单个 z-score STFT 截断、缩放并做自适应平均池化，供聚类模型使用。
+
+    输入：
+        stft: 已完成 z-score 标准化的实数张量，形状为 (1, H, W)，所有元素须为有限值。
+        output_size: 池化后的空间边长，须为正整数，默认 256。
+    输出：
+        形状为 (1, output_size, output_size) 的 torch.float32 张量，设备与输入相同。
+    """
+
+    # 仅接受单样本、单通道的 (1, H, W) 张量，避免误传批次或多通道数据。
+    if stft.ndim != 3 or stft.shape[0] != 1:
+        raise ValueError(f"Expected one STFT with shape (1, H, W), got {tuple(stft.shape)}")
+    # 拒绝 NaN 和正负 Inf，防止异常值传播到池化结果和模型。
+    if not torch.isfinite(stft).all():
+        raise ValueError("STFT contains non-finite values")
+    # 转为 float32，将 z-score 值截断到 [-5, 5] 并缩放至 [-1, 1]，限制极端值影响。
+    stft = stft.to(dtype=torch.float32).clamp(-5.0, 5.0).div(5.0)
+    # 自适应平均池化至 (1, output_size, output_size)，统一模型输入的空间尺寸。
+    return F.adaptive_avg_pool2d(stft, (output_size, output_size))

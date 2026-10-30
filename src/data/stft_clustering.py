@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from pathlib import Path
 
 import h5py
 import torch
-import torch.nn.functional as F
 from torch.utils.data import Dataset
 
 from src.data.drone_rfa_io import EXCLUDED_CLASS_CODES, RESEARCH_LABELS
+from src.preprocess.stft import clip_scale_and_pool_stft
 from src.utils.files import h5_attr_to_text
 
 REQUIRED_SAMPLE_DATASETS = (
@@ -27,11 +26,13 @@ REQUIRED_SAMPLE_DATASETS = (
 
 @dataclass(frozen=True)
 class StftClusterSample:
-    path: str
-    row_idx: int
-    label: int
-    rf_channel: int
-    source_sample_idx: int
+    """不可变的单个 clean STFT 样本索引，保存位置、类别及来源信息。"""
+
+    path: str               # 存储 STFT 特征的 H5 文件绝对路径。
+    row_idx: int            # H5 中 stft 数据集的样本行索引，从 0 开始。
+    label: int              # 原始 DroneRFa 整数类别标签，未重映射为模型标签。
+    rf_channel: int         # 原始 IQ 数据所属的 RF 通道编号，取 0 或 1。
+    source_sample_idx: int  # 所选 RF 通道内原始定长 IQ 样本编号，从 0 开始，可与 row_idx 不同。
 
 
 def scan_clean_stft_h5(data_dir: str) -> list[StftClusterSample]:
@@ -91,17 +92,6 @@ def scan_clean_stft_h5(data_dir: str) -> list[StftClusterSample]:
     return samples
 
 
-def preprocess_stft(stft: torch.Tensor, output_size: int = 256) -> torch.Tensor:
-    """Clip, scale, and average-pool one z-score STFT for model input."""
-
-    if stft.ndim != 3 or stft.shape[0] != 1:
-        raise ValueError(f"Expected one STFT with shape (1, H, W), got {tuple(stft.shape)}")
-    if not torch.isfinite(stft).all():
-        raise ValueError("STFT contains non-finite values")
-    stft = stft.to(dtype=torch.float32).clamp(-5.0, 5.0).div(5.0)
-    return F.adaptive_avg_pool2d(stft, (output_size, output_size))
-
-
 class CleanStftClusteringDataset(Dataset):
     """Lazily load clean UAV STFT rows and return stable global indices."""
 
@@ -117,7 +107,7 @@ class CleanStftClusteringDataset(Dataset):
         sample = self.samples[index]
         h5f = self._get_file(sample.path)
         value = torch.from_numpy(h5f["stft"][sample.row_idx])
-        return preprocess_stft(value, self.output_size), index
+        return clip_scale_and_pool_stft(value, self.output_size), index
 
     def _get_file(self, path: str) -> h5py.File:
         if path not in self.files:
@@ -133,7 +123,3 @@ class CleanStftClusteringDataset(Dataset):
         for h5f in self.files.values():
             h5f.close()
         self.files.clear()
-
-
-def source_filename(sample: StftClusterSample) -> str:
-    return os.path.basename(sample.path)

@@ -21,13 +21,12 @@ from src.data.stft_cleaning_export import (
     evaluate_background_audit,
     export_clean_h5_files,
     map_cluster_semantics,
-    model_sha256,
     validate_and_join_reviews,
     write_json,
     write_manifest,
 )
 from src.utils.cli import log_current_command
-from src.utils.files import read_csv_records
+from src.utils.files import compute_file_sha256, read_csv_records
 from src.utils.logger import logger
 
 
@@ -118,7 +117,7 @@ def main() -> None:
         assignment_rows=assignment_rows,
         semantics=semantics,
         threshold=threshold,
-        model_hash=model_sha256(model_path),
+        model_hash=compute_file_sha256(model_path),
     )
     write_manifest(work_dir / "cleaning_manifest.csv", manifest)
     total_decisions = sum(decision_counts.values())

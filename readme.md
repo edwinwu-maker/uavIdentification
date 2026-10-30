@@ -73,7 +73,6 @@ python <script-or-command>
 │   ├── preprocess/
 │   │   ├── h5_precompute.py          # STFT/CPP .h5 预计算通用流程
 │   │   ├── random_snr_awgn.py        # 随机 SNR 加性高斯白噪声增强
-│   │   ├── rf_segmentation.py        # RF 片段选择与截取工具
 │   │   ├── stft.py                   # STFT 频谱图特征生成
 │   │   ├── cpp.py                    # 单通道 CPP/FAM 网格生成
 │   │   └── fam_torch.py              # PyTorch FAM/SCF 计算与默认坐标范围，支持 CPU/CUDA/MPS

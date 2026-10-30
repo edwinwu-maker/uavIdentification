@@ -30,7 +30,6 @@ from src.data.stft_clustering import (
     CleanStftClusteringDataset,
     StftClusterSample,
     scan_clean_stft_h5,
-    source_filename,
 )
 from src.models.autoencoder import StftAutoencoder
 from src.models.dcec import StftDcec
@@ -211,7 +210,7 @@ def write_assignments(
         for index, sample in enumerate(samples):
             row = {
                 "sample_index": index,
-                "source_file": source_filename(sample),
+                "source_file": Path(sample.path).name,
                 "source_row_idx": sample.row_idx,
                 "original_label": sample.label,
                 "rf_channel": sample.rf_channel,
@@ -283,7 +282,7 @@ def write_review_artifacts(
                     "review_id": review_id,
                     "review_role": role,
                     "sample_index": sample_index,
-                    "source_file": source_filename(sample),
+                    "source_file": Path(sample.path).name,
                     "source_row_idx": sample.row_idx,
                     "cluster_id": int(probabilities[sample_index].argmax()),
                 })
