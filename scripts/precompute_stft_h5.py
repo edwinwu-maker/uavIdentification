@@ -46,10 +46,9 @@ from tqdm import tqdm
 
 from src.data.drone_rfa_io import (
     count_iq_samples,
-    default_raw_data_dir,
     parse_label,
     read_iq_batch,
-    rf_channels_for_file,
+    rf_channels_from_filename,
 )
 from src.preprocess.h5_precompute import run_precompute_batch
 from src.preprocess.random_snr_awgn import add_random_snr_awgn_with_snr
@@ -58,6 +57,7 @@ from src.utils.cli import log_current_command
 from src.utils.device import default_device
 from src.utils.files import get_filename_with_suffix
 from src.utils.logger import logger
+from src.utils.paths import default_raw_data_dir
 
 # ── Paper parameters (match transforms.py) ──
 SAMPLE_LENGTH = 10_000_000
@@ -153,7 +153,7 @@ def process_one_mat(
     mat_file = os.path.basename(mat_path)
     out_path = os.path.join(output_dir, get_filename_with_suffix(mat_path, ".h5"))
     label = parse_label(mat_file)
-    rf_channels = rf_channels_for_file(mat_file)
+    rf_channels = rf_channels_from_filename(mat_file)
 
     logger.info("Processing: %s", mat_file)
     os.makedirs(output_dir, exist_ok=True)

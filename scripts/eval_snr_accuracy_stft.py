@@ -37,7 +37,6 @@ from src.data.drone_rfa_io import (
     H5FileHandleCache,
     NUM_ORIGINAL_CLASSES,
     build_sample_index,
-    default_raw_data_dir,
     list_mat_file_labels,
     load_iq_sample,
 )
@@ -58,7 +57,7 @@ from src.preprocess.stft import compute_stft
 from src.utils.cli import log_current_command
 from src.utils.device import default_device
 from src.utils.logger import logger
-from src.utils.paths import model_dir, figures_dir, metrics_dir
+from src.utils.paths import default_raw_data_dir, model_dir, figures_dir, metrics_dir
 
 DEFAULT_SNRS = [-15, -10, -7.5, -5, -2.5, 0, 2.5, 5, 7.5, 10]
 DEFAULT_SAMPLE_LENGTH = 10_000_000

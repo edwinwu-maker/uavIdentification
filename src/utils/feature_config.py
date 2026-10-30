@@ -6,9 +6,9 @@ from typing import Type
 
 from torch.utils.data import Dataset
 
-from src.data.drone_rfa_io import default_raw_data_dir
 from src.data.cpp_dataset import CppDataset
 from src.data.stft_dataset import StftDataset
+from src.utils.paths import default_raw_data_dir
 
 
 @dataclass(frozen=True)

@@ -12,36 +12,36 @@ class H5FeatureDataset(Dataset):
 
     def __init__(
         self,
-        cache_dir: str,
+        h5_dir: str,
         *,
         feature_key: str,
         dataset_name: str = "H5 feature",
     ) -> None:
-        if not os.path.isdir(cache_dir):
-            raise FileNotFoundError(f"{dataset_name} cache directory does not exist: {cache_dir}")
+        if not os.path.isdir(h5_dir):
+            raise FileNotFoundError(f"{dataset_name} H5 directory does not exist: {h5_dir}")
 
-        self.cache_dir = cache_dir
+        self.h5_dir = h5_dir
         self.feature_key = feature_key
         self.index = []  # list of (file_path, row_idx, label)
         self.files = {}  # path -> opened h5py.File (lazy)
 
-        for fname in sorted(os.listdir(cache_dir)):
+        for fname in sorted(os.listdir(h5_dir)):
             if fname.endswith(".h5"):
                 if os.path.splitext(fname)[0].split("_")[0] in EXCLUDED_CLASS_CODES:
                     continue
-                path = os.path.join(cache_dir, fname)
+                path = os.path.join(h5_dir, fname)
                 with h5py.File(path, "r") as f:
                     if feature_key not in f:
-                        raise ValueError(f"{dataset_name} cache is missing dataset '{feature_key}': {path}")
+                        raise ValueError(f"{dataset_name} H5 file is missing dataset '{feature_key}': {path}")
                     feature_shape = f[feature_key].shape
                     if len(feature_shape) != 4 or feature_shape[1] != 1:
                         raise ValueError(
-                            f"{dataset_name} cache must have shape (N, 1, H, W), got {feature_shape} in {path}. "
+                            f"{dataset_name} H5 feature data must have shape (N, 1, H, W), got {feature_shape} in {path}. "
                             "Re-run precomputation; legacy dual-channel caches are not supported."
                         )
                     if "rf_channel" not in f:
                         raise ValueError(
-                            f"{dataset_name} cache is missing the rf_channel dataset: {path}. "
+                            f"{dataset_name} H5 file is missing the rf_channel dataset: {path}. "
                             "Re-run precomputation."
                         )
                     labels = f["labels"][:]
@@ -49,7 +49,7 @@ class H5FeatureDataset(Dataset):
                     if rf_channels.shape != labels.shape or not all(
                         int(channel) in (0, 1) for channel in rf_channels
                     ):
-                        raise ValueError(f"{dataset_name} cache has invalid rf_channel values: {path}")
+                        raise ValueError(f"{dataset_name} H5 file has invalid rf_channel values: {path}")
                 for row_idx, label in enumerate(labels):
                     if int(label) in RESEARCH_LABELS:
                         self.index.append((path, row_idx, int(label)))

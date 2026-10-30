@@ -33,10 +33,9 @@ import matplotlib.pyplot as plt
 
 from src.data.drone_rfa_io import (
     count_iq_samples,
-    default_raw_data_dir,
     parse_label,
     read_iq_batch,
-    rf_channels_for_file,
+    rf_channels_from_filename,
     select_mat_files,
 )
 from src.evaluation.snr_accuracy import format_snr_for_filename
@@ -50,6 +49,7 @@ from src.preprocess.random_snr_awgn import add_random_snr_awgn_with_snr
 from src.utils.cli import log_current_command
 from src.utils.device import default_device
 from src.utils.logger import logger
+from src.utils.paths import default_raw_data_dir
 
 SAMPLE_LENGTH = 1_000_000
 F_BINS = 257
@@ -71,7 +71,7 @@ def _signal_code_for_title(filename: str) -> str:
     signal_codes = [token for token in stem.split("_") if re.fullmatch(r"S[01]{4}", token)]
     if len(signal_codes) != 1:
         # 通道解析函数会给出统一的文件名错误；这里不维护第二套校验文案。
-        rf_channels_for_file(filename)
+        rf_channels_from_filename(filename)
     return signal_codes[0]
 
 
@@ -151,7 +151,7 @@ def process_one_mat(
     """读取一个原始文件，并为每个样本和目标 SNR 输出一张 CPP PNG。"""
 
     filename = os.path.basename(mat_path)
-    rf_channels = rf_channels_for_file(filename)
+    rf_channels = rf_channels_from_filename(filename)
     signal_code = _signal_code_for_title(filename)
     label = parse_label(filename)
     conditions: tuple[float | None, ...] = (None,) if clean else snrs

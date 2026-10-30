@@ -27,8 +27,7 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-from src.data.drone_rfa_io import default_raw_data_dir
-from src.data.drone_rfa_io import count_iq_samples, parse_label, read_iq_batch, rf_channels_for_file
+from src.data.drone_rfa_io import count_iq_samples, parse_label, read_iq_batch, rf_channels_from_filename
 from src.preprocess.cpp import (
     compute_cpp,
     DEFAULT_SEGMENT_SAMPLES,
@@ -41,6 +40,7 @@ from src.utils.cli import log_current_command
 from src.utils.files import get_filename_with_suffix
 from src.utils.logger import logger
 from src.utils.device import default_device
+from src.utils.paths import default_raw_data_dir
 
 SAMPLE_LENGTH = 1_000_000
 F_BINS = 257
@@ -154,7 +154,7 @@ def process_one_mat(
     mat_name = os.path.basename(mat_path)
     out_path = os.path.join(output_dir, get_filename_with_suffix(mat_path, ".h5"))
     label = parse_label(mat_name)
-    rf_channels = rf_channels_for_file(mat_name)
+    rf_channels = rf_channels_from_filename(mat_name)
 
     logger.info("Processing: %s", mat_name)
     os.makedirs(output_dir, exist_ok=True)

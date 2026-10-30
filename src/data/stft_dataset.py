@@ -25,8 +25,8 @@ class StftDataset(H5FeatureDataset):
     across all files, so each index maps to a single stft slice.
     """
 
-    def __init__(self, cache_dir: str) -> None:
-        super().__init__(cache_dir, feature_key="stft", dataset_name="Stft")
+    def __init__(self, h5_dir: str) -> None:
+        super().__init__(h5_dir, feature_key="stft", dataset_name="Stft")
 
 
 if __name__ == "__main__":
