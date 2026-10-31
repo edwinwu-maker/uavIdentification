@@ -52,7 +52,7 @@ python <script-or-command>
 │   ├── generate_raw_cpp_png.py       # 从原始 .mat IQ 按指定 SNR 生成单通道 CPP/FAM PNG
 │   ├── generate_stft_png.py          # 从 STFT .h5 生成单通道频谱图 PNG
 │   ├── generate_cpp_png.py           # 从 CPP/FAM .h5 生成单通道 CPP/FAM PNG
-│   ├── train_stft_deep_cluster.py    # 训练 STFT DCEC 并生成盲审样本
+│   ├── train_stft_dcec.py            # 训练 STFT DCEC 并生成盲审样本
 │   └── export_clean_stft_h5.py       # 根据人工审核结果剔除纯背景并导出 H5
 ├── src/
 │   ├── data/
@@ -174,7 +174,7 @@ H5 生成的 STFT 图片默认保存到 H5 目录旁的 `stft_png/`，CPP/FAM �
 其中 150 条用于簇语义映射、50 条用于阈值校准、50 条用于独立审核：
 
 ```bash
-python scripts/train_stft_deep_cluster.py \
+python scripts/train_stft_dcec.py \
   --data-dir ~/Desktop/dataset/DroneRFa_stft_16class_h5 \
   --work-dir outputs/stft_dec_background \
   --device mps

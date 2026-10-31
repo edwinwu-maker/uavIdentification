@@ -1,5 +1,6 @@
 from collections.abc import Iterator
 
+import numpy as np
 import torch
 
 
@@ -15,6 +16,50 @@ def limited_samples(total_samples: int, max_samples: int | None) -> int:
     if max_samples is None:
         return total_samples
     return min(total_samples, max_samples)
+
+
+def allocate_evenly(total: int, group_count: int) -> list[int]:
+    """将整数总量尽量均匀地分配到各组。
+
+    输入：
+        total: 待分配的非负整数总量。
+        group_count: 正整数分组数；输入约束由调用方保证。
+    输出：
+        长度为 group_count 的整数列表，第 i 项为组 i 的配额，总和为 total。
+        余数依次分给前几个组，各组配额最多相差 1。
+    示例：
+        allocate_evenly(10, 3) 返回 [4, 3, 3]。
+    """
+    # base: 每组基础数量
+    # remainder: 有 remainder 个组，需要多分配 1 个元素
+    base, remainder = divmod(total, group_count)
+    return [base + (group_id < remainder) for group_id in range(group_count)]
+
+
+def prioritize_spread_indices(
+    indices: np.ndarray, values: np.ndarray, front_count: int
+) -> list[int]:
+    """按数值排序候选索引，优先排列覆盖整个排序区间的索引。
+
+    输入：
+        indices: 一维、不重复的有效整数索引数组。
+        values: 可按 indices 访问的一维数值数组；输入约束由调用方保证。
+        front_count: 希望前置的索引数量，整数。
+    输出：
+        完整的 Python 索引列表；先按排序位置均匀取点并取整，前置最多 front_count 项，
+        再按数值升序追加其余索引。front_count <= 0 时仅返回按数值排序的索引列表。
+        均匀取点针对排序位置，数值间距未必相等；不修改输入数组。
+    """
+    ordered = indices[np.argsort(values[indices])]
+    if len(ordered) <= 1 or front_count <= 0:
+        return ordered.tolist()
+    positions = np.linspace(
+        0, len(ordered) - 1, min(front_count, len(ordered))
+    ).round().astype(int)
+    # 取点数不超过候选数，取整后的位置互异；掩码保留其余索引的排序顺序。
+    remaining_mask = np.ones(len(ordered), dtype=bool)
+    remaining_mask[positions] = False
+    return np.concatenate((ordered[positions], ordered[remaining_mask])).tolist()
 
 
 def iter_padded_segments(
