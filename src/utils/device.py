@@ -1,6 +1,21 @@
 import torch
 
 
+def setup_device(device: str | torch.device, logger) -> torch.device:
+    """解析并记录计算设备；CUDA 模式下同时设置进程的当前设备。
+
+    不检查后端可用性或自动回退，解析及初始化异常直接向调用方传播。
+    """
+    resolved = torch.device(device)
+    if resolved.type == "cuda":
+        torch.cuda.set_device(resolved)
+
+    logger.info("Using device: %s", resolved, stacklevel=2)
+    if resolved.type == "cuda":
+        logger.info("GPU: %s", torch.cuda.get_device_name(resolved), stacklevel=2)
+    return resolved
+
+
 def default_device(
     *,
     cuda_available: bool | None = None,

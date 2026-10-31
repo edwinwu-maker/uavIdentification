@@ -27,7 +27,7 @@ from src.data.splits import prepare_training_split
 from src.models.resnet import DroneRFaResNet18
 from src.training.trainer import train_model
 from src.utils.cli import log_current_command
-from src.utils.device import default_device
+from src.utils.device import default_device, setup_device
 from src.utils.feature_config import get_feature_config
 from src.utils.logger import logger
 
@@ -78,14 +78,7 @@ def main() -> None:
 
     # 准备特征配置与计算设备，沿用现有设备选择逻辑。
     config = get_feature_config(args.feature)
-    device = torch.device(args.device)
-    if device.type == "cuda":
-        torch.cuda.set_device(device)
-
-    logger.info("Single-GPU mode")
-    logger.info("Using device: %s", device)
-    if device.type == "cuda":
-        logger.info("GPU: %s", torch.cuda.get_device_name(0))
+    device = setup_device(args.device, logger)
 
     dataset = config.dataset_class(args.data_dir)
     try:

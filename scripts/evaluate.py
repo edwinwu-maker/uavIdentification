@@ -17,7 +17,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 import numpy as np
-import torch
 import torch.nn as nn
 from sklearn.metrics import confusion_matrix
 from torch.utils.data import DataLoader
@@ -26,11 +25,11 @@ from src.data.class_filter import RemappedSubset, add_exclusion_suffix, build_cl
 from src.data.drone_rfa_io import NUM_ORIGINAL_CLASSES
 from src.data.splits import load_test_subset
 from src.models.resnet import DroneRFaResNet18
-from src.training.evaluator import evaluate_with_predictions
+from src.training.evaluator import evaluate
 from src.training.metrics import compute_metrics, save_confusion_matrix_image
 from src.training.model_io import load_model
 from src.utils.cli import log_current_command
-from src.utils.device import default_device
+from src.utils.device import default_device, setup_device
 from src.utils.feature_config import get_feature_config
 from src.utils.logger import logger
 from src.utils.paths import figures_dir, metrics_dir
@@ -83,13 +82,7 @@ def main() -> None:
         raise FileNotFoundError(f"Split manifest does not exist: {args.split_manifest}")
 
     # 初始化计算设备，CUDA 模式下设置当前设备。
-    device = torch.device(args.device)
-    if device.type == "cuda":
-        torch.cuda.set_device(device)
-
-    logger.info("Using device: %s", device)
-    if device.type == "cuda":
-        logger.info("GPU: %s", torch.cuda.get_device_name(0))
+    device = setup_device(args.device, logger)
 
     dataset = config.dataset_class(args.data_dir)
     try:
@@ -134,8 +127,8 @@ def main() -> None:
 
         # 关闭梯度的评估循环由辅助函数负责，返回损失、预测类别和真实标签。
         criterion = nn.CrossEntropyLoss()
-        test_loss, _test_acc, preds, labels = evaluate_with_predictions(
-            model, test_loader, criterion, device
+        test_loss, _test_acc, preds, labels = evaluate(
+            model, test_loader, criterion, device, desc="Testing", return_predictions=True
         )
 
         # 保持既有指标口径：accuracy 及宏平均 precision、recall、F1。
@@ -149,7 +142,7 @@ def main() -> None:
         logger.info("  Test Loss: %.4f", test_loss)
         logger.info("=" * 55)
 
-        # 矩阵覆盖所有模型类别（含未出现的类别），图片坐标轴显示对应的原始标签。
+        # 生成混淆矩阵
         cm = confusion_matrix(labels, preds, labels=range(mapping.num_classes))
         metric_path = metrics_dir()
         metric_path.mkdir(parents=True, exist_ok=True)
