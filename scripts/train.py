@@ -7,24 +7,25 @@ Usage:
 
 """
 
+from __future__ import annotations
+
 import argparse
 import os
 import sys
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
+
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO_ROOT))
-
+from src.data.class_filter import RemappedSubset, add_exclusion_suffix, build_class_mapping
 from src.data.drone_rfa_io import NUM_ORIGINAL_CLASSES
 from src.data.splits import prepare_training_split
-from src.data.class_filter import RemappedSubset, add_exclusion_suffix, build_class_mapping
 from src.models.resnet import DroneRFaResNet18
 from src.training.trainer import train_model
-
 from src.utils.cli import log_current_command
 from src.utils.device import default_device
 from src.utils.feature_config import get_feature_config
@@ -38,7 +39,7 @@ PATIENCE = 10
 SPLIT_SEED = 42
 
 
-def build_parser():
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train ResNet on pre-computed DroneRFa features", allow_abbrev=False)
     parser.add_argument("--feature", type=str, default="stft", choices=("stft", "cpp"))
     parser.add_argument("--data-dir", type=str, default=None, help="Directory containing feature .h5 files")
@@ -57,13 +58,9 @@ def build_parser():
                         help="Shared CSV manifest for file-level train/val/test splitting")
     parser.add_argument("--exclude-labels", type=int, nargs="*", default=None,
                         help="Original class labels to exclude, e.g. --exclude-labels 10 11")
-    return parser
-
-
-def parse_args(argv=None):
-    parser = build_parser()
     args = parser.parse_args(argv)
 
+    # 按特征补齐默认路径，类别排除实验使用独立的权重文件名。
     config = get_feature_config(args.feature)
     args.data_dir = os.path.expanduser(args.data_dir) if args.data_dir is not None else config.default_data_dir
     args.model_path = (
@@ -75,7 +72,11 @@ def parse_args(argv=None):
     return args
 
 
-def train(args):
+def main() -> None:
+    args = parse_args()
+    log_current_command(logger)
+
+    # 准备特征配置与计算设备，沿用现有设备选择逻辑。
     config = get_feature_config(args.feature)
     device = torch.device(args.device)
     if device.type == "cuda":
@@ -91,6 +92,7 @@ def train(args):
         logger.info("Loaded %d %s samples from %d .h5 files in %s",
                     len(dataset), config.name, len(set(s[0] for s in dataset.index)), args.data_dir)
 
+        # 按源文件创建或复用划分；已有清单须与当前数据一致。
         manifest_exists = Path(args.split_manifest).is_file()
         train_ds, val_ds, _test_ds = prepare_training_split(
             dataset,
@@ -100,6 +102,8 @@ def train(args):
             seed=SPLIT_SEED,
             files_per_class=args.files_per_class,
         )
+
+        # 过滤排除类别，并将原始标签映射为模型输出使用的连续编号。
         mapping = build_class_mapping(NUM_ORIGINAL_CLASSES, args.exclude_labels)
         train_ds = RemappedSubset(train_ds, mapping)
         val_ds = RemappedSubset(val_ds, mapping)
@@ -122,6 +126,7 @@ def train(args):
             *split_file_counts,
         )
 
+        # 训练打乱样本、验证保持顺序；多进程模式才启用预取与常驻进程。
         loader_kwargs = dict(
             batch_size=args.batch_size,
             num_workers=args.num_workers,
@@ -134,10 +139,12 @@ def train(args):
         train_loader = DataLoader(train_ds, shuffle=True, **loader_kwargs)
         val_loader = DataLoader(val_ds, shuffle=False, **loader_kwargs)
 
+        # 分类输出数与保留类别一致，优化器和损失函数沿用原训练配置。
         model = DroneRFaResNet18(num_classes=mapping.num_classes).to(device)
         optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
         criterion = nn.CrossEntropyLoss()
 
+        # 训练循环负责验证、早停及最佳权重保存；此处仅编排参数。
         result = train_model(
             model=model,
             train_loader=train_loader,
@@ -153,15 +160,9 @@ def train(args):
             eval_desc="Evaluating",
         )
         logger.info("Training complete. Best val_acc: %.4f", result.best_val_acc)
-        return result
     finally:
+        # 正常结束或任一步骤失败时，都关闭数据集持有的 H5 句柄。
         dataset.close()
-
-
-def main():
-    args = parse_args()
-    log_current_command(logger)
-    train(args)
 
 
 if __name__ == "__main__":

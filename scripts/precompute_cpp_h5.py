@@ -14,6 +14,8 @@ Usage:
   python scripts/precompute_cpp_h5.py --data-dir ~/Desktop/dataset/droneRFa --clean
 """
 
+from __future__ import annotations
+
 import argparse
 import os
 import sys
@@ -37,9 +39,9 @@ from src.preprocess.cpp import (
 from src.preprocess.h5_precompute import run_precompute_batch
 from src.preprocess.random_snr_awgn import add_random_snr_awgn_with_snr
 from src.utils.cli import log_current_command
+from src.utils.device import default_device
 from src.utils.files import get_filename_with_suffix
 from src.utils.logger import logger
-from src.utils.device import default_device
 from src.utils.paths import default_raw_data_dir
 
 SAMPLE_LENGTH = 1_000_000
@@ -48,8 +50,8 @@ ALPHA_BINS = 257
 SUPPORTED_NOISE_PROFILES = ("random", "mixed-3x")
 
 
-def parse_args() -> argparse.Namespace:
-    """Parse command-line arguments for the .mat to CPP .h5 conversion script."""
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """解析 CPP 预计算参数，保留既有范围与互斥校验。"""
 
     parser = argparse.ArgumentParser(description="Convert DroneRFa .mat IQ files to CPP/FAM .h5 files")
     parser.add_argument("--data-dir", type=str, default=default_raw_data_dir(),
@@ -104,7 +106,9 @@ def parse_args() -> argparse.Namespace:
                         help="Maximum SNR for the mixed-3x high-SNR version")
     parser.add_argument("--noise-seed", type=int, default=42,
                         help="Seed for deterministic AWGN")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+
+    # 转换前校验噪声范围与互斥选项，避免无效配置进入文件处理。
     if args.snr_min > args.snr_max:
         parser.error("--snr-min must be <= --snr-max")
     if args.snr_low_min >= args.snr_low_max:
@@ -142,7 +146,7 @@ def process_one_mat(
     snr_high_max: float = 15.0,
     noise_seed: int = 42,
 ) -> tuple[str, int]:
-    """Convert one DroneRFa .mat file into one CPP .h5 file."""
+    """转换单个 MAT 文件，返回源文件名与写入的单通道 CPP 样本总数。"""
 
     if noise_profile not in (*SUPPORTED_NOISE_PROFILES, "clean"):
         raise ValueError(f"Unsupported noise profile: {noise_profile}")
@@ -154,6 +158,7 @@ def process_one_mat(
     mat_name = os.path.basename(mat_path)
     out_path = os.path.join(output_dir, get_filename_with_suffix(mat_path, ".h5"))
     label = parse_label(mat_name)
+    # 各 RF 通道独立形成样本；背景保留双通道，其他文件沿用指定通道。
     rf_channels = rf_channels_from_filename(mat_name)
 
     logger.info("Processing: %s", mat_name)
@@ -169,8 +174,10 @@ def process_one_mat(
             for rf_channel in rf_channels
         }
 
+        # mixed-3x 为每条源样本输出 clean、低 SNR、高 SNR 三个版本。
         variants_per_sample = 3 if noise_profile == "mixed-3x" else 1
         num_samples = sum(channel_sample_counts.values()) * variants_per_sample
+        # 输入和输出均由上下文管理器关闭，读取或特征计算失败时也释放句柄。
         with h5py.File(out_path, "w") as h5f:
             h5f.create_dataset(
                 "cpp",
@@ -220,6 +227,7 @@ def process_one_mat(
                         variant_iq = iq
                         snr_value = np.nan
                         if not is_clean:
+                            # 文件、RF 通道、样本起点和版本共同确定随机身份。
                             variant_iq, sampled_snr = add_random_snr_awgn_with_snr(
                                 iq,
                                 file_id=f"{mat_name}:RF{rf_channel}",
@@ -232,6 +240,7 @@ def process_one_mat(
                             )
                             snr_value = float(sampled_snr[0].item())
 
+                        # 单通道 IQ 转为一维序列，CPP 按样本归一化后再写入 H5。
                         signal = variant_iq[0, 0, :]
                         cpp, f_axis, alpha_axis = compute_cpp(
                             signal,
@@ -245,6 +254,7 @@ def process_one_mat(
                             fam_nfft=fam_nfft,
                             fam_hop=fam_hop,
                         )
+                        # 按 RF 通道分组，组内以源样本、增强版本的顺序保存。
                         output_idx = (
                             channel_offset + sample_idx * variants_per_sample + variant_idx
                         )
@@ -265,10 +275,11 @@ def process_one_mat(
 
 
 def main() -> None:
-    """Run batch conversion from DroneRFa .mat files to CPP .h5 files."""
-
+    # 解析并校验参数，记录实际执行命令。
     args = parse_args()
     log_current_command(logger)
+
+    # 未指定输出目录时，按噪声模式选择数据目录同级的独立产物目录。
     data_dir = os.path.expanduser(args.data_dir)
     if args.output_dir:
         output_dir = os.path.expanduser(args.output_dir)
@@ -278,6 +289,8 @@ def main() -> None:
         output_dir = str(Path(data_dir).parent / "DroneRFa_cpp_awgn_mixed3x_16class_h5")
     else:
         output_dir = str(Path(data_dir).parent / "DroneRFa_cpp_awgn_random_16class_h5")
+
+    # 共享批处理器负责文件筛选，单文件回调沿用既有设备与特征计算参数。
     os.makedirs(output_dir, exist_ok=True)
     run_precompute_batch(
         data_dir,

@@ -45,6 +45,30 @@ def parse_label(mat_file: str) -> int:
     return LABEL_MAPPING[drone_code]
 
 
+def signal_code_from_filename(mat_file: str | os.PathLike[str]) -> str | None:
+    """从文件名或路径中解析 S 编码，不打开文件。
+
+    输入：
+        mat_file: 文件名或路径；非背景类须且只能包含一个以 S 开头的下划线分隔字段，
+            且该字段须匹配 S[01]{4}，例如 T0010_S1000.mat。
+    输出：
+        完整 S 编码字符串，如 "S1000"；T0000 背景类返回 None，不检查 S 编码。
+        非背景类的 S 编码缺失、重复或格式错误时抛出 ValueError。
+    """
+
+    stem = os.path.splitext(os.path.basename(os.fspath(mat_file)))[0]
+    class_code = stem.split("_")[0]
+    if class_code == "T0000":
+        return None
+
+    s_tokens = [token for token in stem.split("_") if token.startswith("S")]
+    if len(s_tokens) != 1 or re.fullmatch(r"S[01]{4}", s_tokens[0]) is None:
+        raise ValueError(
+            f"DroneRFa filename must contain exactly one four-bit binary S code: {os.path.basename(os.fspath(mat_file))}"
+        )
+    return s_tokens[0]
+
+
 def rf_channels_from_filename(mat_file: str | os.PathLike[str]) -> tuple[int, ...]:
     """根据文件名确定需要读取的 RF 通道，不打开文件。
 
@@ -55,19 +79,10 @@ def rf_channels_from_filename(mat_file: str | os.PathLike[str]) -> tuple[int, ..
         其他类别中 S0000～S0111 返回 (0,)，S1000～S1111 返回 (1,)。
         非背景类的 S 编码缺失、重复或格式错误时抛出 ValueError。
     """
-
-    stem = os.path.splitext(os.path.basename(os.fspath(mat_file)))[0]
-    class_code = stem.split("_")[0]
-    if class_code == "T0000":
+    signal_code = signal_code_from_filename(mat_file)
+    if signal_code is None:
         return (0, 1)
-
-    s_tokens = [token for token in stem.split("_") if token.startswith("S")]
-    if len(s_tokens) != 1 or re.fullmatch(r"S[01]{4}", s_tokens[0]) is None:
-        raise ValueError(
-            f"DroneRFa filename must contain exactly one four-bit binary S code: {os.path.basename(os.fspath(mat_file))}"
-        )
-    signal_code = int(s_tokens[0][1:], 2)
-    return (0,) if signal_code <= 0b0111 else (1,)
+    return (0,) if int(signal_code[1:], 2) <= 0b0111 else (1,)
 
 
 def group_mat_files_by_class(mat_files: list[str]) -> dict[str, list[str]]:

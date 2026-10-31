@@ -31,6 +31,8 @@ Usage:
   python scripts/precompute_stft_h5.py --data-dir ... --clean
 """
 
+from __future__ import annotations
+
 import argparse
 import os
 import sys
@@ -69,7 +71,7 @@ OUTPUT_TIME_BINS = 1024
 SUPPORTED_NOISE_PROFILES = ("random", "mixed-3x")
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Convert .mat IQ → .h5 stft files")
     parser.add_argument("--data-dir", type=str, default=default_raw_data_dir(),
                         help="Directory containing .mat files")
@@ -110,7 +112,9 @@ def parse_args() -> argparse.Namespace:
                         help="Maximum SNR for the mixed-3x high-SNR version (exclusive)")
     parser.add_argument("--noise-seed", type=int, default=42,
                         help="Seed for deterministic AWGN")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+
+    # 转换前校验噪声范围与互斥选项，避免无效配置进入文件处理。
     if args.snr_min > args.snr_max:
         parser.error("--snr-min must be <= --snr-max")
     if args.snr_low_min >= args.snr_low_max:
@@ -141,7 +145,7 @@ def process_one_mat(
     snr_high_max: float = 15.0,
     noise_seed: int = 42,
 ) -> tuple[str, int]:
-    """Convert one DroneRFa .mat file into one STFT .h5 file."""
+    """转换单个 MAT 文件，返回源文件名与写入的单通道 STFT 样本总数。"""
 
     if noise_profile not in (*SUPPORTED_NOISE_PROFILES, "clean"):
         raise ValueError(f"Unsupported noise profile: {noise_profile}")
@@ -153,6 +157,7 @@ def process_one_mat(
     mat_file = os.path.basename(mat_path)
     out_path = os.path.join(output_dir, get_filename_with_suffix(mat_path, ".h5"))
     label = parse_label(mat_file)
+    # 各 RF 通道独立形成样本；背景保留双通道，其他文件沿用指定通道。
     rf_channels = rf_channels_from_filename(mat_file)
 
     logger.info("Processing: %s", mat_file)
@@ -169,6 +174,7 @@ def process_one_mat(
             for rf_channel in rf_channels
         }
 
+        # mixed-3x 为每条源样本输出 clean、低 SNR、高 SNR 三个版本。
         variants_per_sample = 3 if noise_profile == "mixed-3x" else 1
         num_samples = sum(channel_sample_counts.values()) * variants_per_sample
         if noise_profile == "mixed-3x":
@@ -182,6 +188,7 @@ def process_one_mat(
         else:
             variant_specs = (("random", False, snr_min, snr_max),)
 
+        # 输入和输出均由上下文管理器关闭，读取或特征计算失败时也释放句柄。
         with h5py.File(out_path, "w") as h5f:
             h5f.create_dataset(
                 "stft", shape=(num_samples, 1, OUTPUT_FREQ_BINS, OUTPUT_TIME_BINS),
@@ -221,6 +228,7 @@ def process_one_mat(
                         start_sample_idx=sample_idx,
                         end_sample_idx=batch_end,
                     )
+                    # 以 (B, 1, L) 在指定设备批量处理，保留既有批次划分。
                     chunk_iq = torch.as_tensor(chunk_iq, dtype=torch.complex64, device=device)
                     source_indices = np.arange(sample_idx, batch_end, dtype=np.int64)
                     for variant_idx, (variant_name, is_clean, range_min, range_max) in enumerate(
@@ -231,6 +239,7 @@ def process_one_mat(
                             (len(source_indices),), float("nan"), dtype=torch.float32, device=device
                         )
                         if not is_clean:
+                            # 随机身份包含 batch 起点，不能通过重分批次改变加噪顺序。
                             variant_iq, sampled_snrs = add_random_snr_awgn_with_snr(
                                 chunk_iq,
                                 file_id=f"{mat_file}:RF{rf_channel}",
@@ -251,6 +260,7 @@ def process_one_mat(
                             output_freq_bins=OUTPUT_FREQ_BINS,
                             output_time_bins=OUTPUT_TIME_BINS,
                         ).cpu().numpy()
+                        # 稀疏索引保证行序为 RF 通道、源样本、增强版本，元数据同步写入。
                         output_indices = (
                             channel_offset + source_indices * variants_per_sample + variant_idx
                         )
@@ -268,8 +278,11 @@ def process_one_mat(
 
 
 def main() -> None:
-    args = parse_args() # 解析命令行参数并把解析结果保存到变量 args 中
-    log_current_command(logger) # 打印一次执行命令
+    # 解析并校验参数，记录实际执行命令。
+    args = parse_args()
+    log_current_command(logger)
+
+    # 未指定输出目录时，按噪声模式选择数据目录同级的独立产物目录。
     data_dir = os.path.expanduser(args.data_dir)
     if args.output_dir:
         output_dir = os.path.expanduser(args.output_dir)
@@ -280,9 +293,11 @@ def main() -> None:
     else:
         output_dir = str(Path(data_dir).parent / "DroneRFa_stft_awgn_random_16class_h5")
 
+    # 沿用既有 CUDA 简写解析，其他设备字符串原样传给计算回调。
     device = "cuda:0" if args.device == "cuda" else args.device
     logger.info("Using device: %s", device)
 
+    # 共享批处理器负责文件筛选，单文件回调负责分批计算与 H5 写入。
     os.makedirs(output_dir, exist_ok=True)
     run_precompute_batch(
         data_dir,

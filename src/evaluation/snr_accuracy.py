@@ -8,6 +8,8 @@ import matplotlib
 import numpy as np
 from torch.utils.data import DataLoader
 
+from src.utils.paths import format_snr_for_filename
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
@@ -113,25 +115,6 @@ def save_snr_accuracy_csv(rows: list[dict[str, object]], output_csv: str | Path)
         writer = csv.DictWriter(f, fieldnames=["snr_db", "num_samples", "num_correct", "accuracy"])
         writer.writeheader()
         writer.writerows(rows)
-
-
-def format_snr_for_filename(snr_db: float) -> str:
-    """把 SNR 数值转换成稳定、安全的文件名片段。"""
-
-    snr = float(snr_db)
-    if snr < 0:
-        prefix = "m"
-    elif snr > 0:
-        prefix = "p"
-    else:
-        prefix = ""
-
-    value = abs(snr)
-    if value.is_integer():
-        value_text = str(int(value))
-    else:
-        value_text = f"{value:g}".replace(".", "p")
-    return f"{prefix}{value_text}"
 
 
 def save_snr_confusion_matrix(

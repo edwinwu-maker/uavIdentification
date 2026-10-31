@@ -30,7 +30,7 @@ from src.utils.files import compute_file_sha256, read_csv_records
 from src.utils.logger import logger
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Remove reviewed pure-background rows and retain all other signals"
     )
@@ -38,12 +38,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--work-dir", default="outputs/stft_deep_cluster")
     parser.add_argument("--review-csv", default=None, help="Completed review CSV (default: <work-dir>/review.csv)")
     parser.add_argument("--output-dir", required=True, help="New directory for cleaned H5 files")
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def main() -> None:
     args = parse_args()
     log_current_command(logger)
+
+    # 定位训练产物与人工审核表；必需文件齐备后再读取内容。
     work_dir = Path(args.work_dir).expanduser()
     review_path = Path(args.review_csv).expanduser() if args.review_csv else work_dir / "review.csv"
     lookup_path = work_dir / "review_lookup.csv"
@@ -53,10 +55,13 @@ def main() -> None:
         if not path.is_file():
             raise FileNotFoundError(f"Required clustering artifact does not exist: {path}")
 
+    # 按 review_id 关联人工标签和程序生成的样本索引，校验角色与标签。
     review_rows = read_csv_records(review_path)
     lookup_rows = read_csv_records(lookup_path)
     assignment_rows = read_csv_records(assignments_path)
     joined_reviews = validate_and_join_reviews(review_rows, lookup_rows)
+
+    # 概率列须从 q_0 连续编号，样本索引须唯一。
     if not assignment_rows:
         raise ValueError("assignments.csv is empty")
     q_cluster_ids = sorted(
@@ -70,6 +75,8 @@ def main() -> None:
     assignments = {int(row["sample_index"]): row for row in assignment_rows}
     if len(assignments) != len(assignment_rows):
         raise ValueError("assignments.csv contains duplicate sample_index values")
+
+    # 软分配概率须有限、非负且和为 1，簇编号须对应最大概率。
     for sample_index, row in assignments.items():
         probabilities = np.asarray([float(row[f"q_{cluster_id}"]) for cluster_id in q_cluster_ids])
         if (
@@ -79,6 +86,8 @@ def main() -> None:
             or int(row["cluster_id"]) != int(probabilities.argmax())
         ):
             raise ValueError(f"Invalid cluster probabilities for sample_index={sample_index}")
+
+    # 审核记录须与全量分配表中的簇编号、来源文件及源行一致。
     for row in joined_reviews:
         sample_index = int(row["sample_index"])
         assignment = assignments.get(sample_index)
@@ -91,13 +100,18 @@ def main() -> None:
         ):
             raise ValueError(f"Review lookup does not match assignments for sample_index={sample_index}")
 
+    # mapping 样本决定簇语义，只有确定的背景簇参与后续背景判定。
     semantics, cluster_stats = map_cluster_semantics(joined_reviews, cluster_count)
     background_clusters = {
         cluster_id for cluster_id, value in semantics.items() if value == "background"
     }
+
+    # calibration 样本选择背景阈值，约束已审核信号不被误删。
     threshold, calibration_metrics = calibrate_background_threshold(
         joined_reviews, assignments, background_clusters
     )
+
+    # 独立 audit 须达到 100% 信号保留率和至少 90% 背景召回率，才能导出。
     audit_metrics = evaluate_background_audit(
         joined_reviews, assignments, background_clusters, threshold
     )
@@ -111,14 +125,19 @@ def main() -> None:
             "DCEC audit rejected: background recall must be at least 0.90, "
             f"got {audit_metrics['background_recall']:.4f}"
         )
+
+    # 审核通过后计算模型指纹并导出；T0000 原样保留，其余仅删除高置信背景。
+    model_hash = compute_file_sha256(model_path)
     manifest, decision_counts = export_clean_h5_files(
         data_dir=args.data_dir,
         output_dir=args.output_dir,
         assignment_rows=assignment_rows,
         semantics=semantics,
         threshold=threshold,
-        model_hash=compute_file_sha256(model_path),
+        model_hash=model_hash,
     )
+
+    # 保存逐样本清洗决定与汇总报告，保留率包含信号、不确定样本和 T0000。
     write_manifest(work_dir / "cleaning_manifest.csv", manifest)
     total_decisions = sum(decision_counts.values())
     report = {

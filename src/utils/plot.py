@@ -6,6 +6,40 @@ import numpy as np
 from src.utils.logger import logger
 
 
+def pooled_axis(values: np.ndarray, output_bins: int) -> np.ndarray:
+    """生成长度为 output_bins 的绘图坐标，不修改输入。
+
+    values 为非空一维坐标数组，output_bins 为正整数，约束由调用方保证。
+    可整除时按等宽分组求均值；不可整除时在首尾端点间线性插值，
+    作为显示用近似，并非精确的自适应平均池化中心。数据类型沿用 NumPy 规则。
+    """
+    if len(values) % output_bins != 0:
+        return np.linspace(values[0], values[-1], output_bins)
+    return values.reshape(output_bins, -1).mean(axis=1)
+
+
+def stft_plot_axes(
+    *,
+    sample_rate: float,
+    n_fft: int,
+    hop_length: int,
+    source_time_bins: int,
+    output_freq_bins: int,
+    output_time_bins: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """生成池化 STFT 的显示坐标，分别返回 Hz 频率轴和秒时间轴。
+
+    sample_rate、n_fft、hop_length 及各轴长度须为正数，由调用方保证。
+    source_time_bins 为池化前的时间帧数；输出轴长度与特征图尺寸对应。
+    可整除时取等宽分组均值，否则沿用端点线性插值作为显示近似。
+    """
+    source_freqs = np.fft.fftshift(np.fft.fftfreq(n_fft, 1.0 / sample_rate))
+    source_times = np.arange(source_time_bins, dtype=np.float64) * hop_length / sample_rate
+    freqs = pooled_axis(source_freqs, output_freq_bins)
+    times = pooled_axis(source_times, output_time_bins)
+    return freqs, times
+
+
 def import_pyplot(show: bool):
     """按显示需求选择绘图后端，并延迟导入、返回 pyplot 模块。
 
@@ -19,6 +53,69 @@ def import_pyplot(show: bool):
     import matplotlib.pyplot as plt
 
     return plt
+
+
+def plot_stft_sample(
+    stft_sample: np.ndarray,
+    freqs: np.ndarray,
+    times: np.ndarray,
+    save_path: str | Path,
+    *,
+    title: str,
+) -> None:
+    """保存单通道 z-score STFT，形状为 (1, H, W)，不再做归一化。
+
+    freqs、times 的长度分别为 H、W，单位为 Hz、秒，显示时换算为 MHz、ms。
+    标题由调用方提供；自动创建输出目录，绘图或保存异常向调用方传播。
+    """
+    plt = import_pyplot(False)
+    fig, ax = plt.subplots(1, 1, figsize=(14, 5), constrained_layout=True)
+    image = ax.pcolormesh(
+        freqs / 1e6, times * 1e3, stft_sample[0].T,
+        shading="auto", cmap="jet",
+    )
+    ax.set_title(title, fontsize=12)
+    ax.set_xlabel("Frequency (MHz)", fontsize=10)
+    ax.set_ylabel("Time (ms)", fontsize=10)
+    colorbar = fig.colorbar(image, ax=ax, shrink=0.92)
+    colorbar.set_label("Normalized Power (z-score)", fontsize=9)
+
+    Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_cpp_sample(
+    cpp_sample: np.ndarray,
+    f_axis: np.ndarray,
+    alpha_axis: np.ndarray,
+    save_path: str | Path,
+    *,
+    title: str,
+) -> None:
+    """保存形状为 (1, H, W) 的归一化 CPP/FAM，不再做归一化。
+
+    f_axis、alpha_axis 的长度分别为 W、H，单位均为 cycles/sample。
+    标题由调用方提供；自动创建输出目录，绘图或保存异常向调用方传播。
+    """
+    plt = import_pyplot(False)
+    fig, ax = plt.subplots(1, 1, figsize=(12, 5), constrained_layout=True)
+    image = ax.imshow(
+        cpp_sample[0],
+        origin="lower",
+        aspect="auto",
+        extent=[f_axis[0], f_axis[-1], alpha_axis[0], alpha_axis[-1]],
+        cmap="jet",
+    )
+    ax.set_title(title, fontsize=12)
+    ax.set_xlabel("f (cycles/sample)", fontsize=10)
+    ax.set_ylabel("alpha (cycles/sample)", fontsize=10)
+    colorbar = fig.colorbar(image, ax=ax, shrink=0.92)
+    colorbar.set_label("normalized |SCF|", fontsize=9)
+
+    Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
 
 
 def plot_iq_time_domain(
