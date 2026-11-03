@@ -53,7 +53,7 @@ def default_raw_data_dir() -> str:
         仅返回路径，不检查目录是否存在，也不创建目录。
     """
     if os.name == "nt":
-        return "E:/dataSet/DroneRFa"
+        return "F:/droneRFa"
     if sys.platform == "darwin":
         return os.path.expanduser("~/Desktop/dataset/droneRFa")
     return "/mnt/data/wurixin/DroneRFa"
