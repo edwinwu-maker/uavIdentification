@@ -69,8 +69,8 @@ def parse_args() -> argparse.Namespace:
                         help="Minimum 8-connected region area in raw pixels (default: 64)")
     parser.add_argument("--signal-area-threshold", type=float, default=0.001,
                         help="Minimum largest-region area / full image area for signal (default: 0.001)")
-    parser.add_argument("--signal-span-threshold", type=float, default=0.1,
-                        help="Minimum frequency or time span / axis length for signal (default: 0.1)")
+    parser.add_argument("--signal-span-threshold", type=float, default=0.09,
+                        help="Minimum frequency or time span / axis length for signal (default: 0.09)")
     parser.add_argument("--membership-threshold", type=float, default=0.5,
                         help="Membership strength below this value forces uncertain (default: 0.5)")
     parser.add_argument("--outlier-threshold", type=float, default=0.9,

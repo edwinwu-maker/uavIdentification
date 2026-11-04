@@ -22,7 +22,7 @@ class StftAnalysisConfig:
     mask_threshold: float = 1.5
     min_region_pixels: int = 64
     signal_area_threshold: float = 0.001
-    signal_span_threshold: float = 0.1
+    signal_span_threshold: float = 0.09
     membership_threshold: float = 0.5
     outlier_threshold: float = 0.9
 
