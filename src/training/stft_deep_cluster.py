@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 from dataclasses import dataclass
 
 import numpy as np
@@ -40,55 +39,60 @@ def pretrain_autoencoder(
     patience: int,
     logger=None,
 ) -> list[float]:
-    """以输入 STFT 为重建目标预训练自编码器，并恢复最佳训练损失对应的权重。
+    """预训练 STFT 自编码器，恢复最佳重建损失对应的权重。
 
-    参数：
-        model: 待训练的 StftAutoencoder，会被迁移到 device 并原地更新参数。
-        loader: 非空数据加载器，每批返回 (inputs, indices)；inputs 为已预处理的
-            (B, 1, 256, 256) 浮点张量，B 为批次大小，indices 在本函数中不参与计算。
-        device: 模型和输入张量的计算设备。
+    输入：
+        model: 自编码器，迁移至 device 并原地训练。
+        loader: 非空，每批为 (inputs, indices)；inputs 为 (B, 1, 256, 256)
+            浮点 STFT，B 为批次大小；indices 不参与预训练。
+        device: 模型和输入的计算设备。
         epochs: 最大训练轮数。
-        learning_rate: AdamW 优化器的学习率，权重衰减固定为 1e-4。
-        patience: 允许连续未改善的轮数；损失须比最佳值下降超过 1e-6 才视为改善。
-        logger: 可选日志对象，需提供 info 方法；None 时不记录每轮损失日志。
+        learning_rate: AdamW 学习率，权重衰减固定为 1e-4。
+        patience: 连续未改善的早停轮数，改善阈值为损失下降超过 1e-6。
+        logger: 可选日志对象，需提供 info 方法。
 
-    返回：
-        各实际训练轮次的平均 Smooth L1 重建损失列表，按样本数加权。
-        model 的参数恢复为该训练过程中最佳损失对应的状态，不写入模型文件。
+    输出：
+        history: list[float]，逐轮按样本数加权的平均 Smooth L1 损失。
+        model: 原地恢复最佳权重并清除梯度，保留在 device，不写文件。
     """
-    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
     model.to(device)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
     best_loss = float("inf")
-    best_state = copy.deepcopy(model.state_dict())
+    # CPU 独立快照：避免共享参数内存，并减少显存占用。
+    best_state = {name: value.detach().to(device="cpu", copy=True) for name, value in model.state_dict().items()}
     stale_epochs = 0
     history: list[float] = []
 
     for epoch in range(1, epochs + 1):
         model.train()
-        loss_sum = 0.0
+        loss_sum = torch.zeros((), device=device, dtype=torch.float32)
         sample_count = 0
-        for inputs, _indices in tqdm(loader, desc=f"CAE epoch {epoch}", leave=False):
+        for inputs, _ in tqdm(loader, desc=f"CAE epoch {epoch}", leave=False):
             inputs = inputs.to(device, non_blocking=True)
             optimizer.zero_grad()
-            reconstruction, _latent = model(inputs)
+            # 输入 (B, 1, 256, 256) → 同形重建图、潜在向量 (B, latent_dim)。
+            reconstruction, _ = model(inputs)
             loss = F.smooth_l1_loss(reconstruction, inputs)
             loss.backward()
             optimizer.step()
-            loss_sum += loss.item() * inputs.shape[0]
+            # 按样本数累计脱离计算图的损失，每轮仅读取一次标量。
+            loss_sum.add_(loss.detach().to(dtype=torch.float32) * inputs.shape[0])
             sample_count += inputs.shape[0]
-        epoch_loss = loss_sum / sample_count
+        epoch_loss = (loss_sum / sample_count).item()
         history.append(epoch_loss)
         if logger is not None:
             logger.info("CAE epoch %d | reconstruction_loss: %.6f", epoch, epoch_loss)
         if epoch_loss < best_loss - 1e-6:
             best_loss = epoch_loss
-            best_state = copy.deepcopy(model.state_dict())
+            best_state = {name: value.detach().to(device="cpu", copy=True) for name, value in model.state_dict().items()}
             stale_epochs = 0
         else:
             stale_epochs += 1
             if stale_epochs >= patience:
                 break
     model.load_state_dict(best_state)
+    # 清除末批梯度，释放显存。
+    model.zero_grad(set_to_none=True)
     return history
 
 
@@ -199,38 +203,47 @@ def select_cluster_count(
     return selected_k, reports
 
 
-@torch.no_grad()
+@torch.inference_mode()
 def infer_dcec(
     model: StftDcec,
     loader: DataLoader,
     *,
     device: torch.device,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """关闭梯度计算，推理完整数据集的潜在向量和聚类软分配概率。
+    """编码并计算聚类软分配概率，跳过解码；调用后模型保持 eval 模式。
 
-    参数：
-        model: 已放到 device 上的 StftDcec；本函数设为 eval 模式并保持该模式。
-        loader: 每批返回 (inputs, indices) 的数据加载器；inputs 的形状为
-            (B, 1, 256, 256)，indices 为 CPU 整数张量，表示数据集中的全局样本索引。
-            须完整覆盖 0～N-1，其中 N = len(loader.dataset)，不能丢弃末批；可打乱顺序。
-        device: 输入张量迁移到的设备，须与模型所在设备一致。
+    输入：
+        model: 已位于 device 的模型；device: 推理设备。
+        loader: 每批返回 (inputs, indices)，inputs 为 (B, 1, 256, 256) 浮点张量；
+            indices 为 CPU 整数索引，须完整覆盖 0～N-1，可乱序，N = len(loader.dataset)。
+    输出：
+        (embeddings, probabilities): 按全局索引排列的 CPU float32 NumPy 数组；
+        embeddings 为 (N, D) 潜在向量，probabilities 为 (N, K) 软分配概率，D 为潜在维度，K 为簇数。
 
-    返回：
-        (embeddings, probabilities)，均为 CPU 内存中的 float32 NumPy 数组：
-        embeddings 的形状为 (N, D)，D 为自编码器潜在维度；probabilities 的形状为
-        (N, K)，K 为簇数，第 i 行第 j 列表示样本 i 属于簇 j 的软分配概率。
-        两个数组均按全局样本索引排列，不返回重建图像。
+    CUDA 全量缓存额外占用 N * (D + K) * 4 字节显存，结束后回传；CPU/MPS 在 CPU 收集。
     """
     model.eval()
-    latent_dim = model.autoencoder.latent_dim
-    cluster_count = model.clustering.centers.shape[0]
-    embeddings = np.empty((len(loader.dataset), latent_dim), dtype=np.float32)
-    probabilities = np.empty((len(loader.dataset), cluster_count), dtype=np.float32)
+    latent_dim = model.autoencoder.latent_dim           # 潜在向量维度 D。
+    cluster_count = model.clustering.centers.shape[0]   # 聚类中心数量 K。
+    sample_count = len(loader.dataset)                  # 数据集样本总数 N。
+
+    output_device = device if device.type == "cuda" else torch.device("cpu")
+
+    # 全量输出缓冲区：embeddings 为 (N, D) 潜在向量，probabilities 为 (N, K) 软分配概率。
+    embeddings = torch.empty((sample_count, latent_dim), device=output_device, dtype=torch.float32)
+    probabilities = torch.empty((sample_count, cluster_count), device=output_device, dtype=torch.float32)
+
+    # inputs 为本批 STFT 浮点张量 (B, 1, 256, 256)；indices 为对应样本的 CPU 全局整数索引 (B,)。
     for inputs, indices in tqdm(loader, desc="DCEC inference", leave=False):
-        _reconstruction, latent, soft = model(inputs.to(device, non_blocking=True))
-        embeddings[indices.numpy()] = latent.cpu().numpy()
-        probabilities[indices.numpy()] = soft.cpu().numpy()
-    return embeddings, probabilities
+        # 输入迁移至推理设备，编码为本批潜在向量 (B, D)。
+        latent = model.autoencoder.encode(inputs.to(device, non_blocking=True))
+        # 根据与簇中心的 Student-t 相似度计算软分配 (B, K)，逐行归一化。
+        soft = model.clustering(latent)
+        output_indices = indices.to(device=output_device, dtype=torch.long, non_blocking=True)
+        embeddings.index_copy_(0, output_indices, latent.to(device=output_device, dtype=torch.float32))
+        probabilities.index_copy_(0, output_indices, soft.to(device=output_device, dtype=torch.float32))
+    # CUDA 同步回传；CPU 直接共享内存。
+    return embeddings.cpu().numpy(), probabilities.cpu().numpy()
 
 
 def train_dcec(
@@ -244,46 +257,90 @@ def train_dcec(
     clustering_weight: float = 0.1,
     logger=None,
 ) -> list[dict[str, float]]:
+    """联合优化重建与聚类损失，连续 3 轮标签变化率低于 0.001 时早停。
+
+    输入：
+        model: 待训练的 StftDcec，迁移至 device 并原地更新。
+        loader: 非空，每批返回 (inputs, indices)；inputs 为 (B, 1, 256, 256) 浮点张量，
+            indices 为 CPU 整数索引，须完整覆盖 0～N-1，可乱序，N = len(loader.dataset)。
+        device: 训练设备。
+        epochs: 最大轮数。
+        learning_rate: AdamW 学习率。
+        reconstruction_weight/clustering_weight: Smooth L1 重建损失与 KL 聚类损失的权重。
+        logger: 可选日志对象，需提供 info 方法。
+    输出：
+        逐轮字典列表，含 epoch（从 1 起）、reconstruction_loss、clustering_loss、
+        assignment_change（标签变化比例）；两项损失均为未乘权重的样本均值。
+        model 保留末轮权重，结束时处于 eval 模式。
+
+    概率与目标分布在 device 上使用 Torch 缓存，不保存全量潜在向量。
+    """
     model.to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
-    _embeddings, probabilities = infer_dcec(model, loader, device=device)
-    previous_labels = probabilities.argmax(axis=1)
+    dataset_size = len(loader.dataset)
+    cluster_count = model.clustering.centers.shape[0]
+    probabilities = torch.empty((dataset_size, cluster_count), device=device, dtype=torch.float32)
+
+    @torch.no_grad()    # 禁用梯度记录，避免概率刷新构建计算图。
+    def update_probabilities() -> None:
+        """仅编码并聚类，按全局索引刷新概率 (N, K)，保持 eval 模式。"""
+        model.eval()
+        for inputs, indices in tqdm(loader, desc="DCEC inference", leave=False):
+            latent = model.autoencoder.encode(inputs.to(device, non_blocking=True))
+            soft = model.clustering(latent)
+            output_indices = indices.to(device=device, dtype=torch.long, non_blocking=True)
+            probabilities.index_copy_(0, output_indices, soft.to(dtype=torch.float32))
+
+    update_probabilities()
+    previous_labels = probabilities.argmax(dim=1)
     stable_epochs = 0
     history: list[dict[str, float]] = []
 
     for epoch in range(1, epochs + 1):
-        target = target_distribution(torch.from_numpy(probabilities)).to(device)
+        # 用上轮全量概率固定本轮目标，按全局索引匹配训练样本。
+        target = target_distribution(probabilities)
         model.train()
-        reconstruction_sum = 0.0
-        clustering_sum = 0.0
+        loss_sums = torch.zeros(2, device=device, dtype=torch.float32)
         sample_count = 0
+
+        # inputs 为 STFT 浮点张量 (B, 1, 256, 256)；indices 为 CPU 全局整数索引 (B,)。
         for inputs, indices in tqdm(loader, desc=f"DCEC epoch {epoch}", leave=False):
             inputs = inputs.to(device, non_blocking=True)
-            batch_target = target[indices.to(device)]
+            batch_target = target[indices.to(device=device, dtype=torch.long, non_blocking=True)]
             optimizer.zero_grad()
+            # 输出重建图 (B, 1, 256, 256)、潜在向量 (B, D) 和软分配 (B, K)。
             reconstruction, _latent, soft = model(inputs)
+            # Smooth L1 重建误差，对全部元素取均值。
             reconstruction_loss = F.smooth_l1_loss(reconstruction, inputs)
+            # KL(P || Q)：以固定目标 P 约束软分配 Q，按批次样本数归一化。
             clustering_loss = F.kl_div(
                 soft.clamp_min(1e-12).log(), batch_target, reduction="batchmean"
             )
+            # 加权联合重建与聚类损失。
             loss = reconstruction_weight * reconstruction_loss + clustering_weight * clustering_loss
+            # 反向传播，计算模型参数梯度。
             loss.backward()
+            # AdamW 更新自编码器与聚类中心。
             optimizer.step()
             batch_size = inputs.shape[0]
-            reconstruction_sum += reconstruction_loss.item() * batch_size
-            clustering_sum += clustering_loss.item() * batch_size
+            # 脱离计算图并在设备上累加，避免每批读取标量触发 GPU 同步。
+            loss_sums[0].add_(reconstruction_loss.detach().to(dtype=torch.float32) * batch_size)
+            loss_sums[1].add_(clustering_loss.detach().to(dtype=torch.float32) * batch_size)
             sample_count += batch_size
 
-        _embeddings, probabilities = infer_dcec(model, loader, device=device)
-        labels = probabilities.argmax(axis=1)
-        changed = float(np.mean(labels != previous_labels))
+        update_probabilities()
+        labels = probabilities.argmax(dim=1)
+        changed = (labels != previous_labels).sum().item() / dataset_size
+        reconstruction_mean, clustering_mean = (loss_sums / sample_count).cpu().tolist()
         row = {
             "epoch": float(epoch),
-            "reconstruction_loss": reconstruction_sum / sample_count,
-            "clustering_loss": clustering_sum / sample_count,
+            "reconstruction_loss": reconstruction_mean,
+            "clustering_loss": clustering_mean,
             "assignment_change": changed,
         }
         history.append(row)
+
+        # 可选日志：记录轮次、平均重建与聚类损失及标签变化率。
         if logger is not None:
             logger.info(
                 "DCEC epoch %d | reconstruction_loss: %.6f | clustering_loss: %.6f | assignment_change: %.6f",
@@ -292,8 +349,11 @@ def train_dcec(
                 row["clustering_loss"],
                 changed,
             )
+
+        previous_labels = labels    # 保存本轮标签，供下一轮比较变化率。
+
+        # 变化率低于 0.001 则累计稳定轮数，否则清零；连续 3 轮稳定时早停。
         stable_epochs = stable_epochs + 1 if changed < 0.001 else 0
-        previous_labels = labels
         if stable_epochs >= 3:
             break
     return history
