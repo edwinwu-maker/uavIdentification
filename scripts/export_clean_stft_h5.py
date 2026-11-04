@@ -3,11 +3,13 @@
 Usage:
   python scripts/export_clean_stft_h5.py --data-dir ... --work-dir outputs/stft_deep_cluster --output-dir ...
   python scripts/export_clean_stft_h5.py --data-dir ... --work-dir ... --review-csv path/to/review.csv --output-dir ...
+  ~/Desktop/venv/bin/python scripts/export_clean_stft_h5.py --analysis-mode dcec-hdbscan --data-dir ... --work-dir ... --output-dir ...
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -34,9 +36,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Remove reviewed pure-background rows and retain all other signals"
     )
+    parser.add_argument("--analysis-mode", choices=("dcec", "dcec-hdbscan"), default="dcec")
     parser.add_argument("--data-dir", required=True, help="Original clean STFT H5 directory")
     parser.add_argument("--work-dir", default="outputs/stft_deep_cluster")
-    parser.add_argument("--review-csv", default=None, help="Completed review CSV (default: <work-dir>/review.csv)")
+    parser.add_argument("--review-csv", default=None, help="Completed review CSV (default: mode-specific review table in work-dir)")
     parser.add_argument("--output-dir", required=True, help="New directory for cleaned H5 files")
     return parser.parse_args(argv)
 
@@ -44,6 +47,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     log_current_command(logger)
+
+    if args.analysis_mode == "dcec-hdbscan":
+        run_hdbscan_export(args)
+        return
 
     # 定位训练产物与人工审核表；必需文件齐备后再读取内容。
     work_dir = Path(args.work_dir).expanduser()
@@ -161,6 +168,54 @@ def main() -> None:
     logger.info("Cleaned H5 files saved to %s", args.output_dir)
     logger.info("Decision counts: %s", decision_counts)
     logger.info("Independent audit metrics: %s", audit_metrics)
+
+
+def run_hdbscan_export(args):
+    """只读取分析产物，先完成人工验收，再创建新的 H5。"""
+    from collections import Counter
+    from src.data.stft_cleaning_export import prepare_hdbscan_cleaning, export_hdbscan_h5_files
+
+    work_dir = Path(args.work_dir).expanduser()
+    paths = {
+        "assignments": work_dir / "hdbscan_assignments.csv",
+        "review": Path(args.review_csv).expanduser() if args.review_csv else work_dir / "hdbscan_review.csv",
+        "lookup": work_dir / "hdbscan_review_lookup.csv",
+        "training_report": work_dir / "training_report.json",
+        "model": work_dir / "stft_dcec.pt",
+    }
+    for path in paths.values():
+        if not path.is_file():
+            raise FileNotFoundError(f"Required HDBSCAN artifact does not exist: {path}")
+    training = json.loads(paths["training_report"].read_text(encoding="utf-8"))
+    rows, review_metrics = prepare_hdbscan_cleaning(
+        read_csv_records(paths["assignments"]), read_csv_records(paths["review"]),
+        read_csv_records(paths["lookup"]), training,
+    )
+    counts = dict(Counter(row["decision"] for row in rows))
+    report = {
+        "analysis_mode": args.analysis_mode,
+        "status": review_metrics["status"],
+        "review_metrics": review_metrics,
+        "analysis_parameters": training["hdbscan"]["parameters"],
+        "input_sha256": {name: compute_file_sha256(path) for name, path in paths.items()},
+        "decision_counts": counts,
+        "uav_signal_retention_rate": counts.get("signal_retained", 0) / len(rows),
+        "output_dir": str(Path(args.output_dir).expanduser().resolve()),
+    }
+    report_path = work_dir / "hdbscan_cleaning_report.json"
+    if review_metrics["status"] == "rejected":
+        write_json(report_path, report)
+        raise ValueError(f"HDBSCAN review rejected: {review_metrics['rejection_reasons']}; see {report_path}")
+    manifest, counts = export_hdbscan_h5_files(
+        data_dir=args.data_dir, output_dir=args.output_dir, decision_rows=rows,
+        training_report=training, model_hash=report["input_sha256"]["model"],
+    )
+    report["status"] = "exported"
+    report["decision_counts"] = counts
+    report["retention_rate"] = (counts.get("signal_retained", 0) + counts.get("t0000_passthrough", 0)) / sum(counts.values())
+    write_manifest(work_dir / "hdbscan_cleaning_manifest.csv", manifest)
+    write_json(report_path, report)
+    logger.info("HDBSCAN cleaned H5 files saved to %s | decisions: %s", args.output_dir, counts)
 
 
 if __name__ == "__main__":

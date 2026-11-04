@@ -168,7 +168,7 @@ H5 生成的 STFT 图片默认保存到 H5 目录旁的 `stft_png/`，CPP/FAM �
 
 ### DEC 单阶段 STFT 清洗
 
-项目仅使用 DEC（DCEC 实现）从 T0010-T10000 中剔除高置信纯背景，保留其他可见信号。
+默认使用 DEC（DCEC 实现）从 T0010-T10000 中剔除高置信纯背景，保留其他可见信号。
 输入 H5 须由 `precompute_stft_h5.py --clean` 生成；`--clean` 仅表示不额外添加 AWGN，
 不表示已完成数据清洗。训练会跳过 `T0000`，并生成 250 条盲审图片及 `review.csv`，
 其中 150 条用于簇语义映射、50 条用于阈值校准、50 条用于独立审核：
@@ -197,6 +197,36 @@ DEC 仅删除归属于背景簇且背景分数达到校准阈值的样本；信�
 审核样本上的结果。全量决定和独立审核指标分别保存在 `cleaning_manifest.csv` 与
 `cleaning_report.json`，结果写入新 H5 目录，源 H5 不会被修改。
 旧 DEC `video/non_video` 复核不兼容，必须使用新的空 `work-dir` 重新生成。
+
+### DCEC + HDBSCAN STFT 清洗
+
+使用独立分析目录训练并生成 HDBSCAN 复核材料：
+
+```bash
+~/Desktop/venv/bin/python scripts/train_stft_dcec.py \
+  --analysis-mode dcec-hdbscan --data-dir <原始clean-H5目录> \
+  --work-dir outputs/stft_hdbscan --device mps
+```
+
+查看 `hdbscan_review_images/`，填写 `hdbscan_review.csv` 的 `manual_label` 列
+（`signal/background/uncertain`），然后调用：
+
+```bash
+~/Desktop/venv/bin/python scripts/export_clean_stft_h5.py \
+  --analysis-mode dcec-hdbscan --data-dir <原始clean-H5目录> \
+  --work-dir outputs/stft_hdbscan --output-dir <新的清洗H5目录>
+```
+
+此模式只保留 UAV 中 `fusion_label=signal` 的样本，删除 `background` 和 `uncertain`，
+包括融合为不确定的 HDBSCAN 噪声、低成员强度及异常分数样本；T0000 全部保留，T0001 不导出。
+人工标签用于验收，不逐条覆盖自动结果。有待删除样本时，复核表必须包含确定信号；任何
+人工信号将被删除时均停止导出。背景召回率仅报告，不设置门槛；人工不确定标签不计入确定
+标签指标。当前复核不属于独立审核，其指标不代表全量准确率。
+
+导出不重新训练或拟合 HDBSCAN。`hdbscan_cleaning_report.json` 保存验收、删除统计和输入指纹，
+验收失败也会生成报告，但不会写入 H5。成功后另生成 `hdbscan_cleaning_manifest.csv`，记录
+逐样本决定、人工标签及输出行号。新 H5 保留原始标签，附带 `hdbscan_*` 行号和聚类信息；
+某文件全部删除时仍输出零行文件。源文件不修改，已有目标文件不覆盖。
 
 ### 训练模型
 

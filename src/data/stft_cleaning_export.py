@@ -288,7 +288,6 @@ def export_clean_h5_files(
         raise ValueError("Cluster semantics contain no background cluster")
     assignment_fields = list(assignment_rows[0]) if assignment_rows else []
     by_file: dict[str, list[dict[str, object]]] = defaultdict(list)
-    manifest: list[dict[str, object]] = []
     decisions = Counter()
     for row in assignment_rows:
         score = _background_score(row, background_clusters)
@@ -305,6 +304,18 @@ def export_clean_h5_files(
         by_file[row["source_file"]].append(enriched)
         decisions[decision] += 1
 
+    return _export_decisions(
+        source_root, destination_root, source_paths, by_file, assignment_fields,
+        decisions, model_hash, semantics=semantics, threshold=threshold,
+    )
+
+
+def _export_decisions(source_root, destination_root, source_paths, by_file,
+                      assignment_fields, decisions, model_hash, *, semantics=None,
+                      threshold=None, analysis_report=None):
+    """共用全量源行校验和原子写入，两种模式各自提供判定与溯源信息。"""
+    manifest = []
+    hdbscan_mode = analysis_report is not None
     source_names = {path.name for path in source_paths}
     unknown_files = sorted(set(by_file) - source_names)
     if unknown_files:
@@ -343,6 +354,9 @@ def export_clean_h5_files(
                         "background_score": "",
                         "decision": "t0000_passthrough",
                     })
+                    if hdbscan_mode:
+                        for field in ("cluster_id", "cluster_confidence", "background_score"):
+                            passthrough.pop(field, None)
                     by_file[filename].append(passthrough)
                     decisions["t0000_passthrough"] += 1
                 continue
@@ -356,12 +370,16 @@ def export_clean_h5_files(
                     raise ValueError(
                         f"Assignment label does not match source H5: {filename} row {source_row}"
                     )
+                if hdbscan_mode:
+                    for field in ("rf_channel", "source_sample_idx"):
+                        if int(source[field][source_row]) != int(row[field]):
+                            raise ValueError(f"Assignment {field} does not match source H5: {filename} row {source_row}")
     destination_root.mkdir(parents=True, exist_ok=True)
 
     for filename in sorted(source_names):
         rows = sorted(by_file[filename], key=lambda row: int(row["source_row_idx"]))
         source_path = source_root / filename
-        selected = [row for row in rows if row["decision"] != "background_removed"]
+        selected = [row for row in rows if row["decision"] not in ("background_removed", "uncertain_removed")]
         source_rows = [int(row["source_row_idx"]) for row in selected]
         output_path = destination_root / filename
         temporary_path = output_path.with_name(f".{output_path.name}.tmp")
@@ -370,13 +388,18 @@ def export_clean_h5_files(
                 count = source["stft"].shape[0]
                 for key, value in source.attrs.items():
                     output.attrs[key] = value
-                output.attrs["cleaning_method"] = "DCEC-background-filter"
-                output.attrs["cleaning_selected_k"] = len(semantics)
-                output.attrs["cleaning_background_threshold"] = threshold
-                # 保留历史属性名，兼容已有 H5 的模型溯源格式。
                 output.attrs["cleaning_checkpoint_sha256"] = model_hash
                 output.attrs["cleaning_source_file"] = filename
-                output.attrs["cleaning_cluster_semantics"] = json.dumps(semantics, sort_keys=True)
+                if hdbscan_mode:
+                    output.attrs["cleaning_method"] = "DCEC-HDBSCAN-signal-filter"
+                    output.attrs["cleaning_selected_k"] = analysis_report["selected_k"]
+                    output.attrs["cleaning_hdbscan_cluster_count"] = analysis_report["hdbscan"]["cluster_count"]
+                    output.attrs["cleaning_analysis_parameters"] = json.dumps(analysis_report["hdbscan"]["parameters"], sort_keys=True)
+                else:
+                    output.attrs["cleaning_method"] = "DCEC-background-filter"
+                    output.attrs["cleaning_selected_k"] = len(semantics)
+                    output.attrs["cleaning_background_threshold"] = threshold
+                    output.attrs["cleaning_cluster_semantics"] = json.dumps(semantics, sort_keys=True)
                 output.attrs["cleaning_input_size"] = 256
                 output.attrs["cleaning_clip_min"] = -5.0
                 output.attrs["cleaning_clip_max"] = 5.0
@@ -386,7 +409,15 @@ def export_clean_h5_files(
                         _copy_row_dataset(dataset, output, name, source_rows)
                     else:
                         source.copy(name, output)
-                if int(source["labels"][0]) != 0:
+                if int(source["labels"][0]) != 0 and hdbscan_mode:
+                    for name, field, dtype in (
+                        ("hdbscan_source_row_idx", "source_row_idx", np.int64),
+                        ("hdbscan_label", "hdbscan_label", np.int32),
+                        ("hdbscan_membership_strength", "membership_strength", np.float64),
+                        ("hdbscan_outlier_score", "outlier_score", np.float64),
+                    ):
+                        output.create_dataset(name, data=np.asarray([row[field] for row in selected], dtype=dtype))
+                elif int(source["labels"][0]) != 0:
                     output.create_dataset(
                         "dec_source_row_idx", data=np.asarray(source_rows, dtype=np.int64)
                     )
@@ -419,7 +450,7 @@ def export_clean_h5_files(
             manifest.append({
                 **row,
                 "output_file": (
-                    filename if row["decision"] != "background_removed" else ""
+                    filename if row["decision"] not in ("background_removed", "uncertain_removed") else ""
                 ),
                 "output_row_idx": output_index_by_source.get(source_row, ""),
             })
@@ -439,3 +470,108 @@ def write_manifest(path: str | Path, rows: list[dict[str, object]]) -> None:
 def write_json(path: str | Path, payload: dict[str, object]) -> None:
     with Path(path).open("w", encoding="utf-8") as file_obj:
         json.dump(payload, file_obj, ensure_ascii=False, indent=2, allow_nan=False)
+
+
+def prepare_hdbscan_cleaning(assignment_rows, review_rows, lookup_rows, training_report):
+    """关联已填写复核表，按固定融合规则评估；不拟合聚类或覆盖人工样本。"""
+    from src.data.stft_analysis import StftAnalysisConfig, fuse_structure
+
+    if training_report.get("analysis_mode") != "dcec-hdbscan":
+        raise ValueError("training_report.json must describe dcec-hdbscan analysis")
+    parameters = training_report["hdbscan"]["parameters"]
+    config = StftAnalysisConfig(**{name: parameters[name] for name in StftAnalysisConfig.__dataclass_fields__})
+    config.validate()
+    if not assignment_rows or len(assignment_rows) != training_report["sample_count"]:
+        raise ValueError("HDBSCAN assignments must match training sample_count")
+    assignments = {}
+    for row in assignment_rows:
+        index = int(row["sample_index"])
+        if index in assignments or index < 0:
+            raise ValueError("Duplicate or negative HDBSCAN sample_index")
+        if row["source_file"] != Path(row["source_file"]).name:
+            raise ValueError("source_file must be a basename")
+        if row["structure_label"] not in MANUAL_LABELS or row["fusion_label"] not in MANUAL_LABELS:
+            raise ValueError(f"Invalid analysis label for sample_index={index}")
+        if int(row["hdbscan_label"]) < -1:
+            raise ValueError(f"Invalid HDBSCAN label for sample_index={index}")
+        fused = fuse_structure(row, int(row["hdbscan_label"]), float(row["membership_strength"]),
+                               float(row["outlier_score"]), config)
+        if (fused["fusion_label"] != row["fusion_label"]
+                or fused["fusion_reason"] != row["fusion_reason"]
+                or str(fused["density_boundary"]).lower() != row["density_boundary"].lower()):
+            raise ValueError(f"Inconsistent HDBSCAN fusion for sample_index={index}")
+        assignments[index] = row
+    if set(assignments) != set(range(len(assignments))):
+        raise ValueError("HDBSCAN sample_index must cover 0..N-1")
+    lookup = {row["review_id"]: row for row in lookup_rows}
+    if not lookup or len(lookup) != len(lookup_rows) or len(review_rows) != len(lookup):
+        raise ValueError("HDBSCAN review and lookup must contain the same unique rows")
+    labels = {}
+    seen_ids = set()
+    for review in review_rows:
+        review_id = review["review_id"]
+        label = review.get("manual_label", "").strip().lower()
+        if review_id not in lookup or review_id in seen_ids or label not in MANUAL_LABELS:
+            raise ValueError(f"Invalid or incomplete HDBSCAN review: {review_id}")
+        seen_ids.add(review_id)
+        located = lookup[review_id]
+        index = int(located["sample_index"])
+        if index in labels or index not in assignments:
+            raise ValueError(f"Unknown or duplicate review sample: {review_id}")
+        for field, value in assignments[index].items():
+            other = located.get(field)
+            # CSV 原生非有限分数保留为字符串，不参与概率归一化。
+            if other != value:
+                raise ValueError(f"HDBSCAN lookup mismatch: {review_id} field {field}")
+        labels[index] = label
+    rows = []
+    for index, row in assignments.items():
+        label = row["fusion_label"]
+        rows.append({**row, "manual_label": labels.get(index, ""),
+                     "decision_reason": "fusion_label=" + label,
+                     "decision": "signal_retained" if label == "signal" else label + "_removed"})
+    definite = [row for row in rows if row["manual_label"] in ("signal", "background")]
+    signals = [row for row in definite if row["manual_label"] == "signal"]
+    backgrounds = [row for row in definite if row["manual_label"] == "background"]
+    mistakes = [int(row["sample_index"]) for row in signals if row["fusion_label"] != "signal"]
+    removed = [row for row in definite if row["fusion_label"] != "signal"]
+    true_removed = sum(row["fusion_label"] != "signal" for row in backgrounds)
+    reasons = []
+    if mistakes:
+        reasons.append("reviewed_signal_would_be_removed")
+    if any(row["fusion_label"] != "signal" for row in rows) and not signals:
+        reasons.append("no_reviewed_signal_to_evaluate")
+    return rows, {
+        "review_type": "non_independent_review",
+        "status": "rejected" if reasons else "approved",
+        "rejection_reasons": reasons,
+        "misremoved_signal_indices": mistakes,
+        "review_count": len(labels),
+        "definite_count": len(definite),
+        "manual_uncertain_count": len(labels) - len(definite),
+        "signal_retention": (len(signals) - len(mistakes)) / len(signals) if signals else None,
+        "background_precision": true_removed / len(removed) if removed else None,
+        "background_recall": true_removed / len(backgrounds) if backgrounds else None,
+        "confusion_matrix": [[len(signals) - len(mistakes), len(mistakes)],
+                             [len(backgrounds) - true_removed, true_removed]],
+    }
+
+
+def export_hdbscan_h5_files(*, data_dir, output_dir, decision_rows, training_report, model_hash):
+    """仅保留融合信号，T0000 透传；复用旧模式的校验和按行复制。"""
+    source_root = Path(data_dir).expanduser().resolve()
+    destination_root = Path(output_dir).expanduser().resolve()
+    if source_root == destination_root:
+        raise ValueError("output-dir must differ from data-dir")
+    source_paths = [path for path in sorted(source_root.glob("*.h5"))
+                    if path.stem.split("_")[0] not in EXCLUDED_CLASS_CODES]
+    if not source_paths:
+        raise ValueError(f"No H5 files found in {source_root}")
+    by_file = defaultdict(list)
+    for row in decision_rows:
+        by_file[row["source_file"]].append(row)
+    return _export_decisions(
+        source_root, destination_root, source_paths, by_file, list(decision_rows[0]),
+        Counter(row["decision"] for row in decision_rows), model_hash,
+        analysis_report=training_report,
+    )
