@@ -1,239 +1,20 @@
-"""Map reviewed DCEC clusters to background decisions and export filtered H5 files."""
+"""校验 HDBSCAN 人工复核结果并导出信号 H5。"""
 
 from __future__ import annotations
 
 import csv
 import json
-import math
 import os
 from collections import Counter, defaultdict
 from pathlib import Path
 
 import h5py
 import numpy as np
-from sklearn.metrics import (
-    balanced_accuracy_score,
-    confusion_matrix,
-    precision_score,
-    recall_score,
-)
 
 from src.data.drone_rfa_io import EXCLUDED_CLASS_CODES
 
 # 允许的人工复核标签：background=背景，signal=信号，uncertain=无法判定。
 MANUAL_LABELS = frozenset(("background", "signal", "uncertain"))
-# 复核样本用途：mapping=聚类语义映射，calibration=背景阈值校准，audit=清洗效果审计。
-REVIEW_ROLES = frozenset(("mapping", "calibration", "audit"))
-
-
-def validate_and_join_reviews(
-    review_rows: list[dict[str, str]],
-    lookup_rows: list[dict[str, str]],
-) -> list[dict[str, str]]:
-    """校验人工复核记录，并按 review_id 关联样本定位信息。
-
-    输入：
-        review_rows: 已填写的 review.csv 记录列表(人工标签)。
-        lookup_rows: review_lookup.csv 记录列表(程序生成)。
-    输出：
-        按 review_rows 顺序返回关联后的记录列表
-    """
-    # 按 review_id 建立程序生成表的索引，拒绝重复 ID，并要求两表记录数一致。
-    lookup = {row["review_id"]: row for row in lookup_rows}
-    if len(lookup) != len(lookup_rows):
-        raise ValueError("review_lookup.csv contains duplicate review_id values")
-    if len(review_rows) != len(lookup_rows):
-        raise ValueError("review.csv and review_lookup.csv must contain the same rows")
-    # 按人工复核表顺序保存关联后的记录，包含样本定位信息和人工标签。
-    joined: list[dict[str, str]] = []
-    # 已处理的 review_id，用于检测人工复核表中的重复记录。
-    seen: set[str] = set()
-    for row in review_rows:
-        # 拒绝重复或未在程序生成表中登记的 review_id，并记录本次已处理的 ID。
-        review_id = row.get("review_id", "")
-        if review_id in seen or review_id not in lookup:
-            raise ValueError(f"Unknown or duplicate review_id: {review_id}")
-        seen.add(review_id)
-        # 人工标签去除首尾空白并转为小写；复核用途和标签均须属于各自的允许集合。
-        role = row.get("review_role", "")
-        label = row.get("manual_label", "").strip().lower()
-        if role not in REVIEW_ROLES:
-            raise ValueError(f"Unknown review_role for {review_id}: {role}")
-        if label not in MANUAL_LABELS:
-            raise ValueError(
-                f"manual_label for {review_id} must be background, signal, or uncertain"
-            )
-        # 核对程序生成表中的原始复核用途，防止人工修改样本的 mapping/calibration/audit 角色。
-        lookup_row = lookup[review_id]
-        if lookup_row.get("review_role") != role:
-            raise ValueError(f"review_role was changed for {review_id}")
-        # 复制原始索引记录并写入已校验的角色和规范化标签，保留样本定位字段。
-        joined.append({**lookup_row, "review_role": role, "manual_label": label})
-    return joined
-
-
-def map_cluster_semantics(
-    joined_reviews: list[dict[str, str]],
-    cluster_count: int,
-) -> tuple[dict[int, str], dict[int, dict[str, float | int | str | None]]]:
-    mapping_rows = [row for row in joined_reviews if row["review_role"] == "mapping"]
-    by_cluster: dict[int, list[str]] = defaultdict(list)
-    for row in mapping_rows:
-        by_cluster[int(row["cluster_id"])].append(row["manual_label"])
-
-    semantics: dict[int, str] = {}
-    stats: dict[int, dict[str, float | int | str | None]] = {}
-    for cluster_id in range(cluster_count):
-        counts = Counter(by_cluster.get(cluster_id, []))
-        definite_count = counts["background"] + counts["signal"]
-        background_fraction = counts["background"] / definite_count if definite_count else None
-        if definite_count >= 5 and background_fraction is not None and background_fraction >= 0.8:
-            semantic = "background"
-        elif definite_count >= 5 and background_fraction is not None and background_fraction <= 0.2:
-            semantic = "signal"
-        else:
-            semantic = "mixed"
-        semantics[cluster_id] = semantic
-        stats[cluster_id] = {
-            "background": counts["background"],
-            "signal": counts["signal"],
-            "uncertain": counts["uncertain"],
-            "definite_count": definite_count,
-            "background_fraction": background_fraction,
-            "semantic": semantic,
-        }
-    if "background" not in semantics.values():
-        raise ValueError("No cluster satisfies the reviewed background-cluster rule")
-    return semantics, stats
-
-
-def _background_score(assignment: dict[str, str], background_clusters: set[int]) -> float:
-    """汇总单个样本分配到所有背景簇的软分配权重，计算背景评分。
-
-    输入：
-        assignment: assignments.csv 中的一条样本记录，须包含各背景簇对应的
-            q_<cluster_id> 字段，字段值为数值字符串。
-        background_clusters: 经聚类语义映射确定为背景的簇编号集合。
-    输出：
-        将各背景簇的权重转为 float 后累加的评分。
-    """
-    return sum(float(assignment[f"q_{cluster_id}"]) for cluster_id in background_clusters)
-
-
-def _predict_background(
-    assignment: dict[str, str],
-    background_clusters: set[int],
-    threshold: float,
-) -> bool:
-    return (
-        int(assignment["cluster_id"]) in background_clusters
-        and _background_score(assignment, background_clusters) >= threshold
-    )
-
-
-def calibrate_background_threshold(
-    joined_reviews: list[dict[str, str]],
-    assignments: dict[int, dict[str, str]],
-    background_clusters: set[int],
-) -> tuple[float, dict[str, float | int]]:
-    rows = [
-        row for row in joined_reviews
-        if row["review_role"] == "calibration" and row["manual_label"] != "uncertain"
-    ]
-    labels = {row["manual_label"] for row in rows}
-    if labels != {"background", "signal"}:
-        raise ValueError("Calibration reviews must contain both background and signal samples")
-    y_true = np.array([row["manual_label"] == "background" for row in rows], dtype=np.int64)
-    best: tuple[float, float] | None = None
-    best_metrics: dict[str, float | int] | None = None
-    for threshold in np.linspace(0.50, 1.00, 51):
-        y_pred = np.array([
-            _predict_background(
-                assignments[int(row["sample_index"])], background_clusters, float(threshold)
-            )
-            for row in rows
-        ], dtype=np.int64)
-        false_background = int(np.sum((y_true == 0) & (y_pred == 1)))
-        true_background = int(np.sum((y_true == 1) & (y_pred == 1)))
-        if false_background or not true_background:
-            continue
-        background_recall = float(recall_score(y_true, y_pred, zero_division=0))
-        precision = float(precision_score(y_true, y_pred, zero_division=0))
-        key = (background_recall, float(threshold))
-        if best is None or key > best:
-            best = key
-            best_metrics = {
-                "sample_count": len(rows),
-                "threshold": float(threshold),
-                "background_precision": precision,
-                "background_recall": background_recall,
-                "signal_retention": 1.0,
-            }
-    if best is None or best_metrics is None:
-        raise ValueError(
-            "No useful background threshold avoids removing reviewed signal samples"
-        )
-    return best[1], best_metrics
-
-
-def _wilson_interval(successes: int, total: int, z: float = 1.959963984540054) -> list[float] | None:
-    if total == 0:
-        return None
-    proportion = successes / total
-    denominator = 1.0 + z * z / total
-    center = (proportion + z * z / (2.0 * total)) / denominator
-    margin = z * math.sqrt(
-        proportion * (1.0 - proportion) / total + z * z / (4.0 * total * total)
-    ) / denominator
-    return [max(0.0, center - margin), min(1.0, center + margin)]
-
-
-def evaluate_background_audit(
-    joined_reviews: list[dict[str, str]],
-    assignments: dict[int, dict[str, str]],
-    background_clusters: set[int],
-    threshold: float,
-) -> dict[str, object]:
-    all_audit = [row for row in joined_reviews if row["review_role"] == "audit"]
-    rows = [row for row in all_audit if row["manual_label"] != "uncertain"]
-    if not rows:
-        raise ValueError("Audit reviews contain no definite labels")
-    labels = {row["manual_label"] for row in rows}
-    if labels != {"background", "signal"}:
-        raise ValueError("Audit reviews must contain both background and signal samples")
-    y_true = np.array([row["manual_label"] == "background" for row in rows], dtype=np.int64)
-    y_pred = np.array([
-        _predict_background(
-            assignments[int(row["sample_index"])], background_clusters, threshold
-        )
-        for row in rows
-    ], dtype=np.int64)
-    true_positive = int(np.sum((y_true == 1) & (y_pred == 1)))
-    predicted_positive = int(np.sum(y_pred == 1))
-    actual_background = int(np.sum(y_true == 1))
-    actual_signal = int(np.sum(y_true == 0))
-    retained_signal = int(np.sum((y_true == 0) & (y_pred == 0)))
-    balanced = (
-        float(balanced_accuracy_score(y_true, y_pred))
-        if len(np.unique(y_true)) == 2 else None
-    )
-    return {
-        "review_count": len(all_audit),
-        "definite_count": len(rows),
-        "manual_uncertain_count": len(all_audit) - len(rows),
-        "background_precision": float(precision_score(y_true, y_pred, zero_division=0)),
-        "background_precision_wilson_95": _wilson_interval(
-            true_positive, predicted_positive
-        ),
-        "background_recall": float(recall_score(y_true, y_pred, zero_division=0)),
-        "background_recall_wilson_95": _wilson_interval(
-            true_positive, actual_background
-        ),
-        "signal_retention": retained_signal / actual_signal,
-        "signal_retention_wilson_95": _wilson_interval(retained_signal, actual_signal),
-        "balanced_accuracy": balanced,
-        "confusion_matrix": confusion_matrix(y_true, y_pred, labels=(0, 1)).tolist(),
-    }
 
 
 def _copy_row_dataset(
@@ -259,63 +40,10 @@ def _copy_row_dataset(
         destination[start : start + len(rows)] = source[rows]
 
 
-def export_clean_h5_files(
-    *,
-    data_dir: str | Path,
-    output_dir: str | Path,
-    assignment_rows: list[dict[str, str]],
-    semantics: dict[int, str],
-    threshold: float,
-    model_hash: str,
-) -> tuple[list[dict[str, object]], dict[str, int]]:
-    source_root = Path(data_dir).expanduser().resolve()
-    destination_root = Path(output_dir).expanduser().resolve()
-    if source_root == destination_root:
-        raise ValueError("output-dir must differ from data-dir")
-    if not math.isfinite(threshold) or not 0.0 <= threshold <= 1.0:
-        raise ValueError("threshold must be finite and within [0, 1]")
-
-    source_paths = [
-        path for path in sorted(source_root.glob("*.h5"))
-        if path.stem.split("_")[0] not in EXCLUDED_CLASS_CODES
-    ]
-    if not source_paths:
-        raise ValueError(f"No H5 files found in {source_root}")
-    background_clusters = {
-        cluster_id for cluster_id, value in semantics.items() if value == "background"
-    }
-    if not background_clusters:
-        raise ValueError("Cluster semantics contain no background cluster")
-    assignment_fields = list(assignment_rows[0]) if assignment_rows else []
-    by_file: dict[str, list[dict[str, object]]] = defaultdict(list)
-    decisions = Counter()
-    for row in assignment_rows:
-        score = _background_score(row, background_clusters)
-        cluster_id = int(row["cluster_id"])
-        if row["source_file"] != Path(row["source_file"]).name:
-            raise ValueError(f"source_file must be a basename: {row['source_file']}")
-        if _predict_background(row, background_clusters, threshold):
-            decision = "background_removed"
-        elif semantics[cluster_id] == "signal":
-            decision = "signal_retained"
-        else:
-            decision = "uncertain_retained"
-        enriched = {**row, "background_score": score, "decision": decision}
-        by_file[row["source_file"]].append(enriched)
-        decisions[decision] += 1
-
-    return _export_decisions(
-        source_root, destination_root, source_paths, by_file, assignment_fields,
-        decisions, model_hash, semantics=semantics, threshold=threshold,
-    )
-
-
 def _export_decisions(source_root, destination_root, source_paths, by_file,
-                      assignment_fields, decisions, model_hash, *, semantics=None,
-                      threshold=None, analysis_report=None):
-    """共用全量源行校验和原子写入，两种模式各自提供判定与溯源信息。"""
+                      assignment_fields, decisions, model_hash, *, analysis_report):
+    """全量校验源行后，按 HDBSCAN 判定原子写入各输出文件。"""
     manifest = []
-    hdbscan_mode = analysis_report is not None
     source_names = {path.name for path in source_paths}
     unknown_files = sorted(set(by_file) - source_names)
     if unknown_files:
@@ -339,7 +67,7 @@ def _export_decisions(source_root, destination_root, source_paths, by_file,
             label = next(iter(labels))
             if label == 0:
                 if rows:
-                    raise ValueError(f"T0000 must not have DCEC assignments: {filename}")
+                    raise ValueError(f"T0000 must not have HDBSCAN assignments: {filename}")
                 for source_row in range(source_count):
                     passthrough = {field: "" for field in assignment_fields}
                     passthrough.update({
@@ -349,14 +77,8 @@ def _export_decisions(source_root, destination_root, source_paths, by_file,
                         "original_label": 0,
                         "rf_channel": int(source["rf_channel"][source_row]),
                         "source_sample_idx": int(source["source_sample_idx"][source_row]),
-                        "cluster_id": "",
-                        "cluster_confidence": "",
-                        "background_score": "",
                         "decision": "t0000_passthrough",
                     })
-                    if hdbscan_mode:
-                        for field in ("cluster_id", "cluster_confidence", "background_score"):
-                            passthrough.pop(field, None)
                     by_file[filename].append(passthrough)
                     decisions["t0000_passthrough"] += 1
                 continue
@@ -370,10 +92,9 @@ def _export_decisions(source_root, destination_root, source_paths, by_file,
                     raise ValueError(
                         f"Assignment label does not match source H5: {filename} row {source_row}"
                     )
-                if hdbscan_mode:
-                    for field in ("rf_channel", "source_sample_idx"):
-                        if int(source[field][source_row]) != int(row[field]):
-                            raise ValueError(f"Assignment {field} does not match source H5: {filename} row {source_row}")
+                for field in ("rf_channel", "source_sample_idx"):
+                    if int(source[field][source_row]) != int(row[field]):
+                        raise ValueError(f"Assignment {field} does not match source H5: {filename} row {source_row}")
     destination_root.mkdir(parents=True, exist_ok=True)
 
     for filename in sorted(source_names):
@@ -390,16 +111,9 @@ def _export_decisions(source_root, destination_root, source_paths, by_file,
                     output.attrs[key] = value
                 output.attrs["cleaning_checkpoint_sha256"] = model_hash
                 output.attrs["cleaning_source_file"] = filename
-                if hdbscan_mode:
-                    output.attrs["cleaning_method"] = "DCEC-HDBSCAN-signal-filter"
-                    output.attrs["cleaning_selected_k"] = analysis_report["selected_k"]
-                    output.attrs["cleaning_hdbscan_cluster_count"] = analysis_report["hdbscan"]["cluster_count"]
-                    output.attrs["cleaning_analysis_parameters"] = json.dumps(analysis_report["hdbscan"]["parameters"], sort_keys=True)
-                else:
-                    output.attrs["cleaning_method"] = "DCEC-background-filter"
-                    output.attrs["cleaning_selected_k"] = len(semantics)
-                    output.attrs["cleaning_background_threshold"] = threshold
-                    output.attrs["cleaning_cluster_semantics"] = json.dumps(semantics, sort_keys=True)
+                output.attrs["cleaning_method"] = "CAE-HDBSCAN-signal-filter"
+                output.attrs["cleaning_hdbscan_cluster_count"] = analysis_report["hdbscan"]["cluster_count"]
+                output.attrs["cleaning_analysis_parameters"] = json.dumps(analysis_report["hdbscan"]["parameters"], sort_keys=True)
                 output.attrs["cleaning_input_size"] = 256
                 output.attrs["cleaning_clip_min"] = -5.0
                 output.attrs["cleaning_clip_max"] = 5.0
@@ -409,7 +123,7 @@ def _export_decisions(source_root, destination_root, source_paths, by_file,
                         _copy_row_dataset(dataset, output, name, source_rows)
                     else:
                         source.copy(name, output)
-                if int(source["labels"][0]) != 0 and hdbscan_mode:
+                if int(source["labels"][0]) != 0:
                     for name, field, dtype in (
                         ("hdbscan_source_row_idx", "source_row_idx", np.int64),
                         ("hdbscan_label", "hdbscan_label", np.int32),
@@ -417,28 +131,6 @@ def _export_decisions(source_root, destination_root, source_paths, by_file,
                         ("hdbscan_outlier_score", "outlier_score", np.float64),
                     ):
                         output.create_dataset(name, data=np.asarray([row[field] for row in selected], dtype=dtype))
-                elif int(source["labels"][0]) != 0:
-                    output.create_dataset(
-                        "dec_source_row_idx", data=np.asarray(source_rows, dtype=np.int64)
-                    )
-                    output.create_dataset(
-                        "dec_cluster_id",
-                        data=np.asarray([int(row["cluster_id"]) for row in selected], dtype=np.int32),
-                    )
-                    output.create_dataset(
-                        "dec_cluster_confidence",
-                        data=np.asarray(
-                            [float(row["cluster_confidence"]) for row in selected],
-                            dtype=np.float32,
-                        ),
-                    )
-                    output.create_dataset(
-                        "dec_background_score",
-                        data=np.asarray(
-                            [float(row["background_score"]) for row in selected],
-                            dtype=np.float32,
-                        ),
-                    )
             os.replace(temporary_path, output_path)
         finally:
             if temporary_path.exists():
@@ -476,8 +168,8 @@ def prepare_hdbscan_cleaning(assignment_rows, review_rows, lookup_rows, training
     """关联已填写复核表，按固定融合规则评估；不拟合聚类或覆盖人工样本。"""
     from src.data.stft_analysis import StftAnalysisConfig, fuse_structure
 
-    if training_report.get("analysis_mode") != "dcec-hdbscan":
-        raise ValueError("training_report.json must describe dcec-hdbscan analysis")
+    if training_report.get("analysis_mode") != "cae-hdbscan":
+        raise ValueError("training_report.json must describe cae-hdbscan analysis")
     parameters = training_report["hdbscan"]["parameters"]
     config = StftAnalysisConfig(**{name: parameters[name] for name in StftAnalysisConfig.__dataclass_fields__})
     config.validate()
@@ -558,7 +250,7 @@ def prepare_hdbscan_cleaning(assignment_rows, review_rows, lookup_rows, training
 
 
 def export_hdbscan_h5_files(*, data_dir, output_dir, decision_rows, training_report, model_hash):
-    """仅保留融合信号，T0000 透传；复用旧模式的校验和按行复制。"""
+    """仅保留融合信号，T0000 透传；校验后按行复制。"""
     source_root = Path(data_dir).expanduser().resolve()
     destination_root = Path(output_dir).expanduser().resolve()
     if source_root == destination_root:

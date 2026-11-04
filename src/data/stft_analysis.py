@@ -38,19 +38,19 @@ class StftAnalysisConfig:
             value = getattr(self, name)
             if not np.isfinite(value) or not 0 <= value <= 1:
                 raise ValueError(f"{name.replace('_', '-')} must be finite and within [0, 1]")
-        # DCEC 至少需要 5 条才能评估默认最小 K=4；密度邻域还需要一个额外样本。
-        required = max(5, self.min_cluster_size, self.min_samples + 1)
+        # 密度邻域需要一个额外样本；不再受固定候选簇数限制。
+        required = max(self.min_cluster_size, self.min_samples + 1)
         if sample_count is not None and sample_count < required:
-            raise ValueError(f"At least {required} samples are required for DCEC + HDBSCAN")
+            raise ValueError(f"At least {required} samples are required for CAE + HDBSCAN")
 
 
 def load_hdbscan():
-    """仅在新模式中加载独立 hdbscan 包，训练前即可报告缺失依赖。"""
+    """加载独立 hdbscan 包，训练前即可报告缺失依赖。"""
     try:
         from hdbscan import HDBSCAN
     except ImportError as exc:
         raise ImportError(
-            "dcec-hdbscan requires the 'hdbscan' package; install requirements.txt in your environment"
+            "cae-hdbscan requires the 'hdbscan' package; install requirements.txt in your environment"
         ) from exc
     return HDBSCAN
 

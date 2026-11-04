@@ -52,7 +52,7 @@ python <script-or-command>
 │   ├── generate_raw_cpp_png.py       # 从原始 .mat IQ 按指定 SNR 生成单通道 CPP/FAM PNG
 │   ├── generate_stft_png.py          # 从 STFT .h5 生成单通道频谱图 PNG
 │   ├── generate_cpp_png.py           # 从 CPP/FAM .h5 生成单通道 CPP/FAM PNG
-│   ├── train_stft_dcec.py            # 训练 STFT DCEC 并生成盲审样本
+│   ├── train_stft_dcec.py            # 训练 STFT 自编码器并生成 HDBSCAN 复核样本
 │   └── export_clean_stft_h5.py       # 根据人工审核结果剔除纯背景并导出 H5
 ├── src/
 │   ├── data/
@@ -68,8 +68,6 @@ python <script-or-command>
 │   ├── models/
 │   │   ├── resnet.py                 # 适配单通道特征输入的 ResNet-18
 │   │   ├── autoencoder.py            # STFT 卷积自编码器
-│   │   ├── clustering.py             # DEC/DCEC 聚类层与目标分布计算
-│   │   └── dcec.py                   # STFT DCEC 模型
 │   ├── preprocess/
 │   │   ├── h5_precompute.py          # STFT/CPP .h5 预计算通用流程
 │   │   ├── random_snr_awgn.py        # 随机 SNR 加性高斯白噪声增强
@@ -80,7 +78,7 @@ python <script-or-command>
 │   │   ├── model_io.py               # 模型权重保存与加载
 │   │   ├── evaluator.py              # 验证/测试循环
 │   │   ├── metrics.py                # 训练评估指标计算
-│   │   ├── stft_deep_cluster.py      # 自编码器预训练、K 选择和 DCEC 训练
+│   │   ├── stft_deep_cluster.py      # 自编码器训练与潜在向量提取
 │   │   └── trainer.py                # 模型训练循环
 │   └── utils/
 │       ├── logger.py                 # 全局日志工具
@@ -164,41 +162,16 @@ python scripts/generate_cpp_png.py --h5-dir ~/Desktop/dataset/droneRFa/cpp_h5
 H5 生成的 STFT 图片默认保存到 H5 目录旁的 `stft_png/`，CPP/FAM 图片默认保存到 H5
 目录旁的 `cpp_png/`。
 
-新实验使用带 `16class` 的独立目录和文件名，不覆盖历史产物。原始标签及单通道格式正确的旧 17 类 H5 可显式指定为输入，加载时自动跳过 `T0001`；应重新生成 split manifest，旧 17 类 manifest 和模型权重不用于当前实验。旧 14 类 H5 的压缩标签及文件级 `rf_channel` 属性与当前格式不兼容。DEC 也应使用新的空 `work-dir` 重新生成审核、训练和导出产物。
+新实验使用带 `16class` 的独立目录和文件名，不覆盖历史产物。原始标签及单通道格式正确的旧 17 类 H5 可显式指定为输入，加载时自动跳过 `T0001`；应重新生成 split manifest，旧 17 类 manifest 和模型权重不用于当前实验。旧 14 类 H5 的压缩标签及文件级 `rf_channel` 属性与当前格式不兼容。HDBSCAN 清洗也应使用新的空 `work-dir` 重新生成审核、训练和导出产物。
 
-### DEC 单阶段 STFT 清洗
+### 自编码器 + HDBSCAN STFT 清洗
 
-默认使用 DEC（DCEC 实现）从 T0010-T10000 中剔除高置信纯背景，保留其他可见信号。
-输入 H5 须由 `precompute_stft_h5.py --clean` 生成；`--clean` 仅表示不额外添加 AWGN，
-不表示已完成数据清洗。训练会跳过 `T0000`，并生成 250 条盲审图片及 `review.csv`，
-其中 150 条用于簇语义映射、50 条用于阈值校准、50 条用于独立审核：
-
-```bash
-python scripts/train_stft_dcec.py \
-  --data-dir ~/Desktop/dataset/DroneRFa_stft_16class_h5 \
-  --work-dir outputs/stft_dec_background \
-  --device mps
-```
-
-查看 `outputs/stft_dec_background/review_images/`，在 `review.csv` 的 `manual_label` 列填写
-`background`、`signal` 或 `uncertain`。`signal` 表示任何可见信号，不要求必须是图传。
-完成审核后导出 DEC 背景过滤结果：
-
-```bash
-python scripts/export_clean_stft_h5.py \
-  --data-dir ~/Desktop/dataset/DroneRFa_stft_16class_h5 \
-  --work-dir outputs/stft_dec_background \
-  --output-dir ~/Desktop/dataset/DroneRFa_stft_dec_filtered_h5
-```
-
-DEC 仅删除归属于背景簇且背景分数达到校准阈值的样本；信号簇、混合簇和未达到阈值的
-样本全部保留，`T0000` 的全部样本原样保留。清洗不会按图传与非图传进一步筛选信号。
-正式导出要求独立审核样本上的信号保留率为 100%、背景召回率不低于 90%；这些门槛只代表
-审核样本上的结果。全量决定和独立审核指标分别保存在 `cleaning_manifest.csv` 与
-`cleaning_report.json`，结果写入新 H5 目录，源 H5 不会被修改。
-旧 DEC `video/non_video` 复核不兼容，必须使用新的空 `work-dir` 重新生成。
-
-### DCEC + HDBSCAN STFT 清洗
+输入 H5 须由 `precompute_stft_h5.py --clean` 生成；`--clean` 表示不额外添加 AWGN。
+训练跳过 T0000 和 T0001，仅以重建损失训练自编码器，再直接对潜在向量做 HDBSCAN。
+不再选择固定簇数、执行 KMeans 或进行 DCEC 联合训练。训练入口沿用 `train_stft_dcec.py` 文件名。
+模型保存为 `stft_autoencoder.pt`，报告模式为 `cae-hdbscan`。
+`--analysis-mode` 和 `--dcec-epochs` 已移除，训练和导出默认工作目录均为 `outputs/stft_hdbscan`。
+旧 DCEC 及 DCEC + HDBSCAN 产物不兼容，请使用新的工作目录重新训练、复核和导出。
 
 结构信号判定要求最大连通区域面积占比不低于 `0.001`，且频率或时间跨度占比不低于
 `0.09`，以保留跨度略小于原 `0.1` 门槛的信号；HDBSCAN 密度异常规则不变。
@@ -209,7 +182,7 @@ manifest 或 H5；已有结果需在新的 `work-dir` 中重新训练分析、�
 
 ```bash
 ~/Desktop/venv/bin/python scripts/train_stft_dcec.py \
-  --analysis-mode dcec-hdbscan --data-dir <原始clean-H5目录> \
+  --data-dir <原始clean-H5目录> \
   --work-dir outputs/stft_hdbscan --device mps
 ```
 
@@ -218,7 +191,7 @@ manifest 或 H5；已有结果需在新的 `work-dir` 中重新训练分析、�
 
 ```bash
 ~/Desktop/venv/bin/python scripts/export_clean_stft_h5.py \
-  --analysis-mode dcec-hdbscan --data-dir <原始clean-H5目录> \
+  --data-dir <原始clean-H5目录> \
   --work-dir outputs/stft_hdbscan --output-dir <新的清洗H5目录>
 ```
 
