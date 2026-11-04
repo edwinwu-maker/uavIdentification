@@ -3,6 +3,7 @@
 Usage:
   python scripts/train_stft_dcec.py --data-dir ... --work-dir outputs/stft_deep_cluster
   python scripts/train_stft_dcec.py --data-dir ... --work-dir ... --device cuda:0 --batch-size 32
+  ~/Desktop/venv/bin/python scripts/train_stft_dcec.py --data-dir ... --analysis-mode dcec-hdbscan
 """
 
 from __future__ import annotations
@@ -10,7 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from dataclasses import asdict
+from dataclasses import asdict, fields
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -56,6 +57,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pretrain-epochs", type=int, default=50)
     parser.add_argument("--dcec-epochs", type=int, default=100)
     parser.add_argument("--patience", type=int, default=8)
+    parser.add_argument("--analysis-mode", choices=("dcec", "dcec-hdbscan"), default="dcec",
+                        help="Final analysis method; both modes retain DCEC training")
+    parser.add_argument("--min-cluster-size", type=int, default=30,
+                        help="HDBSCAN minimum cluster size (default: 30)")
+    parser.add_argument("--min-samples", type=int, default=10,
+                        help="HDBSCAN density neighborhood size (default: 10)")
+    parser.add_argument("--mask-threshold", type=float, default=1.5,
+                        help="Raw z-score STFT mask uses values strictly above this threshold (default: 1.5)")
+    parser.add_argument("--min-region-pixels", type=int, default=64,
+                        help="Minimum 8-connected region area in raw pixels (default: 64)")
+    parser.add_argument("--signal-area-threshold", type=float, default=0.001,
+                        help="Minimum largest-region area / full image area for signal (default: 0.001)")
+    parser.add_argument("--signal-span-threshold", type=float, default=0.1,
+                        help="Minimum frequency or time span / axis length for signal (default: 0.1)")
+    parser.add_argument("--membership-threshold", type=float, default=0.5,
+                        help="Membership strength below this value forces uncertain (default: 0.5)")
+    parser.add_argument("--outlier-threshold", type=float, default=0.9,
+                        help="GLOSH score above this value forces uncertain (default: 0.9)")
     return parser.parse_args()
 
 
@@ -68,18 +87,30 @@ def main() -> None:
     if args.pretrain_epochs <= 0 or args.dcec_epochs <= 0 or args.patience <= 0:
         raise ValueError("epoch and patience values must be positive")
 
+    analysis_config = None
+    if args.analysis_mode == "dcec-hdbscan":
+        from src.data.stft_analysis import StftAnalysisConfig, load_hdbscan, write_hdbscan_analysis
+
+        analysis_config = StftAnalysisConfig(**{
+            field.name: getattr(args, field.name) for field in fields(StftAnalysisConfig)
+        })
+        analysis_config.validate()
+        load_hdbscan()
+
     # 固定随机种子，并初始化计算设备与输出目录。
     set_random_seed(SEED)
     device = torch.device(args.device)
     work_dir = Path(args.work_dir).expanduser()
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    # 提前检查盲审所需总数，避免完成训练后才因样本不足失败。
+    # 提前检查对应模式所需总数，避免完成训练后才因样本不足失败。
     samples = scan_clean_stft_h5(args.data_dir)
     logger.info("Loaded %d clean UAV STFT samples", len(samples))
     review_counts = dict(REVIEW_ROLES)
     required_count = sum(review_counts.values())
-    if len(samples) < required_count:
+    if analysis_config is not None:
+        analysis_config.validate(len(samples))
+    elif len(samples) < required_count:
         raise ValueError(f"At least {required_count} samples are required for blinded review")
 
     dataset = CleanStftClusteringDataset(samples)
@@ -141,18 +172,24 @@ def main() -> None:
         }
         torch.save(model_artifact, work_dir / "stft_dcec.pt")
 
-        # 导出全量聚类分配，生成语义映射、阈值校准和独立审核的盲审资料。
-        write_cluster_assignments(work_dir / "assignments.csv", samples, probabilities)
-        selections = select_cluster_review_indices(
-            samples,
-            final_embeddings,
-            probabilities,
-            model.clustering.centers.detach().cpu().numpy(),
-        )
-        write_cluster_review_artifacts(work_dir, selections, samples, probabilities)
+        # 新模式独立导出，不产生供旧清洗流程使用的 assignments.csv。
+        analysis_report = None
+        if analysis_config is not None:
+            analysis_report = write_hdbscan_analysis(work_dir, samples, final_embeddings, analysis_config)
+            review_counts = {"analysis": analysis_report["review_count"]}
+        else:
+            write_cluster_assignments(work_dir / "assignments.csv", samples, probabilities)
+            selections = select_cluster_review_indices(
+                samples,
+                final_embeddings,
+                probabilities,
+                model.clustering.centers.detach().cpu().numpy(),
+            )
+            write_cluster_review_artifacts(work_dir, selections, samples, probabilities)
 
         # 汇总各簇样本量、候选 K 评估和两阶段训练历史。
         report = {
+            "analysis_mode": args.analysis_mode,
             "sample_count": len(samples),
             "selected_k": selected_k,
             "final_cluster_counts": np.bincount(
@@ -163,6 +200,10 @@ def main() -> None:
             "dcec_history": dcec_history,
             "review_counts": review_counts,
         }
+        if analysis_report is not None:
+            report["hdbscan"] = analysis_report
+            report["dcec_cluster_counts"] = report["final_cluster_counts"]
+            report["final_cluster_counts"] = analysis_report["cluster_counts"]
         with (work_dir / "training_report.json").open("w", encoding="utf-8") as file_obj:
             json.dump(report, file_obj, ensure_ascii=False, indent=2)
         logger.info("Model artifact, assignments, and blinded review set saved to %s", work_dir)
