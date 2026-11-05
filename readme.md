@@ -78,7 +78,7 @@ python <script-or-command>
 │   │   ├── model_io.py               # 模型权重保存与加载
 │   │   ├── evaluator.py              # 验证/测试循环
 │   │   ├── metrics.py                # 训练评估指标计算
-│   │   ├── stft_deep_cluster.py      # 自编码器训练与潜在向量提取
+│   │   ├── stft_autoencoder.py       # 自编码器训练与潜在向量提取
 │   │   └── trainer.py                # 模型训练循环
 │   └── utils/
 │       ├── logger.py                 # 全局日志工具

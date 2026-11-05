@@ -25,7 +25,7 @@ from src.data.stft_clustering import (
     scan_clean_stft_h5,
 )
 from src.models.autoencoder import StftAutoencoder
-from src.training.stft_deep_cluster import (
+from src.training.stft_autoencoder import (
     encode_dataset,
     pretrain_autoencoder,
 )
