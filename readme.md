@@ -169,7 +169,12 @@ H5 生成的 STFT 图片默认保存到 H5 目录旁的 `stft_png/`，CPP/FAM �
 输入 H5 须由 `precompute_stft_h5.py --clean` 生成；`--clean` 表示不额外添加 AWGN。
 训练跳过 T0000 和 T0001，仅以重建损失训练自编码器，再直接对潜在向量做 HDBSCAN。
 不再选择固定簇数、执行 KMeans 或进行 DCEC 联合训练。训练入口沿用 `train_stft_dcec.py` 文件名。
-模型保存为 `stft_autoencoder.pt`，报告模式为 `cae-hdbscan`。
+模型保存为 `<work-dir>/stft_autoencoder.pt`，默认存在且兼容时加载，不存在时训练并保存。
+使用 `--force-retrain` 可忽略已有权重，从头训练并覆盖模型文件。
+已有文件损坏或不兼容时会报错并保留文件；兼容性校验包括权重结构、128 维潜在向量、
+256 输入尺寸、截断范围 `(-5, 5)` 和缩放除数 5，不验证训练数据来源。
+复用后仍重新编码、聚类并生成复核材料。报告模式为 `cae-hdbscan`，新增 `model_reused` 标记；
+`pretrain_history` 仅记录本次训练历史，复用时为 `[]`。
 `--analysis-mode` 和 `--dcec-epochs` 已移除，训练和导出默认工作目录均为 `outputs/stft_hdbscan`。
 旧 DCEC 及 DCEC + HDBSCAN 产物不兼容，请使用新的工作目录重新训练、复核和导出。
 
@@ -185,6 +190,8 @@ manifest 或 H5；已有结果需在新的 `work-dir` 中重新训练分析、�
   --data-dir <原始clean-H5目录> \
   --work-dir outputs/stft_hdbscan --device mps
 ```
+
+需要从头训练时，在上述命令末尾添加 `--force-retrain`。
 
 查看 `hdbscan_review_images/`，填写 `hdbscan_review.csv` 的 `manual_label` 列
 （`signal/background/uncertain`），然后调用：

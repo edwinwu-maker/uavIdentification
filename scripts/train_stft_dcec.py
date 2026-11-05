@@ -4,6 +4,7 @@ Usage:
   python scripts/train_stft_dcec.py --data-dir ... --work-dir outputs/stft_hdbscan
   python scripts/train_stft_dcec.py --data-dir ... --work-dir ... --device cuda:0 --batch-size 32
   ~/Desktop/venv/bin/python scripts/train_stft_dcec.py --data-dir ...
+  ~/Desktop/venv/bin/python scripts/train_stft_dcec.py --data-dir ... --force-retrain
 """
 
 from __future__ import annotations
@@ -46,6 +47,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--pretrain-epochs", type=int, default=50)
     parser.add_argument("--patience", type=int, default=8)
+    parser.add_argument("--force-retrain", action="store_true",
+                        help="Train from scratch and overwrite any existing autoencoder checkpoint")
     parser.add_argument("--min-cluster-size", type=int, default=30,
                         help="HDBSCAN minimum cluster size (default: 30)")
     parser.add_argument("--min-samples", type=int, default=10,
@@ -63,6 +66,30 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--outlier-threshold", type=float, default=0.9,
                         help="GLOSH score above this value forces uncertain (default: 0.9)")
     return parser.parse_args()
+
+
+def _load_autoencoder(path: Path, model: StftAutoencoder) -> None:
+    """加载兼容权重；失败时保留文件并提示显式重训。"""
+    try:
+        checkpoint = torch.load(path, map_location="cpu", weights_only=True)
+        expected = {
+            "latent_dim": model.latent_dim,
+            "input_size": 256,
+            "clip_range": (-5.0, 5.0),
+            "scale_divisor": 5.0,
+        }
+        if not isinstance(checkpoint, dict):
+            raise ValueError("checkpoint must be a dictionary")
+        for name, value in expected.items():
+            if checkpoint.get(name) != value:
+                raise ValueError(f"incompatible {name}: expected {value}, got {checkpoint.get(name)}")
+        model.load_state_dict(checkpoint["model_state_dict"], strict=True)
+    except Exception as exc:
+        # 读取、元数据或权重校验失败均不能隐式覆盖已有文件。
+        raise ValueError(
+            f"Cannot reuse autoencoder checkpoint {path}: {exc}. "
+            "Use --force-retrain to train from scratch and overwrite it."
+        ) from exc
 
 
 def main() -> None:
@@ -101,41 +128,52 @@ def main() -> None:
             "num_workers": args.num_workers,
             "pin_memory": device.type == "cuda",
         }
-        train_loader = DataLoader(dataset, shuffle=True, **loader_kwargs)
         inference_loader = DataLoader(dataset, shuffle=False, **loader_kwargs)
 
-        # 预训练自编码器；训练函数会恢复重建损失最低的权重。
+        model_path = work_dir / "stft_autoencoder.pt"
+        model_reused = model_path.exists() and not args.force_retrain
         autoencoder = StftAutoencoder()
-        pretrain_history = pretrain_autoencoder(
-            autoencoder,
-            train_loader,
-            device=device,
-            epochs=args.pretrain_epochs,
-            learning_rate=1e-3,
-            patience=args.patience,
-            logger=logger,
-        )
+        pretrain_history = []
+        if model_reused:
+            _load_autoencoder(model_path, autoencoder)
+            autoencoder.to(device)
+            logger.info("Reusing autoencoder checkpoint: %s", model_path)
+        else:
+            logger.info("Training autoencoder from scratch: %s", model_path)
+            train_loader = DataLoader(dataset, shuffle=True, **loader_kwargs)
+            pretrain_history = pretrain_autoencoder(
+                autoencoder,
+                train_loader,
+                device=device,
+                epochs=args.pretrain_epochs,
+                learning_rate=1e-3,
+                patience=args.patience,
+                logger=logger,
+            )
 
         # 直接对自编码器潜在向量做密度聚类，不再训练固定簇中心。
         embeddings = encode_dataset(autoencoder, inference_loader, device=device)
 
-        # 保存模型权重及预处理元数据，供后续复用。
-        model_artifact = {
-            "model_state_dict": autoencoder.state_dict(),
-            "latent_dim": autoencoder.latent_dim,
-            "input_size": 256,
-            "clip_range": (-5.0, 5.0),
-            "scale_divisor": 5.0,
-            "seed": SEED,
-        }
-        torch.save(model_artifact, work_dir / "stft_autoencoder.pt")
+        if not model_reused:
+            # 保存模型权重及预处理元数据，供后续复用。
+            model_artifact = {
+                "model_state_dict": autoencoder.state_dict(),
+                "latent_dim": autoencoder.latent_dim,
+                "input_size": 256,
+                "clip_range": (-5.0, 5.0),
+                "scale_divisor": 5.0,
+                "seed": SEED,
+            }
+            torch.save(model_artifact, model_path)
 
+        # 进入 HDBSCAN 聚类及结构分析
         analysis_report = write_hdbscan_analysis(work_dir, samples, embeddings, analysis_config)
         report = {
             "analysis_mode": "cae-hdbscan",
             "sample_count": len(samples),
             "final_cluster_counts": analysis_report["cluster_counts"],
             "pretrain_history": pretrain_history,
+            "model_reused": model_reused,
             "review_counts": {"analysis": analysis_report["review_count"]},
             "hdbscan": analysis_report,
         }
