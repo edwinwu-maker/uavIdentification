@@ -113,7 +113,7 @@ def analyze_stft_structure(stft: np.ndarray, config: StftAnalysisConfig) -> dict
 
 def fuse_structure(structure: dict, label: int, membership: float, outlier: float,
                    config: StftAnalysisConfig) -> dict:
-    """密度异常只进入 uncertain，不据此判为背景；保留全部触发原因。"""
+    """结构信号优先；其余结构遇密度异常进入 uncertain，保留全部触发原因。"""
     reasons = []
     if label == -1:
         reasons.append("hdbscan_noise")
@@ -123,11 +123,16 @@ def fuse_structure(structure: dict, label: int, membership: float, outlier: floa
         reasons.append("low_membership")
     if outlier > config.outlier_threshold:
         reasons.append("high_outlier_score")
+    is_signal = structure["structure_label"] == "signal"
+    fusion_reason = ";".join(reasons) if reasons else structure["structure_reason"]
+    if is_signal and reasons:
+        # 密度异常仅记录诊断信息，不否决已满足面积与跨度要求的信号。
+        fusion_reason = "signal_extent;" + fusion_reason
     return {
         **structure,
         "density_boundary": bool(reasons),
-        "fusion_label": "uncertain" if reasons else structure["structure_label"],
-        "fusion_reason": ";".join(reasons) if reasons else structure["structure_reason"],
+        "fusion_label": structure["structure_label"] if is_signal or not reasons else "uncertain",
+        "fusion_reason": fusion_reason,
     }
 
 
