@@ -4,6 +4,7 @@ Usage:
   python scripts/train_stft_dcec.py --data-dir ... --work-dir outputs/stft_hdbscan
   python scripts/train_stft_dcec.py --data-dir ... --work-dir ... --device cuda:0 --batch-size 32
   ~/Desktop/venv/bin/python scripts/train_stft_dcec.py --data-dir ...
+  ~/Desktop/venv/bin/python scripts/train_stft_dcec.py --data-dir ... --work-dir ... --reuse-review-dir outputs/stft_hdbscan
   ~/Desktop/venv/bin/python scripts/train_stft_dcec.py --data-dir ... --force-retrain
 """
 
@@ -42,6 +43,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train STFT autoencoder and create HDBSCAN review samples")
     parser.add_argument("--data-dir", required=True, help="Directory containing clean STFT .h5 files")
     parser.add_argument("--work-dir", default="outputs/stft_hdbscan")
+    parser.add_argument("--reuse-review-dir", type=Path, default=None,
+                        help="Reuse review samples and labels from this directory (default: work-dir)")
     parser.add_argument("--device", default=default_device())
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--num-workers", type=int, default=0)
@@ -167,7 +170,9 @@ def main() -> None:
             torch.save(model_artifact, model_path)
 
         # 进入 HDBSCAN 聚类及结构分析
-        analysis_report = write_hdbscan_analysis(work_dir, samples, embeddings, analysis_config)
+        analysis_report = write_hdbscan_analysis(
+            work_dir, samples, embeddings, analysis_config, reuse_review_dir=args.reuse_review_dir
+        )
         report = {
             "analysis_mode": "cae-hdbscan",
             "sample_count": len(samples),

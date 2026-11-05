@@ -197,6 +197,14 @@ manifest 或 H5；旧融合结果会触发导出一致性校验。应将原 `stf
 
 需要从头训练时，在上述命令末尾添加 `--force-retrain`。
 
+重跑时默认复用当前 `work-dir` 中的 `hdbscan_review.csv` 及配套
+`hdbscan_review_lookup.csv`，保留样本集合、行序、编号和已填标签，不重新选样。
+分析结果和 lookup 会按当前规则更新；未填写的标签仍需补填。
+跨目录复用可添加 `--reuse-review-dir <旧工作目录>`，该参数优先于当前目录的复核表。
+两份旧表均不存在时才首次选样；缺表、非法标签、重复记录、样本缺失或身份变化会报错，
+并在覆盖分析资料前停止。匹配使用文件名、源行号和 RF 通道，并核对原始样本编号及类别；
+不依赖绝对路径或全局索引，也不校验 H5 内容哈希，适用于原始数据内容不变的重跑。
+
 查看 `hdbscan_review_images/`，填写 `hdbscan_review.csv` 的 `manual_label` 列
 （`signal/background/uncertain`），然后调用：
 

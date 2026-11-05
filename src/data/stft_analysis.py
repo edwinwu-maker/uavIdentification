@@ -13,6 +13,7 @@ import numpy as np
 from scipy import ndimage
 
 from src.data.stft_clustering import StftClusterSample, _save_cluster_review_image
+from src.utils.logger import logger
 
 
 @dataclass(frozen=True)
@@ -167,9 +168,66 @@ def select_hdbscan_review_indices(rows: list[dict], limit: int = 250) -> list[in
     return selected
 
 
+def _reuse_review(source_dir: Path, samples: list[StftClusterSample], *, required: bool):
+    """读取旧复核表，按样本身份返回 (编号, 当前索引, 标签)，写入前完成校验。"""
+    paths = [source_dir / "hdbscan_review.csv", source_dir / "hdbscan_review_lookup.csv"]
+    if not required and not any(path.exists() for path in paths):
+        return None
+    tables = []
+    fields = [
+        {"review_id", "image_path", "manual_label"},
+        {"review_id", "source_file", "source_row_idx", "rf_channel", "source_sample_idx", "original_label"},
+    ]
+    for path, needed in zip(paths, fields):
+        with path.open(newline="", encoding="utf-8-sig") as file_obj:
+            reader = csv.DictReader(file_obj)
+            if not needed.issubset(reader.fieldnames or []):
+                raise ValueError(f"Missing review columns: {path}")
+            tables.append(list(reader))
+    reviews, lookup_rows = tables
+    lookup = {row["review_id"]: row for row in lookup_rows}
+    review_ids = [row["review_id"] for row in reviews]
+    if (not reviews or len(lookup) != len(lookup_rows) or len(set(review_ids)) != len(review_ids)
+            or set(review_ids) != set(lookup)):
+        raise ValueError("Review and lookup must contain the same unique review IDs")
+    current = {(Path(sample.path).name, sample.row_idx, sample.rf_channel): index
+               for index, sample in enumerate(samples)}
+    selections = []
+    seen = set()
+    for review in reviews:
+        review_id = review["review_id"]
+        # 编号用于图片文件名，仅接受脚本生成的 H + 数字形式。
+        if not review_id.startswith("H") or not review_id[1:].isdigit():
+            raise ValueError(f"Invalid review ID: {review_id}")
+        label = (review["manual_label"] or "").strip().lower()
+        if label not in ("", "signal", "background", "uncertain"):
+            raise ValueError(f"Invalid manual label: {review_id}")
+        old = lookup[review_id]
+        key = (old["source_file"], int(old["source_row_idx"]), int(old["rf_channel"]))
+        if key in seen or key not in current:
+            raise ValueError(f"Missing or duplicate review sample: {review_id} {key}")
+        seen.add(key)
+        index = current[key]
+        sample = samples[index]
+        if (int(old["source_sample_idx"]) != sample.source_sample_idx
+                or int(old["original_label"]) != sample.label):
+            raise ValueError(f"Review sample identity changed: {review_id} {key}")
+        selections.append((review_id, index, label))
+    labeled = sum(bool(label) for _, _, label in selections)
+    logger.info("Reusing review from %s | labeled: %d | pending: %d",
+                source_dir, labeled, len(selections) - labeled)
+    return selections
+
+
 def write_hdbscan_analysis(work_dir: Path, samples: list[StftClusterSample],
-                          embeddings: np.ndarray, config: StftAnalysisConfig) -> dict:
+                          embeddings: np.ndarray, config: StftAnalysisConfig,
+                          *, reuse_review_dir: Path | None = None) -> dict:
     """逐条读取原始 STFT，导出独立分析资料并返回可写入训练报告的统计。"""
+    # 同目录重跑也先完整读入旧表，避免覆盖后丢失标签。
+    selections = _reuse_review(
+        Path(reuse_review_dir).expanduser() if reuse_review_dir is not None else work_dir,
+        samples, required=reuse_review_dir is not None,
+    )
     labels, memberships, outliers = fit_hdbscan(embeddings, config)
     rows = []
     image_dir = work_dir / "hdbscan_review_images"
@@ -199,7 +257,9 @@ def write_hdbscan_analysis(work_dir: Path, samples: list[StftClusterSample],
             writer = csv.DictWriter(file_obj, fieldnames=list(rows[0]))
             writer.writeheader()
             writer.writerows(rows)
-        selections = select_hdbscan_review_indices(rows)
+        if selections is None:
+            selections = [(f"H{order:04d}", index, "") for order, index in
+                          enumerate(select_hdbscan_review_indices(rows), start=1)]
         with (work_dir / "hdbscan_review.csv").open("w", newline="", encoding="utf-8") as review_file, (
             work_dir / "hdbscan_review_lookup.csv"
         ).open("w", newline="", encoding="utf-8") as lookup_file:
@@ -207,14 +267,13 @@ def write_hdbscan_analysis(work_dir: Path, samples: list[StftClusterSample],
             lookup_writer = csv.DictWriter(lookup_file, fieldnames=("review_id", *rows[0]))
             review_writer.writeheader()
             lookup_writer.writeheader()
-            for order, index in enumerate(selections, start=1):
-                review_id = f"H{order:04d}"
+            for review_id, index, manual_label in selections:
                 sample = samples[index]
                 relative_image = Path("hdbscan_review_images") / f"{review_id}.png"
                 _save_cluster_review_image(
                     handles[sample.path]["stft"][sample.row_idx, 0], review_id, work_dir / relative_image
                 )
-                review_writer.writerow({"review_id": review_id, "image_path": relative_image.as_posix(), "manual_label": ""})
+                review_writer.writerow({"review_id": review_id, "image_path": relative_image.as_posix(), "manual_label": manual_label})
                 lookup_writer.writerow({"review_id": review_id, **rows[index]})
 
     return {
