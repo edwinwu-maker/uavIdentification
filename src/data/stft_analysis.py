@@ -11,9 +11,80 @@ from pathlib import Path
 import h5py
 import numpy as np
 from scipy import ndimage
+from sklearn.manifold import TSNE
 
 from src.data.stft_clustering import StftClusterSample, _save_cluster_review_image
 from src.utils.logger import logger
+from src.utils.plot import import_pyplot
+
+
+def _write_tsne_visualization(work_dir: Path, embeddings: np.ndarray, rows: list[dict]) -> dict:
+    """仅投影展示用样本；按全局索引对齐坐标和标签，不改变密度聚类输入。"""
+    indices = np.arange(len(rows))
+    if len(indices) > 10000:
+        indices = np.sort(np.random.default_rng(42).choice(indices, size=10000, replace=False))
+    selected = embeddings[indices]
+    parameters = dict(n_components=2, perplexity=min(30, len(indices) - 1),
+                      init="pca", learning_rate="auto", random_state=42, max_iter=1000)
+    degenerate = bool(np.all(selected == selected[0]))
+    logger.info("t-SNE visualization: %d / %d samples", len(indices), len(rows))
+    # 常量特征没有可展示的邻域结构，PCA 初始化也会除以零。
+    coordinates = np.zeros((len(indices), 2)) if degenerate else TSNE(**parameters).fit_transform(selected)
+    csv_name = "hdbscan_tsne.csv"
+    with (work_dir / csv_name).open("w", newline="", encoding="utf-8") as file_obj:
+        writer = csv.DictWriter(file_obj, fieldnames=(
+            "sample_index", "tsne_x", "tsne_y", "hdbscan_label", "original_label", "fusion_label",
+        ))
+        writer.writeheader()
+        for index, (x, y) in zip(indices, coordinates):
+            writer.writerow({"sample_index": int(index), "tsne_x": float(x), "tsne_y": float(y),
+                             **{key: rows[index][key] for key in (
+                                 "hdbscan_label", "original_label", "fusion_label")}})
+
+    plt = import_pyplot(show=False)
+    # 统一坐标范围，三张图仅改变标签着色，便于逐点对照。
+    lower, upper = coordinates.min(axis=0), coordinates.max(axis=0)
+    padding = np.maximum((upper - lower) * 0.05, 1.0)
+    files = [csv_name]
+    for key, suffix, title in (
+        ("hdbscan_label", "clusters", "HDBSCAN clusters"),
+        ("original_label", "original_labels", "Original UAV classes"),
+        ("fusion_label", "fusion_labels", "Signal cleaning decisions"),
+    ):
+        values = np.array([rows[index][key] for index in indices])
+        categories = sorted(set(values.tolist()))
+        colors = plt.get_cmap("tab20" if len(categories) <= 20 else "hsv", len(categories))
+        fig, ax = plt.subplots(figsize=(10, 7), constrained_layout=True)
+        try:
+            for order, category in enumerate(categories):
+                color = colors(order)
+                label = str(category)
+                if key == "hdbscan_label" and category == -1:
+                    color, label = "gray", "Noise (-1)"
+                elif key == "original_label":
+                    label = f"T{category:04b}"
+                elif key == "fusion_label":
+                    color = {"signal": "tab:green", "background": "tab:blue", "uncertain": "tab:orange"}[category]
+                points = coordinates[values == category]
+                ax.scatter(points[:, 0], points[:, 1], s=8, alpha=0.65, color=color, label=label,
+                           linewidths=0)
+            subtitle = f"{len(indices)} / {len(rows)} samples"
+            if degenerate:
+                subtitle += " | Degenerate embedding: all points identical"
+            ax.set_title(f"{title}\n{subtitle}")
+            ax.set_xlabel("t-SNE 1")
+            ax.set_ylabel("t-SNE 2")
+            ax.set_xlim(lower[0] - padding[0], upper[0] + padding[0])
+            ax.set_ylim(lower[1] - padding[1], upper[1] + padding[1])
+            ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1), fontsize=8,
+                      ncol=max(1, (len(categories) + 29) // 30))
+            name = f"hdbscan_tsne_{suffix}.png"
+            fig.savefig(work_dir / name, dpi=150)
+            files.append(name)
+        finally:
+            plt.close(fig)
+    return {"total_sample_count": len(rows), "plotted_sample_count": len(indices),
+            "max_samples": 10000, "parameters": parameters, "degenerate": degenerate, "files": files}
 
 
 @dataclass(frozen=True)
@@ -276,6 +347,7 @@ def write_hdbscan_analysis(work_dir: Path, samples: list[StftClusterSample],
                 review_writer.writerow({"review_id": review_id, "image_path": relative_image.as_posix(), "manual_label": manual_label})
                 lookup_writer.writerow({"review_id": review_id, **rows[index]})
 
+    tsne_report = _write_tsne_visualization(work_dir, embeddings, rows)
     return {
         "parameters": {**asdict(config), "metric": "euclidean", "cluster_selection_method": "eom",
                        "embedding": "raw_encoder_z", "structure_axes": ["frequency", "time"]},
@@ -290,4 +362,5 @@ def write_hdbscan_analysis(work_dir: Path, samples: list[StftClusterSample],
             for label in sorted(set(labels.tolist()))
         },
         "review_count": len(selections),
+        "tsne": tsne_report,
     }

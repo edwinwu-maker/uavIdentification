@@ -197,6 +197,17 @@ manifest 或 H5；旧融合结果会触发导出一致性校验。应将原 `stf
 
 需要从头训练时，在上述命令末尾添加 `--force-retrain`。
 
+分析完成后自动在工作目录生成 t-SNE 对照图：`hdbscan_tsne_clusters.png` 按 HDBSCAN
+簇编号着色（噪声 `-1` 为灰色），`hdbscan_tsne_original_labels.png` 按原始无人机类别着色，
+`hdbscan_tsne_fusion_labels.png` 按 `signal/background/uncertain` 着色。
+三张图共享二维坐标；`hdbscan_tsne.csv` 保存坐标、标签及 `sample_index`，可关联
+`hdbscan_assignments.csv`。最多展示 10,000 条样本，超过时以种子 42 均匀无放回抽样；
+小簇不保证被抽中。HDBSCAN 始终使用全部原始 128 维潜在向量，t-SNE 坐标仅供展示，
+图中的距离与簇形状不能直接作为聚类质量指标。
+投影使用 PCA 初始化、自动学习率、种子 42、1000 次迭代及 `min(30, 展示样本数-1)` 的
+perplexity；特征全部相同时坐标置零，并在图中标明退化。
+`training_report.json` 的 `hdbscan.tsne` 记录样本数、实际参数、退化状态及输出文件名。
+
 重跑时默认复用当前 `work-dir` 中的 `hdbscan_review.csv` 及配套
 `hdbscan_review_lookup.csv`，保留样本集合、行序、编号和已填标签，不重新选样。
 分析结果和 lookup 会按当前规则更新；未填写的标签仍需补填。
