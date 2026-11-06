@@ -14,13 +14,13 @@ from sklearn.metrics import normalized_mutual_info_score
 from torch.utils.data import DataLoader, SequentialSampler, WeightedRandomSampler
 from tqdm import tqdm
 
-from src.models.autoencoder import StftAutoencoder
-from src.training.stft_autoencoder import encode_dataset
+from src.models.stft_cnn import StftCNN
+from src.models.stft_resnet import StftResNet18
 
 
 @dataclass
 class DeepClusterResult:
-    model: StftAutoencoder
+    model: StftCNN | StftResNet18
     pca: PCA
     kmeans: KMeans
     embeddings: np.ndarray
@@ -28,6 +28,26 @@ class DeepClusterResult:
     assignments: np.ndarray
     distances: np.ndarray
     history: list[dict]
+
+
+@torch.inference_mode()
+def encode_dataset(
+    model: StftCNN | StftResNet18,
+    loader: DataLoader,
+    *,
+    device: torch.device,
+) -> np.ndarray:
+    """提取 CNN 特征，按完整数据集的全局索引写回；调用后保持 eval 模式。"""
+    model.eval()
+    embeddings = torch.empty(
+        (len(loader.dataset), model.latent_dim), device=device, dtype=torch.float32,
+    )
+    for inputs, indices in tqdm(loader, desc="Encoding STFT", leave=False):
+        latent = model.encode(inputs.to(device, non_blocking=True))
+        indices = indices.to(device=device, dtype=torch.long, non_blocking=True)
+        embeddings.index_copy_(0, indices, latent.to(dtype=torch.float32))
+    # 一次性回传，避免逐批同步。
+    return embeddings.cpu().numpy()
 
 
 def fit_deepcluster_features(
@@ -86,7 +106,7 @@ def fit_deepcluster_features(
 
 
 def train_deepcluster(
-    model: StftAutoencoder,
+    model: StftCNN | StftResNet18,
     inference_loader: DataLoader,
     *,
     device: torch.device,
@@ -97,10 +117,10 @@ def train_deepcluster(
     seed: int = 42,
     logger=None,
 ) -> DeepClusterResult:
-    """原地更新预训练 CAE 的编码器，返回最终权重对应的特征和聚类。
+    """原地训练随机初始化的 CNN，返回最终权重对应的特征和聚类。
 
     inference_loader 须使用 SequentialSampler，数据集返回 (STFT, 全局索引) 并使用确定性预处理。
-    每轮用全部样本聚类，按簇均衡抽取 N 次训练；解码器不参与伪标签训练。
+    每轮用全部样本聚类，按簇均衡抽取 N 次训练，不使用重建预训练。
     """
     if epochs <= 0 or not np.isfinite(learning_rate) or learning_rate <= 0:
         raise ValueError("DeepCluster epochs and learning_rate must be positive")
@@ -109,8 +129,7 @@ def train_deepcluster(
     if not isinstance(inference_loader.sampler, SequentialSampler) or len(inference_loader.sampler) != len(inference_loader.dataset):
         raise ValueError("DeepCluster inference loader requires a complete SequentialSampler")
     model.to(device)
-    encoder_parameters = list(model.encoder_conv.parameters()) + list(model.encoder_fc.parameters())
-    optimizer = torch.optim.AdamW(encoder_parameters, lr=learning_rate, weight_decay=1e-4)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
     history: list[dict] = []
     previous_assignments = None
     sample_count = len(inference_loader.dataset)

@@ -238,14 +238,36 @@ perplexity；特征全部相同时坐标置零，并在图中标明退化。
 
 ### DeepCluster 独立图传清洗
 
-该流程不依赖 HDBSCAN：先用 CAE 初始化编码器，再交替执行全量编码、PCA 白化与 L2 归一化、KMeans 伪标签和分类训练。默认处理低质量的 10 类 `4,6,8,10,11,12,13,14,15,16`，不使用机型标签训练。`clean` 只表示未额外添加 AWGN，并非有效图传标注。
+该流程不依赖 HDBSCAN：从随机初始化的 CNN 开始，交替执行全量编码、PCA 白化与 L2 归一化、KMeans 伪标签和分类训练，不进行 CAE 重建预训练。默认处理低质量的 10 类 `4,6,8,10,11,12,13,14,15,16`，不使用机型标签训练。`clean` 只表示未额外添加 AWGN，并非有效图传标注。
 
 ```bash
 ~/Desktop/venv/bin/python scripts/train_stft_deepcluster.py \
   --data-dir <原始clean-H5目录> --work-dir outputs/stft_deepcluster --device mps
 ```
 
-默认 K=32、PCA 最多64个有效维度、20轮聚类反馈，每轮伪标签训练一个 epoch；可分别用 `--n-clusters 16`、`--n-clusters 64` 做对照。添加 `--cae-only` 可运行相同审核流程的 CAE+KMeans 基线，并用 `--cae-checkpoint` 为不同实验指定同一初始化权重。每轮重置分类头、按簇均衡抽样，最终更新后重新聚类。DeepCluster 阶段不使用重建损失；更新后的 encoder 不应与旧 decoder 配合沿用重建误差阈值。
+默认 K=32、PCA 最多64个有效维度、20轮聚类反馈，每轮伪标签训练一个 epoch；可分别用 `--n-clusters 16`、`--n-clusters 64` 做对照。每轮重置分类头、按簇均衡抽样，最终更新后重新聚类。CNN 不包含 decoder，也不使用重建误差阈值；旧参数 `--cae-only`、`--cae-checkpoint`、`--pretrain-epochs`、`--patience` 和 `--force-retrain` 已移除。
+
+输入形式由 `--input-mode grayscale|rgb` 选择，默认 `grayscale` 保持原单通道浮点矩阵输入。两种模式均从 H5 读取 STFT，截断至 `[-5, 5]`、除以 5 并平均池化至 256×256，保持原坐标方向；`rgb` 再以固定 256 色 `jet` 查找表映射为三通道像素矩阵，RGB 分量统一缩放至 `[-1, 1]`。输入不包含标题、坐标轴、色条或留白，也不需要保存中间 PNG。该映射使用的强度范围与审核图的 `[-3, 3]` 显示范围不同。
+
+```bash
+~/Desktop/venv/bin/python scripts/train_stft_deepcluster.py \
+  --data-dir <原始clean-H5目录> --input-mode rgb \
+  --work-dir outputs/stft_deepcluster_rgb --device mps
+```
+
+CNN 首层随模式使用 1 或 3 个输入通道。`deepcluster.pt` 记录 `input_mode`、`in_channels` 和 `colormap`，`training_report.json` 的 `parameters.input_mode` 记录本次选择；重建模型时按 checkpoint 的 `in_channels` 初始化。两种模式的权重不能直接互换。对照实验使用独立工作目录，并可通过 `--reuse-review-dir` 固定审核样本。
+
+骨干由 `--backbone cnn|resnet18` 选择，默认 `cnn` 为轻量五层 CNN：通道依次为 `32,64,128,256,256`，每层采用 `3×3 / stride=2 / padding=1` 无偏置卷积、BatchNorm2d 和 ReLU；空间尺寸依次为 `128,64,32,16,8`，末端经全局平均池化和 `256→128` 线性层输出特征。卷积采用 Kaiming normal（fan_in、ReLU）初始化，避免低幅值输入的首轮随机特征逐层衰减。BN 训练时更新运行统计，编码时使用 eval 模式及运行统计，不额外预热或校准。改进 ResNet-18 从随机权重开始，保留 `[2,2,2,2]` BasicBlock；入口为 `3×3 / stride=2` 卷积，移除 MaxPool，所有归一化均为 `GroupNorm(8, channels)`。256×256 输入经过总计16倍下采样得到 `512×16×16`，再通过 `2×2` 自适应平均池化保留粗略时频位置，展平后由 `2048→128` 线性层输出特征。特征末端没有额外激活或归一化，仍使用相同的 PCA、L2、KMeans 和逐轮重置分类头流程。
+
+```bash
+~/Desktop/venv/bin/python scripts/train_stft_deepcluster.py \
+  --data-dir <原始clean-H5目录> --backbone resnet18 --batch-size 8 \
+  --work-dir outputs/stft_deepcluster_resnet18 --device mps
+```
+
+两种骨干均支持 `--input-mode grayscale|rgb`。checkpoint 和报告的 `model_type` 分别为 `stft_light_cnn`、`stft_resnet18`，`parameters.backbone` 记录选择。重建时根据 `model_type` 选择 `src.models.stft_cnn.StftCNN` 或 `src.models.stft_resnet.StftResNet18`，传入保存的 `latent_dim`、`in_channels` 后严格加载 `model_state_dict`，提取特征前调用 `eval()`；BN 运行均值、运行方差及批次计数随 state_dict 保存。旧 `model_type=stft_cnn` 权重与新的轻量 CNN 不兼容，不自动转换；请保留历史产物并使用独立工作目录训练新模型。
+
+单通道改进 ResNet-18 约1143万参数、8.87 GMAC/样本，轻量 CNN 约101万参数、0.269 GMAC（256×256 输入，仅统计卷积和全连接）。实际耗时和显存需实测，可先使用较小批次。此改造无法恢复1024→256输入池化已经丢失的信息，也不预设聚类质量一定提升。对照时固定数据、输入模式、批次大小、seed、K、PCA维度、轮数和学习率，使用独立工作目录，并通过 `--reuse-review-dir` 复用相同盲审样本及逐样本审核；比较有效图传误删率、删除集合无效样本比例和隔离率。
 
 审核工作目录中的 `cluster_review.csv` 和 `sample_review.csv`：`decision` 为 `keep/drop/quarantine`，明确填写 `confirmed=true` 才生效。逐样本决定优先；混合簇设 `mixed=true` 后整簇默认隔离，只允许逐样本覆盖。未确认样本默认隔离。仅保留可确认的可用图传；纯背景、仅控制跳频、明确非目标通信可剔除；弱信号、混合信号或无法确认的通信来源应隔离。簇代表图仅辅助审核，距离近或抽样一致不证明整个簇有效。
 
@@ -261,13 +283,13 @@ perplexity；特征全部相同时坐标置零，并在图中标明退化。
 
 输出目录的 `keep/` 与 `quarantine/` 保存原始 H5 行及元数据，剔除样本仅记录清单；源文件不修改，目标不覆盖。T0000 透传保留，T0001 排除；未纳入本轮类别的文件不导出，另列报告。训练及导出通过源 H5 全文件 SHA256 核验内容，数据量大时需要额外顺序读取。审核采用人工语义，表征训练无监督。该实验允许全量无标签聚类，属于现有数据整理，不能据此宣称未见文件泛化能力。
 
-训练结束后自动生成 `deepcluster_tsne_clusters.png`（簇编号）和 `deepcluster_tsne_original_labels.png`（原始 T 类别）。投影使用最终参与 KMeans 的 PCA 白化＋L2 特征；`--cae-only` 也采用相同流程。`deepcluster_tsne.csv` 保存坐标与完整样本身份，`training_report.json` 的 `tsne` 记录参数及抽样数量。
+训练结束后自动生成 `deepcluster_tsne_clusters.png`（簇编号）和 `deepcluster_tsne_original_labels.png`（原始 T 类别）。投影使用最终参与 KMeans 的 PCA 白化＋L2 特征，单通道与 RGB 模式采用相同流程。`deepcluster_tsne.csv` 保存坐标与完整样本身份，`training_report.json` 的 `tsne` 记录参数及抽样数量。
 
 审核导出时复用同一坐标，在输出目录生成 `deepcluster_tsne_decisions.png`，按 `keep/drop/quarantine` 着色；T0000 不参与投影。旧目录缺少坐标时仍可导出 H5，报告注明未生成处置图。坐标与当前分配表身份不匹配时拒绝导出。
 
 最多展示10,000条样本，超出时按实验 seed 均匀无放回抽样，小簇不保证覆盖。投影使用二维、`perplexity=min(30, 展示数量-1)`、自动学习率和1,000次迭代；PCA 初始化，单维特征改用随机初始化，常量特征使用零坐标并注明退化。同次实验的各图共享坐标范围；不同实验分别拟合，位置不可直接比较。t-SNE 只用于观察邻域与审核结果，不参与聚类或清洗判定。
 
-对照实验应使用相同数据和人工审核预算，比较当前结构规则、CAE+KMeans+审核、CAE+DeepCluster+审核。关注明确图传错误剔除率、隔离率、删除集合无效样本比例及逐类/逐文件覆盖；训练损失、NMI 和 t-SNE 不代替清洗验收。历史 HDBSCAN manifest 与当前融合规则可能不一致，需要重跑基线。下游识别须固定原始文件划分与同一个测试集，不能清洗后重新随机划分。
+对照实验应使用相同数据和人工审核预算，比较当前结构规则、单通道 CNN+DeepCluster+审核、RGB CNN+DeepCluster+审核；历史 CAE 基线须保留独立产物。关注明确图传错误剔除率、隔离率、删除集合无效样本比例及逐类/逐文件覆盖；训练损失、NMI 和 t-SNE 不代替清洗验收。历史 HDBSCAN manifest 与当前融合规则可能不一致，需要重跑基线。下游识别须固定原始文件划分与同一个测试集，不能清洗后重新随机划分。
 
 ### 训练模型
 

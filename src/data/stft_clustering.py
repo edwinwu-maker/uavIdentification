@@ -119,9 +119,19 @@ def scan_clean_stft_h5(data_dir: str) -> list[StftClusterSample]:
 class CleanStftClusteringDataset(Dataset):
     """Lazily load clean UAV STFT rows and return stable global indices."""
 
-    def __init__(self, samples: list[StftClusterSample], *, output_size: int = 256) -> None:
+    def __init__(self, samples: list[StftClusterSample], *, output_size: int = 256,
+                 input_mode: str = "grayscale") -> None:
+        if input_mode not in ("grayscale", "rgb"):
+            raise ValueError("input_mode must be grayscale or rgb")
         self.samples = samples
         self.output_size = output_size
+        self.input_mode = input_mode
+        if input_mode == "rgb":
+            from matplotlib import colormaps
+
+            # 固定 256 色 jet 查找表，只保留 RGB，并统一缩放至 [-1, 1]。
+            colors = colormaps["jet"](np.linspace(0.0, 1.0, 256))[:, :3]
+            self.rgb_lut = torch.from_numpy(colors.astype(np.float32)).mul(2.0).sub(1.0)
         self.files: dict[str, h5py.File] = {}
 
     def __len__(self) -> int:
@@ -131,7 +141,12 @@ class CleanStftClusteringDataset(Dataset):
         sample = self.samples[index]
         h5f = self._get_file(sample.path)
         value = torch.from_numpy(h5f["stft"][sample.row_idx])
-        return clip_scale_and_pool_stft(value, self.output_size), index
+        value = clip_scale_and_pool_stft(value, self.output_size)
+        if self.input_mode == "rgb":
+            # 两种模式先做相同池化；仅增加颜色映射，不引入绘图边框或改变坐标方向。
+            color_indices = ((value.squeeze(0) + 1.0) * 128.0).long().clamp(0, 255)
+            value = self.rgb_lut[color_indices].permute(2, 0, 1).contiguous()
+        return value, index
 
     def _get_file(self, path: str) -> h5py.File:
         if path not in self.files:
