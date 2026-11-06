@@ -247,6 +247,16 @@ perplexity；特征全部相同时坐标置零，并在图中标明退化。
 
 默认 K=32、PCA 最多64个有效维度、20轮聚类反馈，每轮伪标签训练一个 epoch；可分别用 `--n-clusters 16`、`--n-clusters 64` 做对照。每轮重置分类头、按簇均衡抽样，最终更新后重新聚类。CNN 不包含 decoder，也不使用重建误差阈值；旧参数 `--cae-only`、`--cae-checkpoint`、`--pretrain-epochs`、`--patience` 和 `--force-retrain` 已移除。
 
+可通过 `--early-stop-patience 5` 开启聚类稳定性早停；默认值0关闭，`--epochs` 仍默认20，作为最大训练轮数。`--early-stop-nmi-threshold` 默认0.99，`--early-stop-min-epochs` 默认10：从第10轮开始，轮间 NMI 连续5轮达到阈值则停止，最早完成第14轮后退出；未达标清零，首轮 NMI 为空不计数。预算不足时正常跑满。阈值是初始实验配置，需要真实数据校准。
+
+```bash
+~/Desktop/venv/bin/python scripts/train_stft_deepcluster.py \
+  --data-dir <原始clean-H5目录> --epochs 50 --early-stop-patience 5 \
+  --work-dir outputs/stft_deepcluster_early_stop --device mps
+```
+
+判据使用每轮训练前的聚类，完成本轮训练后检查，不增加每轮编码或聚类次数；停止后保留最后权重并重新编码、聚类，最终聚类种子按实际完成轮数计算。history 的 `stable_rounds` 和日志记录连续达标轮数；checkpoint 与训练报告的 `training_summary` 同时记录 `epochs_requested`、`epochs_completed`、`stopped_early`、`stop_reason`（`max_epochs` 或 `assignment_stable`）。达到最大轮数统一视为正常完成。稳定不代表语义正确；每轮分类头重置，loss 不直接用于早停，人工审核及盲审标签不参与停止决策。
+
 输入形式由 `--input-mode grayscale|rgb` 选择，默认 `grayscale` 保持原单通道浮点矩阵输入。两种模式均从 H5 读取 STFT，截断至 `[-5, 5]`、除以 5 并平均池化至 256×256，保持原坐标方向；`rgb` 再以固定 256 色 `jet` 查找表映射为三通道像素矩阵，RGB 分量统一缩放至 `[-1, 1]`。输入不包含标题、坐标轴、色条或留白，也不需要保存中间 PNG。该映射使用的强度范围与审核图的 `[-3, 3]` 显示范围不同。
 
 ```bash

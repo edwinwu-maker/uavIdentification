@@ -6,6 +6,7 @@ Usage:
   python scripts/train_stft_deepcluster.py --data-dir ... --labels 4 6 8 --n-clusters 16 --pca-dim 32
   ~/Desktop/venv/bin/python scripts/train_stft_deepcluster.py --data-dir ... --input-mode rgb --work-dir outputs/stft_deepcluster_rgb
   ~/Desktop/venv/bin/python scripts/train_stft_deepcluster.py --data-dir ... --backbone resnet18 --batch-size 8 --work-dir outputs/stft_deepcluster_resnet18
+  ~/Desktop/venv/bin/python scripts/train_stft_deepcluster.py --data-dir ... --epochs 50 --early-stop-patience 5
   python scripts/train_stft_deepcluster.py --data-dir ... --reuse-review-dir outputs/stft_cae_kmeans
 """
 
@@ -51,6 +52,12 @@ def parse_args():
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--epochs", type=int, default=20)
+    parser.add_argument("--early-stop-patience", type=int, default=0,
+                        help="Consecutive stable rounds required; 0 disables early stopping (default)")
+    parser.add_argument("--early-stop-nmi-threshold", type=float, default=0.99,
+                        help="Minimum reassignment NMI for a stable round (default: 0.99)")
+    parser.add_argument("--early-stop-min-epochs", type=int, default=10,
+                        help="First epoch counted toward stability (default: 10)")
     parser.add_argument("--n-clusters", type=int, default=32)
     parser.add_argument("--pca-dim", type=int, default=64)
     parser.add_argument("--learning-rate", type=float, default=1e-4)
@@ -71,6 +78,10 @@ def main():
         raise ValueError("num-workers must be non-negative and learning-rate must be positive")
     if args.n_clusters < 2 or not 1 <= args.pca_dim <= 64:
         raise ValueError("n-clusters must be >= 2 and pca-dim must be within 1..64")
+    if args.early_stop_patience < 0 or args.early_stop_min_epochs < 1:
+        raise ValueError("early-stop-patience must be non-negative and early-stop-min-epochs must be positive")
+    if not np.isfinite(args.early_stop_nmi_threshold) or not 0 < args.early_stop_nmi_threshold <= 1:
+        raise ValueError("early-stop-nmi-threshold must be finite and within (0, 1]")
     if not set(args.labels).issubset(set(range(2, 17))):
         raise ValueError("labels must be original UAV labels within 2..16")
     set_random_seed(args.seed)
@@ -94,7 +105,10 @@ def main():
         logger.info("DeepCluster backbone: %s", model_type)
         result = train_deepcluster(model, inference_loader, device=device, epochs=args.epochs,
                                    n_clusters=args.n_clusters, pca_dim=args.pca_dim,
-                                   learning_rate=args.learning_rate, seed=args.seed, logger=logger)
+                                   learning_rate=args.learning_rate, seed=args.seed,
+                                   early_stop_patience=args.early_stop_patience,
+                                   early_stop_nmi_threshold=args.early_stop_nmi_threshold,
+                                   early_stop_min_epochs=args.early_stop_min_epochs, logger=logger)
         logger.info("Writing new clustering results; all cluster decisions will reset to unconfirmed quarantine")
         review = write_deepcluster_review(work_dir, samples, result, fingerprint=fingerprint,
                                          seed=args.seed, audit_per_class=args.audit_per_class,
@@ -102,6 +116,13 @@ def main():
         parameters = vars(args) | {
             "reuse_review_dir": str(args.reuse_review_dir) if args.reuse_review_dir else None,
         }
+        training_summary = {
+            "epochs_requested": args.epochs, "epochs_completed": len(result.history),
+            "stopped_early": result.stop_reason == "assignment_stable",
+            "stop_reason": result.stop_reason,
+        }
+        logger.info("DeepCluster completed %d/%d epochs | stop_reason: %s",
+                    len(result.history), args.epochs, result.stop_reason)
         # 用纯张量保存 sklearn 推理参数，避免加载 checkpoint 时依赖 pickle 对象。
         torch.save({"model_type": model_type,
                     "input_mode": args.input_mode, "in_channels": model.in_channels,
@@ -114,7 +135,7 @@ def main():
                             "explained_variance": torch.from_numpy(result.pca.explained_variance_),
                             "whiten": True},
                     "cluster_centers": torch.from_numpy(result.kmeans.cluster_centers_),
-                    "parameters": parameters},
+                    "parameters": parameters, "training_summary": training_summary},
                    work_dir / "deepcluster.pt")
         tsne = write_deepcluster_tsne(
             work_dir, result.features, read_csv_records(work_dir / "deepcluster_assignments.csv"),
@@ -124,6 +145,7 @@ def main():
                   "sample_count": len(samples),
                   "dataset_fingerprint": fingerprint, "fingerprint_payload": fingerprint_payload,
                   "parameters": parameters,
+                  "training_summary": training_summary,
                   "history": result.history, "review": review, "tsne": tsne}
         with (work_dir / "training_report.json").open("w", encoding="utf-8") as destination:
             json.dump(report, destination, ensure_ascii=False, indent=2, allow_nan=False)
