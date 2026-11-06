@@ -236,6 +236,39 @@ perplexity；特征全部相同时坐标置零，并在图中标明退化。
 逐样本决定、人工标签及输出行号。新 H5 保留原始标签，附带 `hdbscan_*` 行号和聚类信息；
 某文件全部删除时仍输出零行文件。源文件不修改，已有目标文件不覆盖。
 
+### DeepCluster 独立图传清洗
+
+该流程不依赖 HDBSCAN：先用 CAE 初始化编码器，再交替执行全量编码、PCA 白化与 L2 归一化、KMeans 伪标签和分类训练。默认处理低质量的 10 类 `4,6,8,10,11,12,13,14,15,16`，不使用机型标签训练。`clean` 只表示未额外添加 AWGN，并非有效图传标注。
+
+```bash
+~/Desktop/venv/bin/python scripts/train_stft_deepcluster.py \
+  --data-dir <原始clean-H5目录> --work-dir outputs/stft_deepcluster --device mps
+```
+
+默认 K=32、PCA 最多64个有效维度、20轮聚类反馈，每轮伪标签训练一个 epoch；可分别用 `--n-clusters 16`、`--n-clusters 64` 做对照。添加 `--cae-only` 可运行相同审核流程的 CAE+KMeans 基线，并用 `--cae-checkpoint` 为不同实验指定同一初始化权重。每轮重置分类头、按簇均衡抽样，最终更新后重新聚类。DeepCluster 阶段不使用重建损失；更新后的 encoder 不应与旧 decoder 配合沿用重建误差阈值。
+
+审核工作目录中的 `cluster_review.csv` 和 `sample_review.csv`：`decision` 为 `keep/drop/quarantine`，明确填写 `confirmed=true` 才生效。逐样本决定优先；混合簇设 `mixed=true` 后整簇默认隔离，只允许逐样本覆盖。未确认样本默认隔离。仅保留可确认的可用图传；纯背景、仅控制跳频、明确非目标通信可剔除；弱信号、混合信号或无法确认的通信来源应隔离。簇代表图仅辅助审核，距离近或抽样一致不证明整个簇有效。
+
+`audit.csv` 是与开发审核分离的固定盲审样本，`manual_label` 使用 `video/background/control_only/interference/weak_or_mixed/uncertain`；应在处置决定冻结后填写，仅用于评估，不参与清洗决定。原始高分辨率审核图用于检查池化可能掩盖的细窄信号。重跑保留同身份、同输入指纹的样本审核；簇编号不具有跨运行语义，簇级处置需要重新确认。
+
+不同方法使用独立 `work-dir`，添加 `--reuse-review-dir <参考实验目录>` 复用同一盲审样本和已有逐样本审核；要求输入指纹一致。这样可固定审核集，而非仅依赖相同随机种子。各方法的簇处置仍需重新确认。
+
+```bash
+~/Desktop/venv/bin/python scripts/export_deepcluster_stft_h5.py \
+  --data-dir <原始clean-H5目录> --work-dir outputs/stft_deepcluster \
+  --output-dir <新的清洗输出目录>
+```
+
+输出目录的 `keep/` 与 `quarantine/` 保存原始 H5 行及元数据，剔除样本仅记录清单；源文件不修改，目标不覆盖。T0000 透传保留，T0001 排除；未纳入本轮类别的文件不导出，另列报告。训练及导出通过源 H5 全文件 SHA256 核验内容，数据量大时需要额外顺序读取。审核采用人工语义，表征训练无监督。该实验允许全量无标签聚类，属于现有数据整理，不能据此宣称未见文件泛化能力。
+
+训练结束后自动生成 `deepcluster_tsne_clusters.png`（簇编号）和 `deepcluster_tsne_original_labels.png`（原始 T 类别）。投影使用最终参与 KMeans 的 PCA 白化＋L2 特征；`--cae-only` 也采用相同流程。`deepcluster_tsne.csv` 保存坐标与完整样本身份，`training_report.json` 的 `tsne` 记录参数及抽样数量。
+
+审核导出时复用同一坐标，在输出目录生成 `deepcluster_tsne_decisions.png`，按 `keep/drop/quarantine` 着色；T0000 不参与投影。旧目录缺少坐标时仍可导出 H5，报告注明未生成处置图。坐标与当前分配表身份不匹配时拒绝导出。
+
+最多展示10,000条样本，超出时按实验 seed 均匀无放回抽样，小簇不保证覆盖。投影使用二维、`perplexity=min(30, 展示数量-1)`、自动学习率和1,000次迭代；PCA 初始化，单维特征改用随机初始化，常量特征使用零坐标并注明退化。同次实验的各图共享坐标范围；不同实验分别拟合，位置不可直接比较。t-SNE 只用于观察邻域与审核结果，不参与聚类或清洗判定。
+
+对照实验应使用相同数据和人工审核预算，比较当前结构规则、CAE+KMeans+审核、CAE+DeepCluster+审核。关注明确图传错误剔除率、隔离率、删除集合无效样本比例及逐类/逐文件覆盖；训练损失、NMI 和 t-SNE 不代替清洗验收。历史 HDBSCAN manifest 与当前融合规则可能不一致，需要重跑基线。下游识别须固定原始文件划分与同一个测试集，不能清洗后重新随机划分。
+
 ### 训练模型
 
 STFT 与 CPP 统一使用单通道输入的 `DroneRFaResNet18`，保持对比实验的网络结构一致。
