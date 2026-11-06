@@ -14,8 +14,7 @@ from sklearn.metrics import normalized_mutual_info_score
 from torch.utils.data import DataLoader, SequentialSampler, WeightedRandomSampler
 from tqdm import tqdm
 
-from src.models.stft_cnn import StftCNN
-from src.models.stft_resnet import StftResNet18
+from src.models import StftCNN, StftResNet18
 
 
 @dataclass

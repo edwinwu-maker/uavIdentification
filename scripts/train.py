@@ -24,7 +24,7 @@ from torch.utils.data import DataLoader
 from src.data.class_filter import RemappedSubset, add_exclusion_suffix, build_class_mapping
 from src.data.drone_rfa_io import NUM_ORIGINAL_CLASSES
 from src.data.splits import prepare_training_split
-from src.models.resnet import DroneRFaResNet18
+from src.models import DroneRFaResNet18
 from src.training.trainer import train_model
 from src.utils.cli import log_current_command
 from src.utils.device import default_device, setup_device

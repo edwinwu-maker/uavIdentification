@@ -41,7 +41,7 @@ from src.evaluation.snr_accuracy import (
     save_snr_confusion_matrix,
     save_prediction_diagnostics,
 )
-from src.models.resnet import DroneRFaResNet18
+from src.models import DroneRFaResNet18
 from src.training.model_io import load_model
 from src.preprocess.stft import compute_stft
 from src.utils.cli import log_current_command

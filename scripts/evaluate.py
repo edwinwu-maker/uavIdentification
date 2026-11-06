@@ -24,7 +24,7 @@ from torch.utils.data import DataLoader
 from src.data.class_filter import RemappedSubset, add_exclusion_suffix, build_class_mapping
 from src.data.drone_rfa_io import NUM_ORIGINAL_CLASSES
 from src.data.splits import load_test_subset
-from src.models.resnet import DroneRFaResNet18
+from src.models import DroneRFaResNet18
 from src.training.evaluator import evaluate
 from src.training.metrics import compute_metrics, save_confusion_matrix_image
 from src.training.model_io import load_model

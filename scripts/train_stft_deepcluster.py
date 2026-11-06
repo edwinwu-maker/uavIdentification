@@ -27,9 +27,8 @@ from torch.utils.data import DataLoader
 from src.data.deepcluster_review import dataset_fingerprint, write_deepcluster_review
 from src.data.deepcluster_visualization import write_deepcluster_tsne
 from src.data.stft_clustering import CleanStftClusteringDataset, scan_clean_stft_h5
-from src.models.stft_cnn import StftCNN
-from src.models.stft_resnet import StftResNet18
-from src.training.stft_deepcluster import train_deepcluster
+from src.models import StftCNN, StftResNet18
+from src.training.deepcluster import train_deepcluster
 from src.utils.cli import log_current_command
 from src.utils.device import default_device, setup_device
 from src.utils.logger import logger

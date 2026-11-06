@@ -69,9 +69,8 @@ python <script-or-command>
 │   ├── evaluation/
 │   │   └── snr_accuracy.py           # 不同 SNR 条件下的准确率评估工具
 │   ├── models/
-│   │   ├── resnet.py                 # 适配单通道特征输入的 ResNet-18
-│   │   ├── stft_cnn.py               # 轻量 Conv-BN-ReLU 聚类特征提取器
-│   │   └── stft_resnet.py            # 改进 ResNet-18 聚类特征提取器
+│   │   ├── __init__.py               # 统一导出三个模型类
+│   │   └── networks.py               # 分类 ResNet-18、轻量 CNN 与聚类 ResNet-18
 │   ├── preprocess/
 │   │   ├── h5_precompute.py          # STFT/CPP .h5 预计算通用流程
 │   │   ├── random_snr_awgn.py        # 随机 SNR 加性高斯白噪声增强
@@ -82,7 +81,7 @@ python <script-or-command>
 │   │   ├── model_io.py               # 模型权重保存与加载
 │   │   ├── evaluator.py              # 验证/测试循环
 │   │   ├── metrics.py                # 训练评估指标计算
-│   │   ├── stft_deepcluster.py       # 聚类伪标签迭代训练与可选 NMI 早停
+│   │   ├── deepcluster.py            # 聚类伪标签迭代训练与可选 NMI 早停
 │   │   └── trainer.py                # 模型训练循环
 │   └── utils/
 │       ├── logger.py                 # 全局日志工具
@@ -207,7 +206,7 @@ CNN 首层随模式使用 1 或 3 个输入通道。`deepcluster.pt` 记录 `inp
   --work-dir outputs/stft_deepcluster_resnet18 --device mps
 ```
 
-两种骨干均支持 `--input-mode grayscale|rgb`。checkpoint 和报告的 `model_type` 分别为 `stft_light_cnn`、`stft_resnet18`，`parameters.backbone` 记录选择。重建时根据 `model_type` 选择 `src.models.stft_cnn.StftCNN` 或 `src.models.stft_resnet.StftResNet18`，传入保存的 `latent_dim`、`in_channels` 后严格加载 `model_state_dict`，提取特征前调用 `eval()`；BN 运行均值、运行方差及批次计数随 state_dict 保存。旧 `model_type=stft_cnn` 权重与新的轻量 CNN 不兼容，不自动转换；请保留历史产物并使用独立工作目录训练新模型。
+两种骨干均支持 `--input-mode grayscale|rgb`。checkpoint 和报告的 `model_type` 分别为 `stft_light_cnn`、`stft_resnet18`，`parameters.backbone` 记录选择。重建时根据 `model_type` 选择 `src.models.StftCNN` 或 `src.models.StftResNet18`，传入保存的 `latent_dim`、`in_channels` 后严格加载 `model_state_dict`，提取特征前调用 `eval()`；BN 运行均值、运行方差及批次计数随 state_dict 保存。旧 `model_type=stft_cnn` 权重与新的轻量 CNN 不兼容，不自动转换；请保留历史产物并使用独立工作目录训练新模型。
 
 单通道改进 ResNet-18 约1143万参数、8.87 GMAC/样本，轻量 CNN 约101万参数、0.269 GMAC（256×256 输入，仅统计卷积和全连接）。实际耗时和显存需实测，可先使用较小批次。此改造无法恢复1024→256输入池化已经丢失的信息，也不预设聚类质量一定提升。对照时固定数据、输入模式、批次大小、seed、K、PCA维度、轮数和学习率，使用独立工作目录，并通过 `--reuse-review-dir` 复用相同盲审样本及逐样本审核；比较有效图传误删率、删除集合无效样本比例和隔离率。
 
@@ -235,7 +234,7 @@ CNN 首层随模式使用 1 或 3 个输入通道。`deepcluster.pt` 记录 `inp
 
 ### 训练模型
 
-STFT 与 CPP 统一使用单通道输入的 `DroneRFaResNet18`，保持对比实验的网络结构一致。
+STFT 与 CPP 统一使用单通道输入的 `DroneRFaResNet18`，保持对比实验的网络结构一致。三个模型均从 `src.models` 导入，实现在 `src/models/networks.py`；原三个模块路径已移除，已有脚本需更新导入，权重格式保持不变。
 
 ```bash
 python scripts/train.py --feature stft --data-dir ~/Desktop/dataset/DroneRFa_stft_awgn_random_16class_h5 \
