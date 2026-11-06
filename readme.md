@@ -52,8 +52,8 @@ python <script-or-command>
 │   ├── generate_raw_cpp_png.py       # 从原始 .mat IQ 按指定 SNR 生成单通道 CPP/FAM PNG
 │   ├── generate_stft_png.py          # 从 STFT .h5 生成单通道频谱图 PNG
 │   ├── generate_cpp_png.py           # 从 CPP/FAM .h5 生成单通道 CPP/FAM PNG
-│   ├── train_stft_dcec.py            # 训练 STFT 自编码器并生成 HDBSCAN 复核样本
-│   └── export_clean_stft_h5.py       # 根据人工审核结果剔除纯背景并导出 H5
+│   ├── train_stft_deepcluster.py     # DeepCluster 训练、伪标签反馈与人工审核
+│   └── export_deepcluster_stft_h5.py # 按人工确认决定导出 keep/quarantine H5
 ├── src/
 │   ├── data/
 │   │   ├── drone_rfa_io.py           # DroneRFa 原始 .mat 数据读取工具
@@ -61,13 +61,17 @@ python <script-or-command>
 │   │   ├── splits.py                 # 数据集划分工具
 │   │   ├── stft_dataset.py           # 按样本索引懒加载 STFT .h5 数据
 │   │   ├── stft_clustering.py        # clean STFT 聚类索引与模型输入预处理
-│   │   ├── stft_cleaning_export.py   # 人工标定、阈值校准与 H5 导出
+│   │   ├── stft_cleaning_export.py   # H5 行复制与 CSV/JSON 写出工具
+│   │   ├── deepcluster_export.py     # DeepCluster 人工审核、盲审评估与导出
+│   │   ├── deepcluster_review.py     # 样本指纹与复核材料
+│   │   ├── deepcluster_visualization.py # DeepCluster t-SNE 与处置图
 │   │   └── cpp_dataset.py            # 按样本索引懒加载 CPP/FAM .h5 数据
 │   ├── evaluation/
 │   │   └── snr_accuracy.py           # 不同 SNR 条件下的准确率评估工具
 │   ├── models/
 │   │   ├── resnet.py                 # 适配单通道特征输入的 ResNet-18
-│   │   ├── autoencoder.py            # STFT 卷积自编码器
+│   │   ├── stft_cnn.py               # 轻量 Conv-BN-ReLU 聚类特征提取器
+│   │   └── stft_resnet.py            # 改进 ResNet-18 聚类特征提取器
 │   ├── preprocess/
 │   │   ├── h5_precompute.py          # STFT/CPP .h5 预计算通用流程
 │   │   ├── random_snr_awgn.py        # 随机 SNR 加性高斯白噪声增强
@@ -78,7 +82,7 @@ python <script-or-command>
 │   │   ├── model_io.py               # 模型权重保存与加载
 │   │   ├── evaluator.py              # 验证/测试循环
 │   │   ├── metrics.py                # 训练评估指标计算
-│   │   ├── stft_autoencoder.py       # 自编码器训练与潜在向量提取
+│   │   ├── stft_deepcluster.py       # 聚类伪标签迭代训练与可选 NMI 早停
 │   │   └── trainer.py                # 模型训练循环
 │   └── utils/
 │       ├── logger.py                 # 全局日志工具
@@ -162,90 +166,18 @@ python scripts/generate_cpp_png.py --h5-dir ~/Desktop/dataset/droneRFa/cpp_h5
 H5 生成的 STFT 图片默认保存到 H5 目录旁的 `stft_png/`，CPP/FAM 图片默认保存到 H5
 目录旁的 `cpp_png/`。
 
-新实验使用带 `16class` 的独立目录和文件名，不覆盖历史产物。原始标签及单通道格式正确的旧 17 类 H5 可显式指定为输入，加载时自动跳过 `T0001`；应重新生成 split manifest，旧 17 类 manifest 和模型权重不用于当前实验。旧 14 类 H5 的压缩标签及文件级 `rf_channel` 属性与当前格式不兼容。HDBSCAN 清洗也应使用新的空 `work-dir` 重新生成审核、训练和导出产物。
-
-### 自编码器 + HDBSCAN STFT 清洗
-
-输入 H5 须由 `precompute_stft_h5.py --clean` 生成；`--clean` 表示不额外添加 AWGN。
-训练跳过 T0000 和 T0001，仅以重建损失训练自编码器，再直接对潜在向量做 HDBSCAN。
-不再选择固定簇数、执行 KMeans 或进行 DCEC 联合训练。训练入口沿用 `train_stft_dcec.py` 文件名。
-模型保存为 `<work-dir>/stft_autoencoder.pt`，默认存在且兼容时加载，不存在时训练并保存。
-使用 `--force-retrain` 可忽略已有权重，从头训练并覆盖模型文件。
-已有文件损坏或不兼容时会报错并保留文件；兼容性校验包括权重结构、128 维潜在向量、
-256 输入尺寸、截断范围 `(-5, 5)` 和缩放除数 5，不验证训练数据来源。
-复用后仍重新编码、聚类并生成复核材料。报告模式为 `cae-hdbscan`，新增 `model_reused` 标记；
-`pretrain_history` 仅记录本次训练历史，复用时为 `[]`。
-`--analysis-mode` 和 `--dcec-epochs` 已移除，训练和导出默认工作目录均为 `outputs/stft_hdbscan`。
-旧 DCEC 及 DCEC + HDBSCAN 产物不兼容，请使用新的工作目录重新训练、复核和导出。
-
-结构信号判定要求最大连通区域面积占比不低于 `0.001`，且频率或时间跨度占比不低于
-`0.09`，以保留跨度略小于原 `0.1` 门槛的信号。结构判定为 `signal` 时优先保留，
-不受 HDBSCAN 噪声、低成员强度或异常分数否决；其他结构遇密度异常仍进入 `uncertain`。
-`density_boundary` 和密度触发原因继续保留，结构信号覆盖密度异常时，
-`fusion_reason` 为 `signal_extent;原密度原因`。
-可通过 `--signal-span-threshold 0.1` 显式使用原跨度门槛。默认值调整不会更新已有分析标签、
-manifest 或 H5；旧融合结果会触发导出一致性校验。应将原 `stft_autoencoder.pt` 复制到新的
-`work-dir`，复用模型重新分析、填写复核表，再导出至新的 H5 目录，保留旧复核材料。
-
-使用独立分析目录训练并生成 HDBSCAN 复核材料：
-
-```bash
-~/Desktop/venv/bin/python scripts/train_stft_dcec.py \
-  --data-dir <原始clean-H5目录> \
-  --work-dir outputs/stft_hdbscan --device mps
-```
-
-需要从头训练时，在上述命令末尾添加 `--force-retrain`。
-
-分析完成后自动在工作目录生成 t-SNE 对照图：`hdbscan_tsne_clusters.png` 按 HDBSCAN
-簇编号着色（噪声 `-1` 为灰色），`hdbscan_tsne_original_labels.png` 按原始无人机类别着色，
-`hdbscan_tsne_fusion_labels.png` 按 `signal/background/uncertain` 着色。
-三张图共享二维坐标；`hdbscan_tsne.csv` 保存坐标、标签及 `sample_index`，可关联
-`hdbscan_assignments.csv`。最多展示 10,000 条样本，超过时以种子 42 均匀无放回抽样；
-小簇不保证被抽中。HDBSCAN 始终使用全部原始 128 维潜在向量，t-SNE 坐标仅供展示，
-图中的距离与簇形状不能直接作为聚类质量指标。
-投影使用 PCA 初始化、自动学习率、种子 42、1000 次迭代及 `min(30, 展示样本数-1)` 的
-perplexity；特征全部相同时坐标置零，并在图中标明退化。
-`training_report.json` 的 `hdbscan.tsne` 记录样本数、实际参数、退化状态及输出文件名。
-
-重跑时默认复用当前 `work-dir` 中的 `hdbscan_review.csv` 及配套
-`hdbscan_review_lookup.csv`，保留样本集合、行序、编号和已填标签，不重新选样。
-分析结果和 lookup 会按当前规则更新；未填写的标签仍需补填。
-跨目录复用可添加 `--reuse-review-dir <旧工作目录>`，该参数优先于当前目录的复核表。
-两份旧表均不存在时才首次选样；缺表、非法标签、重复记录、样本缺失或身份变化会报错，
-并在覆盖分析资料前停止。匹配使用文件名、源行号和 RF 通道，并核对原始样本编号及类别；
-不依赖绝对路径或全局索引，也不校验 H5 内容哈希，适用于原始数据内容不变的重跑。
-
-查看 `hdbscan_review_images/`，填写 `hdbscan_review.csv` 的 `manual_label` 列
-（`signal/background/uncertain`），然后调用：
-
-```bash
-~/Desktop/venv/bin/python scripts/export_clean_stft_h5.py \
-  --data-dir <原始clean-H5目录> \
-  --work-dir outputs/stft_hdbscan --output-dir <新的清洗H5目录>
-```
-
-此模式只保留 UAV 中 `fusion_label=signal` 的样本，删除 `background` 和 `uncertain`，
-密度异常且结构未判定为信号的样本仍按 `uncertain` 删除；T0000 全部保留，T0001 不导出。
-人工标签用于验收，不逐条覆盖自动结果。有待删除样本时，复核表必须包含确定信号；任何
-人工信号将被删除时均停止导出。背景召回率仅报告，不设置门槛；人工不确定标签不计入确定
-标签指标。当前复核不属于独立审核，其指标不代表全量准确率。
-
-导出不重新训练或拟合 HDBSCAN。`hdbscan_cleaning_report.json` 保存验收、删除统计和输入指纹，
-验收失败也会生成报告，但不会写入 H5。成功后另生成 `hdbscan_cleaning_manifest.csv`，记录
-逐样本决定、人工标签及输出行号。新 H5 保留原始标签，附带 `hdbscan_*` 行号和聚类信息；
-某文件全部删除时仍输出零行文件。源文件不修改，已有目标文件不覆盖。
+新实验使用带 `16class` 的独立目录和文件名，不覆盖历史产物。原始标签及单通道格式正确的旧 17 类 H5 可显式指定为输入，加载时自动跳过 `T0001`；应重新生成 split manifest，旧 17 类 manifest 和模型权重不用于当前实验。旧 14 类 H5 的压缩标签及文件级 `rf_channel` 属性与当前格式不兼容。DeepCluster 实验使用独立 `work-dir` 保存训练与审核产物。
 
 ### DeepCluster 独立图传清洗
 
-该流程不依赖 HDBSCAN：从随机初始化的 CNN 开始，交替执行全量编码、PCA 白化与 L2 归一化、KMeans 伪标签和分类训练，不进行 CAE 重建预训练。默认处理低质量的 10 类 `4,6,8,10,11,12,13,14,15,16`，不使用机型标签训练。`clean` 只表示未额外添加 AWGN，并非有效图传标注。
+从随机初始化的 CNN 开始，交替执行全量编码、PCA 白化与 L2 归一化、KMeans 伪标签和分类训练。默认处理低质量的 10 类 `4,6,8,10,11,12,13,14,15,16`，不使用机型标签训练。`clean` 只表示未额外添加 AWGN，并非有效图传标注。
 
 ```bash
 ~/Desktop/venv/bin/python scripts/train_stft_deepcluster.py \
   --data-dir <原始clean-H5目录> --work-dir outputs/stft_deepcluster --device mps
 ```
 
-默认 K=32、PCA 最多64个有效维度、20轮聚类反馈，每轮伪标签训练一个 epoch；可分别用 `--n-clusters 16`、`--n-clusters 64` 做对照。每轮重置分类头、按簇均衡抽样，最终更新后重新聚类。CNN 不包含 decoder，也不使用重建误差阈值；旧参数 `--cae-only`、`--cae-checkpoint`、`--pretrain-epochs`、`--patience` 和 `--force-retrain` 已移除。
+默认 K=32、PCA 最多64个有效维度、20轮聚类反馈，每轮伪标签训练一个 epoch；可分别用 `--n-clusters 16`、`--n-clusters 64` 做对照。每轮重置分类头、按簇均衡抽样，最终更新后重新聚类。CNN 不包含 decoder，也不使用重建误差阈值。
 
 可通过 `--early-stop-patience 5` 开启聚类稳定性早停；默认值0关闭，`--epochs` 仍默认20，作为最大训练轮数。`--early-stop-nmi-threshold` 默认0.99，`--early-stop-min-epochs` 默认10：从第10轮开始，轮间 NMI 连续5轮达到阈值则停止，最早完成第14轮后退出；未达标清零，首轮 NMI 为空不计数。预算不足时正常跑满。阈值是初始实验配置，需要真实数据校准。
 
@@ -299,7 +231,7 @@ CNN 首层随模式使用 1 或 3 个输入通道。`deepcluster.pt` 记录 `inp
 
 最多展示10,000条样本，超出时按实验 seed 均匀无放回抽样，小簇不保证覆盖。投影使用二维、`perplexity=min(30, 展示数量-1)`、自动学习率和1,000次迭代；PCA 初始化，单维特征改用随机初始化，常量特征使用零坐标并注明退化。同次实验的各图共享坐标范围；不同实验分别拟合，位置不可直接比较。t-SNE 只用于观察邻域与审核结果，不参与聚类或清洗判定。
 
-对照实验应使用相同数据和人工审核预算，比较当前结构规则、单通道 CNN+DeepCluster+审核、RGB CNN+DeepCluster+审核；历史 CAE 基线须保留独立产物。关注明确图传错误剔除率、隔离率、删除集合无效样本比例及逐类/逐文件覆盖；训练损失、NMI 和 t-SNE 不代替清洗验收。历史 HDBSCAN manifest 与当前融合规则可能不一致，需要重跑基线。下游识别须固定原始文件划分与同一个测试集，不能清洗后重新随机划分。
+对照实验应使用相同数据和人工审核预算，比较单通道 CNN+DeepCluster+审核、RGB CNN+DeepCluster+审核及不同骨干。关注明确图传错误剔除率、隔离率、删除集合无效样本比例及逐类/逐文件覆盖；训练损失、NMI 和 t-SNE 不代替清洗验收。下游识别须固定原始文件划分与同一个测试集，不能清洗后重新随机划分。
 
 ### 训练模型
 

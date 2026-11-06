@@ -7,7 +7,7 @@ Usage:
   ~/Desktop/venv/bin/python scripts/train_stft_deepcluster.py --data-dir ... --input-mode rgb --work-dir outputs/stft_deepcluster_rgb
   ~/Desktop/venv/bin/python scripts/train_stft_deepcluster.py --data-dir ... --backbone resnet18 --batch-size 8 --work-dir outputs/stft_deepcluster_resnet18
   ~/Desktop/venv/bin/python scripts/train_stft_deepcluster.py --data-dir ... --epochs 50 --early-stop-patience 5
-  python scripts/train_stft_deepcluster.py --data-dir ... --reuse-review-dir outputs/stft_cae_kmeans
+  python scripts/train_stft_deepcluster.py --data-dir ... --reuse-review-dir outputs/stft_deepcluster_reference
 """
 
 from __future__ import annotations

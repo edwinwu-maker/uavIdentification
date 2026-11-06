@@ -15,7 +15,6 @@ h5py
 
 # Training, metrics, and progress display
 scikit-learn
-hdbscan
 tqdm
 
 # Visualization
