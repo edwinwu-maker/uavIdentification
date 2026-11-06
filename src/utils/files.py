@@ -1,5 +1,6 @@
 import csv
 import hashlib
+import json
 import os
 from collections.abc import Iterator
 from pathlib import Path
@@ -8,13 +9,13 @@ import h5py
 
 
 def get_filename_with_suffix(file_path: str, suffix: str) -> str:
-    """获取替换最后一个扩展名后的文件名，不访问文件系统。
+    """获取替换最后一个扩展名后的文件名。
 
     输入：
-        file_path: 文件路径字符串，可包含目录。
-        suffix: 包含点号的新后缀，如 ".h5"。
+        file_path: 文件路径字符串。
+        suffix: 包含点号的新后缀。
     输出：
-        不包含目录的文件名字符串；只替换最后一个扩展名，无扩展名时追加后缀。
+        不包含目录的文件名字符串。
     示例：
         get_filename_with_suffix("/data/demo.v1.mat", ".h5") 返回 "demo.v1.h5"。
     """
@@ -66,6 +67,34 @@ def read_csv_records(path: str | Path) -> list[dict[str, str]]:
     """
     with Path(path).open(newline="", encoding="utf-8") as file_obj:
         return list(csv.DictReader(file_obj))
+
+
+def read_optional_csv_records(path: str | Path) -> list[dict[str, str]]:
+    """读取可选的 UTF-8 CSV（支持 BOM）；路径不存在时返回空列表，其他异常向上传播。"""
+    path = Path(path)
+    if not path.exists():
+        return []
+    with path.open(newline="", encoding="utf-8-sig") as source:
+        return list(csv.DictReader(source))
+
+
+def write_csv(path: str | Path, rows: list[dict[str, object]], fields) -> None:
+    """按指定列顺序写出 CSV；空记录仍写表头。"""
+    with Path(path).open("w", newline="", encoding="utf-8") as file_obj:
+        writer = csv.DictWriter(file_obj, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def write_manifest(path: str | Path, rows: list[dict[str, object]]) -> None:
+    if not rows:
+        raise ValueError("Cannot write an empty cleaning manifest")
+    write_csv(path, rows, list(rows[0]))
+
+
+def write_json(path: str | Path, payload: dict[str, object]) -> None:
+    with Path(path).open("w", encoding="utf-8") as file_obj:
+        json.dump(payload, file_obj, ensure_ascii=False, indent=2, allow_nan=False)
 
 
 def compute_file_sha256(path: str | Path) -> str:

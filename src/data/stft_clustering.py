@@ -1,4 +1,4 @@
-"""STFT 深度聚类的样本索引、预处理、审核选样与结果导出。"""
+"""STFT 深度聚类的 clean 样本索引与模型输入预处理。"""
 
 from __future__ import annotations
 
@@ -13,7 +13,6 @@ from torch.utils.data import Dataset
 from src.data.drone_rfa_io import EXCLUDED_CLASS_CODES, RESEARCH_LABELS
 from src.preprocess.stft import clip_scale_and_pool_stft
 from src.utils.files import h5_attr_to_text
-from src.utils.plot import import_pyplot
 
 REQUIRED_SAMPLE_DATASETS = (
     "stft",
@@ -35,28 +34,6 @@ class StftClusterSample:
     label: int              # 原始 DroneRFa 整数类别标签，未重映射为模型标签。
     rf_channel: int         # 原始 IQ 数据所属的 RF 通道编号，取 0 或 1。
     source_sample_idx: int  # 所选 RF 通道内原始定长 IQ 样本编号，从 0 开始，可与 row_idx 不同。
-
-
-def _save_cluster_review_image(stft: np.ndarray, review_id: str, output_path: Path) -> None:
-    """将二维 STFT 转置后保存为盲审 PNG，标题仅显示审核编号，异常时也释放 Figure。"""
-    plt = import_pyplot(show=False)
-    fig, ax = plt.subplots(figsize=(10, 5), constrained_layout=True)
-    try:
-        image = ax.imshow(
-            stft.T,
-            origin="lower",
-            aspect="auto",
-            cmap="jet",
-            vmin=-3.0,
-            vmax=3.0,
-        )
-        ax.set_title(review_id)
-        ax.set_xlabel("Frequency bin")
-        ax.set_ylabel("Time bin")
-        fig.colorbar(image, ax=ax, label="Normalized power (z-score)")
-        fig.savefig(output_path, dpi=120)
-    finally:
-        plt.close(fig)
 
 
 def scan_clean_stft_h5(data_dir: str) -> list[StftClusterSample]:

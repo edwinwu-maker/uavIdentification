@@ -8,12 +8,13 @@ from pathlib import Path
 import numpy as np
 from sklearn.manifold import TSNE
 
+from src.data.deepcluster_schema import DECISIONS, SOURCE_IDENTITY_FIELDS
+from src.utils.files import write_csv
 from src.utils.plot import import_pyplot
 
 MAX_SAMPLES = 10000
 FEATURE_SPACE = "PCA-whitened and L2-normalized encoder features"
-IDENTITY_FIELDS = ("sample_index", "source_file", "source_row_idx", "original_label",
-                   "rf_channel", "source_sample_idx", "cluster_id")
+IDENTITY_FIELDS = ("sample_index", *SOURCE_IDENTITY_FIELDS, "cluster_id")
 
 
 def _identity(row):
@@ -39,13 +40,6 @@ def _coordinates(rows):
     if not len(rows) or not np.isfinite(coordinates).all():
         raise ValueError("DeepCluster t-SNE coordinates must be non-empty and finite")
     return coordinates
-
-
-def _write_csv(path, rows):
-    with path.open("w", newline="", encoding="utf-8") as destination:
-        writer = csv.DictWriter(destination, fieldnames=list(rows[0]))
-        writer.writeheader()
-        writer.writerows(rows)
 
 
 def _plot(path, rows, key, title, total_count):
@@ -107,7 +101,7 @@ def write_deepcluster_tsne(work_dir, features, assignment_rows, *, seed=42):
     work_dir = Path(work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
     csv_name = "deepcluster_tsne.csv"
-    _write_csv(work_dir / csv_name, rows)
+    write_csv(work_dir / csv_name, rows, list(rows[0]))
     files = [csv_name]
     for key, suffix, title in (("cluster_id", "clusters", "DeepCluster clusters"),
                                ("original_label", "original_labels", "Original UAV classes")):
@@ -153,14 +147,14 @@ def write_deepcluster_decision_plot(output_dir, coordinate_rows, decision_rows):
         if index not in lookup or _identity(row) != _identity(lookup[index]):
             raise ValueError(f"DeepCluster decision identity mismatch for sample_index={index}")
         decision = lookup[index]["decision"]
-        if decision not in ("keep", "drop", "quarantine"):
+        if decision not in DECISIONS:
             raise ValueError(f"Invalid DeepCluster decision: {decision}")
         rows.append({**row, "decision": decision})
     coordinates = _coordinates(rows)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     csv_name, png_name = "deepcluster_tsne_decisions.csv", "deepcluster_tsne_decisions.png"
-    _write_csv(output_dir / csv_name, rows)
+    write_csv(output_dir / csv_name, rows, list(rows[0]))
     _plot(output_dir / png_name, rows, "decision", "DeepCluster cleaning decisions", len(lookup))
     return {"total_sample_count": len(lookup), "plotted_sample_count": len(rows), "max_samples": MAX_SAMPLES,
             "parameters": {"coordinate_source": "deepcluster_tsne.csv", "projection_reused": True},

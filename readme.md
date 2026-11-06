@@ -61,9 +61,9 @@ python <script-or-command>
 │   │   ├── splits.py                 # 数据集划分工具
 │   │   ├── stft_dataset.py           # 按样本索引懒加载 STFT .h5 数据
 │   │   ├── stft_clustering.py        # clean STFT 聚类索引与模型输入预处理
-│   │   ├── stft_cleaning_export.py   # H5 行复制与 CSV/JSON 写出工具
 │   │   ├── deepcluster_export.py     # DeepCluster 人工审核、盲审评估与导出
 │   │   ├── deepcluster_review.py     # 样本指纹与复核材料
+│   │   ├── deepcluster_schema.py     # 审核、导出与可视化共享的协议常量
 │   │   ├── deepcluster_visualization.py # DeepCluster t-SNE 与处置图
 │   │   └── cpp_dataset.py            # 按样本索引懒加载 CPP/FAM .h5 数据
 │   ├── evaluation/

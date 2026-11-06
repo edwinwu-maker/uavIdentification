@@ -10,13 +10,12 @@ from pathlib import Path
 import h5py
 import numpy as np
 
+from src.data.deepcluster_schema import DECISIONS, MANUAL_LABELS as REVIEW_MANUAL_LABELS, SOURCE_IDENTITY_FIELDS
 from src.data.drone_rfa_io import EXCLUDED_CLASS_CODES, RESEARCH_LABELS, parse_label
-from src.data.stft_cleaning_export import _copy_row_dataset
 from src.utils.files import compute_file_sha256
 
-DECISIONS = frozenset(("keep", "drop", "quarantine"))
-MANUAL_LABELS = frozenset(("video", "background", "control_only", "interference", "weak_or_mixed", "uncertain"))
-IDENTITY_FIELDS = ("source_file", "source_row_idx", "original_label", "rf_channel", "source_sample_idx", "cluster_id")
+MANUAL_LABELS = frozenset(REVIEW_MANUAL_LABELS)
+IDENTITY_FIELDS = (*SOURCE_IDENTITY_FIELDS, "cluster_id")
 
 
 def _boolean(value, field: str) -> bool:
@@ -173,30 +172,9 @@ def evaluate_deepcluster_audit(decision_rows, audit_rows, *, bootstrap_samples: 
     }
 
 
-def export_deepcluster_h5_files(*, data_dir, output_dir, decision_rows, model_hash: str = "", training_report=None):
-    """全量核对身份后创建 keep/quarantine H5；drop 仅进入互斥清单。"""
-    source_root = Path(data_dir).expanduser().resolve()
-    destination_root = Path(output_dir).expanduser().resolve()
-    if destination_root == source_root or source_root in destination_root.parents or destination_root in source_root.parents:
-        raise ValueError("output-dir and data-dir must be separate directories")
-    if destination_root.exists():
-        raise FileExistsError(f"Refusing to overwrite existing output directory: {destination_root}")
-    all_source_paths = [path for path in sorted(source_root.glob("*.h5"))
-                        if path.stem.split("_")[0] not in EXCLUDED_CLASS_CODES]
-    if not all_source_paths:
-        raise ValueError(f"No source H5 found in {source_root}")
-    by_file = defaultdict(list)
-    for original in decision_rows:
-        row = dict(original)
-        if row["decision"] not in DECISIONS:
-            raise ValueError(f"Invalid decision: {row['decision']}")
-        by_file[row["source_file"]].append(row)
+def _validate_export_sources(source_root, source_paths, by_file, decision_rows, training_report):
+    """核对训练指纹和全部源行，并补齐背景的直通处置。"""
     selected_files = set(by_file)
-    unknown = selected_files - {path.name for path in all_source_paths}
-    if unknown:
-        raise ValueError(f"Assignments reference missing source files: {sorted(unknown)}")
-    source_paths = [path for path in all_source_paths if path.name in selected_files or path.stem.split("_")[0] == "T0000"]
-    excluded_files = [path.name for path in all_source_paths if path not in source_paths]
     if training_report is not None:
         payload = training_report["fingerprint_payload"]
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -245,36 +223,48 @@ def export_deepcluster_h5_files(*, data_dir, output_dir, decision_rows, model_ha
                     if int(row[field]) != int(source[source_field][index]):
                         raise ValueError(f"Source identity mismatch: {path.name}, row={index}, field={field}")
 
-    destination_root.mkdir(parents=True)
-    for action in ("keep", "quarantine"):
-        (destination_root / action).mkdir()
-    manifest = []
-    for path in source_paths:
-        rows = sorted(by_file[path.name], key=lambda row: int(row["source_row_idx"]))
-        locations = {}
-        for action in ("keep", "quarantine"):
-            selected = [row for row in rows if row["decision"] == action]
-            indices = [int(row["source_row_idx"]) for row in selected]
-            output_path = destination_root / action / path.name
-            with h5py.File(path, "r") as source, h5py.File(output_path, "x") as output:
-                count = source["stft"].shape[0]
-                for key, value in source.attrs.items():
-                    output.attrs[key] = value
-                output.attrs["deepcluster_cleaning_method"] = "reviewed_deepcluster"
-                output.attrs["deepcluster_cleaning_decision"] = action
-                output.attrs["deepcluster_checkpoint_sha256"] = model_hash
-                for name, dataset in source.items():
-                    if isinstance(dataset, h5py.Dataset) and dataset.shape[:1] == (count,):
-                        _copy_row_dataset(dataset, output, name, indices)
-                    else:
-                        source.copy(name, output)
-            for output_index, row in enumerate(selected):
-                locations[int(row["source_row_idx"])] = (f"{action}/{path.name}", output_index)
-        for row in rows:
-            output_file, output_index = locations.get(int(row["source_row_idx"]), ("", ""))
-            manifest.append({**row, "output_file": output_file, "output_row_idx": output_index})
-    fields = list(dict.fromkeys(field for row in manifest for field in row))
-    manifest = [{field: row.get(field, "") for field in fields} for row in manifest]
+
+def _copy_row_dataset(
+    source: h5py.Dataset,
+    destination_file: h5py.File,
+    name: str,
+    source_rows: list[int],
+    *,
+    batch_size: int = 16,
+) -> None:
+    shape = (len(source_rows), *source.shape[1:])
+    kwargs = {}
+    if source.chunks is not None and source_rows:
+        kwargs["chunks"] = (min(source.chunks[0], len(source_rows)), *source.chunks[1:])
+    if source.compression is not None and source_rows:
+        kwargs["compression"] = source.compression
+        kwargs["compression_opts"] = source.compression_opts
+    destination = destination_file.create_dataset(name, shape=shape, dtype=source.dtype, **kwargs)
+    for key, value in source.attrs.items():
+        destination.attrs[key] = value
+    for start in range(0, len(source_rows), batch_size):
+        rows = source_rows[start : start + batch_size]
+        destination[start : start + len(rows)] = source[rows]
+
+
+def _write_h5_partition(source_path, output_path, source_rows, *, action, model_hash):
+    """按选中源行复制一个分区，保留原有属性与非逐行数据。"""
+    with h5py.File(source_path, "r") as source, h5py.File(output_path, "x") as output:
+        count = source["stft"].shape[0]
+        for key, value in source.attrs.items():
+            output.attrs[key] = value
+        output.attrs["deepcluster_cleaning_method"] = "reviewed_deepcluster"
+        output.attrs["deepcluster_cleaning_decision"] = action
+        output.attrs["deepcluster_checkpoint_sha256"] = model_hash
+        for name, dataset in source.items():
+            if isinstance(dataset, h5py.Dataset) and dataset.shape[:1] == (count,):
+                _copy_row_dataset(dataset, output, name, source_rows)
+            else:
+                source.copy(name, output)
+
+
+def _summarize_manifest(manifest, source_paths, excluded_files):
+    """汇总互斥处置清单，保留空源文件与距离编码的统计口径。"""
     per_class = {}
     for label in sorted({int(row["original_label"]) for row in manifest}):
         rows = [row for row in manifest if int(row["original_label"]) == label]
@@ -302,6 +292,54 @@ def export_deepcluster_h5_files(*, data_dir, output_dir, decision_rows, model_ha
                for key, counts in sorted(groups.items())}
         for name, groups in grouped.items()
     }
-    return manifest, {"decision_counts": dict(Counter(row["decision"] for row in manifest)),
-                      "source_file_count": len(source_paths), "excluded_source_files": excluded_files,
-                      "per_class": per_class, **breakdowns}
+    return {"decision_counts": dict(Counter(row["decision"] for row in manifest)),
+            "source_file_count": len(source_paths), "excluded_source_files": excluded_files,
+            "per_class": per_class, **breakdowns}
+
+
+def export_deepcluster_h5_files(*, data_dir, output_dir, decision_rows, model_hash: str = "", training_report=None):
+    """全量核对身份后创建 keep/quarantine H5；drop 仅进入互斥清单。"""
+    source_root = Path(data_dir).expanduser().resolve()
+    destination_root = Path(output_dir).expanduser().resolve()
+    if destination_root == source_root or source_root in destination_root.parents or destination_root in source_root.parents:
+        raise ValueError("output-dir and data-dir must be separate directories")
+    if destination_root.exists():
+        raise FileExistsError(f"Refusing to overwrite existing output directory: {destination_root}")
+    all_source_paths = [path for path in sorted(source_root.glob("*.h5"))
+                        if path.stem.split("_")[0] not in EXCLUDED_CLASS_CODES]
+    if not all_source_paths:
+        raise ValueError(f"No source H5 found in {source_root}")
+    by_file = defaultdict(list)
+    for original in decision_rows:
+        row = dict(original)
+        if row["decision"] not in DECISIONS:
+            raise ValueError(f"Invalid decision: {row['decision']}")
+        by_file[row["source_file"]].append(row)
+    selected_files = set(by_file)
+    unknown = selected_files - {path.name for path in all_source_paths}
+    if unknown:
+        raise ValueError(f"Assignments reference missing source files: {sorted(unknown)}")
+    source_paths = [path for path in all_source_paths if path.name in selected_files or path.stem.split("_")[0] == "T0000"]
+    excluded_files = [path.name for path in all_source_paths if path not in source_paths]
+    _validate_export_sources(source_root, source_paths, by_file, decision_rows, training_report)
+
+    destination_root.mkdir(parents=True)
+    for action in ("keep", "quarantine"):
+        (destination_root / action).mkdir()
+    manifest = []
+    for path in source_paths:
+        rows = sorted(by_file[path.name], key=lambda row: int(row["source_row_idx"]))
+        locations = {}
+        for action in ("keep", "quarantine"):
+            selected = [row for row in rows if row["decision"] == action]
+            indices = [int(row["source_row_idx"]) for row in selected]
+            output_path = destination_root / action / path.name
+            _write_h5_partition(path, output_path, indices, action=action, model_hash=model_hash)
+            for output_index, row in enumerate(selected):
+                locations[int(row["source_row_idx"])] = (f"{action}/{path.name}", output_index)
+        for row in rows:
+            output_file, output_index = locations.get(int(row["source_row_idx"]), ("", ""))
+            manifest.append({**row, "output_file": output_file, "output_row_idx": output_index})
+    fields = list(dict.fromkeys(field for row in manifest for field in row))
+    manifest = [{field: row.get(field, "") for field in fields} for row in manifest]
+    return manifest, _summarize_manifest(manifest, source_paths, excluded_files)

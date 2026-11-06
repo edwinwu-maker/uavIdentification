@@ -24,7 +24,7 @@ import torch
 import numpy as np
 from torch.utils.data import DataLoader
 
-from src.data.deepcluster_review import dataset_fingerprint, write_deepcluster_review
+from src.data.deepcluster_review import compute_dataset_fingerprint, write_deepcluster_review
 from src.data.deepcluster_visualization import write_deepcluster_tsne
 from src.data.stft_clustering import CleanStftClusteringDataset, scan_clean_stft_h5
 from src.models import StftCNN, StftResNet18
@@ -89,7 +89,7 @@ def main():
     if len(samples) < args.n_clusters:
         raise ValueError("Selected samples must cover n-clusters")
     logger.info("Selected %d UAV samples from labels %s", len(samples), sorted(set(args.labels)))
-    fingerprint, fingerprint_payload = dataset_fingerprint(samples, logger)
+    fingerprint, fingerprint_payload = compute_dataset_fingerprint(samples, logger)
     work_dir = Path(args.work_dir).expanduser()
     work_dir.mkdir(parents=True, exist_ok=True)
     dataset = CleanStftClusteringDataset(samples, input_mode=args.input_mode)
