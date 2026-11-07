@@ -27,7 +27,6 @@ class DeepClusterResult:
     assignments: np.ndarray
     distances: np.ndarray
     history: list[dict]
-    stop_reason: str = "max_epochs"
 
 
 @torch.inference_mode()
@@ -115,9 +114,6 @@ def train_deepcluster(
     pca_dim: int = 64,
     learning_rate: float = 1e-4,
     seed: int = 42,
-    early_stop_patience: int = 0,
-    early_stop_nmi_threshold: float = 0.99,
-    early_stop_min_epochs: int = 10,
     logger=None,
 ) -> DeepClusterResult:
     """原地训练随机初始化的 CNN，返回最终权重对应的特征和聚类。
@@ -127,10 +123,6 @@ def train_deepcluster(
     """
     if epochs <= 0 or not np.isfinite(learning_rate) or learning_rate <= 0:
         raise ValueError("DeepCluster epochs and learning_rate must be positive")
-    if early_stop_patience < 0 or early_stop_min_epochs < 1:
-        raise ValueError("early_stop_patience must be non-negative and early_stop_min_epochs must be positive")
-    if not np.isfinite(early_stop_nmi_threshold) or not 0 < early_stop_nmi_threshold <= 1:
-        raise ValueError("early_stop_nmi_threshold must be finite and within (0, 1]")
     if inference_loader.batch_size is None or inference_loader.drop_last:
         raise ValueError("DeepCluster inference loader requires batch_size and drop_last=False")
     if not isinstance(inference_loader.sampler, SequentialSampler) or len(inference_loader.sampler) != len(inference_loader.dataset):
@@ -139,8 +131,6 @@ def train_deepcluster(
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
     history: list[dict] = []
     previous_assignments = None
-    stable_rounds = 0
-    stop_reason = "max_epochs"
     sample_count = len(inference_loader.dataset)
 
     for epoch in range(1, epochs + 1):
@@ -204,33 +194,18 @@ def train_deepcluster(
                 normalized_mutual_info_score(previous_assignments, assignments)
             ),
         }
-        # NMI 来自本轮训练前的聚类；完成本轮更新后才检查，不额外编码。
-        if (early_stop_patience > 0 and epoch >= early_stop_min_epochs
-                and row["reassignment_nmi"] is not None
-                and row["reassignment_nmi"] >= early_stop_nmi_threshold):
-            stable_rounds += 1
-        else:
-            stable_rounds = 0
-        row["stable_rounds"] = stable_rounds
         history.append(row)
         previous_assignments = assignments
         if logger is not None:
             logger.info(
-                "DeepCluster epoch %d | loss: %.6f | largest_cluster: %.3f | NMI: %s | stable_rounds: %d",
-                epoch, epoch_loss, row["largest_cluster_fraction"], row["reassignment_nmi"], stable_rounds,
+                "DeepCluster epoch %d | loss: %.6f | largest_cluster: %.3f | NMI: %s",
+                epoch, epoch_loss, row["largest_cluster_fraction"], row["reassignment_nmi"],
             )
-
-        if early_stop_patience > 0 and stable_rounds >= early_stop_patience and epoch < epochs:
-            stop_reason = "assignment_stable"
-            if logger is not None:
-                logger.info("DeepCluster early stop at epoch %d | NMI >= %.4f for %d rounds",
-                            epoch, early_stop_nmi_threshold, stable_rounds)
-            break
 
     # 最后一轮更新后重新提取和拟合，避免导出前一轮权重对应的旧伪标签。
     embeddings = encode_dataset(model, inference_loader, device=device)
     pca, kmeans, features, assignments, distances = fit_deepcluster_features(
-        embeddings, n_clusters=n_clusters, pca_dim=pca_dim, seed=seed + len(history),
+        embeddings, n_clusters=n_clusters, pca_dim=pca_dim, seed=seed + epochs,
     )
     model.zero_grad(set_to_none=True)
-    return DeepClusterResult(model, pca, kmeans, embeddings, features, assignments, distances, history, stop_reason)
+    return DeepClusterResult(model, pca, kmeans, embeddings, features, assignments, distances, history)
