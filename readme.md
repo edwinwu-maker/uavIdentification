@@ -63,7 +63,7 @@ python <script-or-command>
 │   │   ├── stft_clustering.py        # clean STFT 聚类索引与模型输入预处理
 │   │   ├── deepcluster_export.py     # DeepCluster 人工审核、盲审评估与导出
 │   │   ├── deepcluster_review.py     # 样本指纹与复核材料
-│   │   ├── deepcluster_schema.py     # 审核、导出与可视化共享的协议常量
+│   │   ├── deepcluster_constants.py  # 审核、导出与可视化共享常量
 │   │   ├── deepcluster_visualization.py # DeepCluster t-SNE 与处置图
 │   │   └── cpp_dataset.py            # 按样本索引懒加载 CPP/FAM .h5 数据
 │   ├── evaluation/
@@ -210,9 +210,11 @@ CNN 首层随模式使用 1 或 3 个输入通道。`deepcluster.pt` 记录 `inp
 
 单通道改进 ResNet-18 约1143万参数、8.87 GMAC/样本，轻量 CNN 约101万参数、0.269 GMAC（256×256 输入，仅统计卷积和全连接）。实际耗时和显存需实测，可先使用较小批次。此改造无法恢复1024→256输入池化已经丢失的信息，也不预设聚类质量一定提升。对照时固定数据、输入模式、批次大小、seed、K、PCA维度、轮数和学习率，使用独立工作目录，并通过 `--reuse-review-dir` 复用相同盲审样本及逐样本审核；比较有效图传误删率、删除集合无效样本比例和隔离率。
 
-审核工作目录中的 `cluster_review.csv` 和 `sample_review.csv`：`decision` 为 `keep/drop/quarantine`，明确填写 `confirmed=true` 才生效。逐样本决定优先；混合簇设 `mixed=true` 后整簇默认隔离，只允许逐样本覆盖。未确认样本默认隔离。仅保留可确认的可用图传；纯背景、仅控制跳频、明确非目标通信可剔除；弱信号、混合信号或无法确认的通信来源应隔离。簇代表图仅辅助审核，距离近或抽样一致不证明整个簇有效。
+审核工作目录中的 `cluster_review.csv`：填写 `decision=keep/drop/quarantine`；`sample_review.csv` 只填写 `manual_label` 和 `confirmed`，不再包含人工 `decision`。逐样本标签为 `video`（可确认的有效图传）、`other`（明确应剔除的其它信号）、`uncertain`（无法确认），分别自动映射为 `keep/drop/quarantine`。两种审核均需明确填写 `confirmed=true` 才生效。已确认逐样本标签不得为空；空标签表示尚未标注，不等同于 `uncertain`。逐样本决定优先；混合簇设 `mixed=true` 后整簇默认隔离，只允许逐样本覆盖。未确认的逐样本标签不覆盖整簇决定；没有有效整簇或逐样本决定时默认隔离。仅保留可确认的可用图传；纯背景、仅控制跳频、明确非目标通信可剔除；弱信号或混合信号仍可确认有效图传时标为 `video`，无法确认时标为 `uncertain` 并隔离。簇代表图仅辅助审核，距离近或抽样一致不证明整个簇有效。
 
-`audit.csv` 是与开发审核分离的固定盲审样本，`manual_label` 使用 `video/background/control_only/interference/weak_or_mixed/uncertain`；应在处置决定冻结后填写，仅用于评估，不参与清洗决定。原始高分辨率审核图用于检查池化可能掩盖的细窄信号。重跑保留同身份、同输入指纹的样本审核；簇编号不具有跨运行语义，簇级处置需要重新确认。
+`audit.csv` 是与开发审核分离的固定盲审样本，`manual_label` 使用 `video/other/uncertain`；应在处置决定冻结后填写，仅用于评估，不参与清洗决定。原始高分辨率审核图用于检查池化可能掩盖的细窄信号。重跑保留同身份、同输入指纹的样本审核；簇编号不具有跨运行语义，簇级处置需要重新确认。
+
+仅接受新审核格式：旧六类标签需人工转换为三类，旧 `sample_review.csv` 需移除 `decision` 列；读取或复用旧格式记录会报错，不自动转换。盲审中，`other` 用于 `nonvideo_drop_recall`；`drop_precision` 只计算已删除的 `video/other`，`uncertain` 仅进入标签/处置分布和总体隔离率，空标签不计入已标注数。
 
 不同方法使用独立 `work-dir`，添加 `--reuse-review-dir <参考实验目录>` 复用同一盲审样本和已有逐样本审核；要求输入指纹一致。这样可固定审核集，而非仅依赖相同随机种子。各方法的簇处置仍需重新确认。
 

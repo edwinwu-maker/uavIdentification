@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 import h5py
 import numpy as np
 
-from src.data.deepcluster_schema import MANUAL_LABELS, SOURCE_IDENTITY_FIELDS
+from src.data.deepcluster_constants import MANUAL_LABELS, SOURCE_IDENTITY_FIELDS
 from src.utils.files import compute_file_sha256, read_optional_csv_records, write_csv
 from src.utils.plot import import_pyplot
 
@@ -157,7 +157,7 @@ def select_review_samples(
     # 跨目录对照也重新生成旧样本图片，避免复用的路径指向不存在的目标文件。
     for key, previous in old_samples.items():
         index = identities[key]
-        if index not in development and (previous.get("decision", "") or previous.get("manual_label", "")):
+        if index not in development and previous.get("manual_label", ""):
             selections.append((index, "previous_review"))
     return selections, audit_indices
 
@@ -192,9 +192,15 @@ def write_deepcluster_review(
         raise ValueError("Previous review identities do not match the dataset fingerprint")
     if set(old_samples) & set(old_audit):
         raise ValueError("Previous development and audit samples overlap")
+    for row in previous_samples:
+        if "decision" in row:
+            raise ValueError("Legacy sample_review decision field; remove it and manually convert to manual_label/confirmed")
+        if str(row.get("confirmed", "")).strip().lower() in ("true", "1") and not str(row.get("manual_label", "")).strip():
+            raise ValueError("Confirmed sample requires manual_label")
     for row in (*previous_samples, *previous_audit):
-        if row.get("manual_label", "") not in ("", *MANUAL_LABELS):
-            raise ValueError("Invalid previous manual_label")
+        row["manual_label"] = str(row.get("manual_label", "")).strip().lower()
+        if row["manual_label"] not in ("", *MANUAL_LABELS):
+            raise ValueError("Invalid previous manual_label; convert manually to video/other/uncertain")
 
     assignments = []
     labels = np.asarray(result.assignments)
@@ -228,8 +234,7 @@ def write_deepcluster_review(
             if role == "audit":
                 audit_rows.append(row)
             else:
-                row.update({"decision": previous.get("decision", ""),
-                            "confirmed": previous.get("confirmed", "false")})
+                row["confirmed"] = previous.get("confirmed", "false")
                 development_rows.append(row)
     counts = Counter(int(label) for label in labels)
     clusters = [{"cluster_id": cluster_id, "cluster_size": counts[cluster_id],
@@ -237,7 +242,7 @@ def write_deepcluster_review(
                 for cluster_id in sorted(counts)]
     write_csv(work_dir / "deepcluster_assignments.csv", assignments, assignments[0])
     write_csv(work_dir / "cluster_review.csv", clusters, clusters[0])
-    write_csv(work_dir / "sample_review.csv", development_rows, (*review_fields, "decision", "confirmed"))
+    write_csv(work_dir / "sample_review.csv", development_rows, (*review_fields, "confirmed"))
     write_csv(work_dir / "audit.csv", audit_rows, review_fields)
     return {"development_count": len(development_rows), "audit_count": len(audit_rows),
             "audit_per_class": dict(Counter(row["original_label"] for row in audit_rows)),

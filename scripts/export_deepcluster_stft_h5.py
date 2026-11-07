@@ -5,7 +5,7 @@ Usage:
   ~/Desktop/venv/bin/python scripts/export_deepcluster_stft_h5.py --data-dir ... --work-dir ... --output-dir ...
 
 填写 cluster_review.csv 的 decision/confirmed/mixed，或 sample_review.csv 的
-decision/confirmed；audit.csv 的 manual_label 仅用于独立评价，不改变任何决定。
+manual_label/confirmed（video→keep、other→drop、uncertain→quarantine）；audit.csv 的 manual_label 仅用于独立评价，不改变任何决定。
 """
 
 from __future__ import annotations
@@ -19,9 +19,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from src.data.deepcluster_export import (
-    evaluate_deepcluster_audit,
-    export_deepcluster_h5_files,
-    prepare_deepcluster_cleaning,
+    compute_deepcluster_audit_report,
+    export_reviewed_deepcluster_h5,
+    resolve_deepcluster_decisions,
 )
 from src.data.deepcluster_visualization import read_deepcluster_tsne, write_deepcluster_decision_plot
 from src.utils.cli import log_current_command
@@ -50,11 +50,11 @@ def main() -> None:
         if not path.is_file():
             raise FileNotFoundError(f"Required DeepCluster artifact does not exist: {path}")
     training_report = json.loads(paths["training_report"].read_text(encoding="utf-8"))
-    decisions = prepare_deepcluster_cleaning(
+    decisions = resolve_deepcluster_decisions(
         read_csv_records(paths["assignments"]), read_csv_records(paths["cluster_review"]),
         read_csv_records(paths["sample_review"]),
     )
-    audit = evaluate_deepcluster_audit(decisions, read_csv_records(paths["audit"]))
+    audit = compute_deepcluster_audit_report(decisions, read_csv_records(paths["audit"]))
     # 先核对坐标身份，避免写出 H5 后才发现可视化属于其他运行。
     coordinates = read_deepcluster_tsne(work_dir, decisions)
     if coordinates is not None:
@@ -62,7 +62,7 @@ def main() -> None:
     else:
         logger.info("No DeepCluster t-SNE artifact; exporting without a decision plot")
     hashes = {name: compute_file_sha256(path) for name, path in paths.items()}
-    manifest, statistics = export_deepcluster_h5_files(
+    manifest, statistics = export_reviewed_deepcluster_h5(
         data_dir=args.data_dir, output_dir=args.output_dir, decision_rows=decisions,
         model_hash=hashes["model"], training_report=training_report,
     )

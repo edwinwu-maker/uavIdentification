@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 from sklearn.manifold import TSNE
 
-from src.data.deepcluster_schema import DECISIONS, SOURCE_IDENTITY_FIELDS
+from src.data.deepcluster_constants import DECISIONS, SOURCE_IDENTITY_FIELDS
 from src.utils.files import write_csv
 from src.utils.plot import import_pyplot
 
