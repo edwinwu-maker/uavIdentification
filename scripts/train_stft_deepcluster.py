@@ -1,11 +1,11 @@
-"""默认使用轻量 Conv-BN-ReLU CNN，从随机初始化训练 STFT DeepCluster，生成簇复核与独立盲审材料。
+"""随机初始化训练 STFT DeepCluster；轻量 CNN 使用 v1，ResNet 使用适配 STFT 的 v2。
 
 Usage:
   ~/Desktop/venv/bin/python scripts/train_stft_deepcluster.py --data-dir /path/to/clean_stft_h5
   python scripts/train_stft_deepcluster.py --data-dir ... --device cuda:0 --work-dir outputs/stft_deepcluster
   python scripts/train_stft_deepcluster.py --data-dir ... --labels 4 6 8 --n-clusters 16 --pca-dim 32
   ~/Desktop/venv/bin/python scripts/train_stft_deepcluster.py --data-dir ... --input-mode rgb --work-dir outputs/stft_deepcluster_rgb
-  ~/Desktop/venv/bin/python scripts/train_stft_deepcluster.py --data-dir ... --backbone resnet18 --batch-size 8 --work-dir outputs/stft_deepcluster_resnet18
+  ~/Desktop/venv/bin/python scripts/train_stft_deepcluster.py --data-dir ... --backbone resnet18 --epochs 100 --n-clusters 16 --batch-size 32 --learning-rate 3e-4 --work-dir outputs/stft_deepcluster_resnet18_v2
   python scripts/train_stft_deepcluster.py --data-dir ... --reuse-review-dir outputs/stft_deepcluster_reference
 """
 
@@ -28,6 +28,7 @@ from src.data.deepcluster_visualization import write_deepcluster_tsne
 from src.data.stft_clustering import CleanStftClusteringDataset, scan_clean_stft_h5
 from src.models import StftCNN, StftResNet18
 from src.training.deepcluster import train_deepcluster
+from src.training.deepcluster_v2 import train_deepcluster_v2
 from src.utils.cli import log_current_command
 from src.utils.device import default_device, setup_device
 from src.utils.logger import logger
@@ -42,7 +43,7 @@ def parse_args():
     parser.add_argument("--data-dir", required=True)
     parser.add_argument("--work-dir", default="outputs/stft_deepcluster")
     parser.add_argument("--backbone", choices=("cnn", "resnet18"), default="cnn",
-                        help="Lightweight Conv-BN-ReLU CNN (default) or STFT-adapted ResNet-18")
+                        help="DeepCluster v1 CNN (default) or STFT-adapted DeepCluster v2 ResNet-18")
     parser.add_argument("--input-mode", choices=("grayscale", "rgb"), default="grayscale",
                         help="Single-channel STFT (default) or jet RGB pixels after pooling")
     parser.add_argument("--labels", nargs="+", type=int, default=list(DEFAULT_LABELS))
@@ -51,25 +52,43 @@ def parse_args():
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--n-clusters", type=int, default=32)
-    parser.add_argument("--pca-dim", type=int, default=64)
-    parser.add_argument("--learning-rate", type=float, default=1e-4)
+    parser.add_argument("--pca-dim", type=int, default=64, help="PCA dimension for CNN only")
+    parser.add_argument("--learning-rate", type=float, default=None,
+                        help="Peak learning rate (CNN: 1e-4; ResNet v2: 3e-4)")
+    parser.add_argument("--temperature", type=float, default=0.1,
+                        help="Prototype softmax temperature for ResNet v2")
+    parser.add_argument("--warmup-epochs", type=int, default=5,
+                        help="Learning-rate warmup epochs for ResNet v2")
+    parser.add_argument("--min-learning-rate", type=float, default=1e-6,
+                        help="Final cosine learning rate for ResNet v2")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--audit-per-class", type=int, default=30)
     parser.add_argument("--reuse-review-dir", type=Path, default=None,
                         help="Reuse fixed audit identities and sample reviews from an identical dataset")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.learning_rate is None:
+        args.learning_rate = 3e-4 if args.backbone == "resnet18" else 1e-4
+    return args
 
 
 def main():
     args = parse_args()
     log_current_command(logger)
-    for name in ("batch_size", "epochs", "n_clusters", "pca_dim", "audit_per_class"):
+    for name in ("batch_size", "epochs", "n_clusters", "audit_per_class"):
         if getattr(args, name) <= 0:
             raise ValueError(f"{name.replace('_', '-')} must be positive")
     if args.num_workers < 0 or not np.isfinite(args.learning_rate) or args.learning_rate <= 0:
         raise ValueError("num-workers must be non-negative and learning-rate must be positive")
-    if args.n_clusters < 2 or not 1 <= args.pca_dim <= 64:
-        raise ValueError("n-clusters must be >= 2 and pca-dim must be within 1..64")
+    if args.n_clusters < 2:
+        raise ValueError("n-clusters must be >= 2")
+    use_v2 = args.backbone == "resnet18"
+    if not use_v2 and not 1 <= args.pca_dim <= 64:
+        raise ValueError("pca-dim must be within 1..64")
+    if use_v2 and (not np.isfinite(args.temperature) or args.temperature <= 0
+                   or args.warmup_epochs < 0 or not np.isfinite(args.min_learning_rate)
+                   or not 0 <= args.min_learning_rate <= args.learning_rate):
+        raise ValueError("ResNet v2 requires positive temperature, non-negative warmup-epochs, "
+                         "and 0 <= min-learning-rate <= learning-rate")
     if not set(args.labels).issubset(set(range(2, 17))):
         raise ValueError("labels must be original UAV labels within 2..16")
     set_random_seed(args.seed)
@@ -86,36 +105,53 @@ def main():
         loader_kwargs = {"batch_size": args.batch_size, "num_workers": args.num_workers,
                          "pin_memory": device.type == "cuda"}
         inference_loader = DataLoader(dataset, shuffle=False, **loader_kwargs)
-        # 每次从随机 CNN 开始，首轮直接用初始特征生成聚类伪标签。
-        model_class = StftResNet18 if args.backbone == "resnet18" else StftCNN
-        model_type = "stft_resnet18" if args.backbone == "resnet18" else "stft_light_cnn"
+        # 每次从随机编码器开始；ResNet v2 在归一化投影空间中训练与聚类。
+        model_class = StftResNet18 if use_v2 else StftCNN
+        model_type = "stft_resnet18_v2" if use_v2 else "stft_light_cnn"
+        algorithm = "deepcluster_v2" if use_v2 else "deepcluster_v1"
+        feature_transform = "l2" if use_v2 else "pca_whiten_l2"
         model = model_class(in_channels=3 if args.input_mode == "rgb" else 1)
         logger.info("DeepCluster backbone: %s", model_type)
-        result = train_deepcluster(model, inference_loader, device=device, epochs=args.epochs,
-                                   n_clusters=args.n_clusters, pca_dim=args.pca_dim,
-                                   learning_rate=args.learning_rate, seed=args.seed, logger=logger)
+        training_kwargs = {"device": device, "epochs": args.epochs, "n_clusters": args.n_clusters,
+                           "learning_rate": args.learning_rate, "seed": args.seed, "logger": logger}
+        if use_v2:
+            result = train_deepcluster_v2(model, inference_loader, **training_kwargs,
+                                          temperature=args.temperature, warmup_epochs=args.warmup_epochs,
+                                          min_learning_rate=args.min_learning_rate)
+        else:
+            result = train_deepcluster(model, inference_loader, **training_kwargs, pca_dim=args.pca_dim)
         logger.info("Writing new clustering results; all cluster decisions will reset to unconfirmed quarantine")
         review = write_deepcluster_review(work_dir, samples, result, fingerprint=fingerprint,
                                          seed=args.seed, audit_per_class=args.audit_per_class,
                                          reuse_review_dir=args.reuse_review_dir)
         parameters = vars(args) | {
             "reuse_review_dir": str(args.reuse_review_dir) if args.reuse_review_dir else None,
+            "pca_dim": None if use_v2 else args.pca_dim,
+            "temperature": args.temperature if use_v2 else None,
+            "warmup_epochs": args.warmup_epochs if use_v2 else None,
+            "effective_warmup_epochs": min(args.warmup_epochs, max(0, args.epochs - 1)) if use_v2 else None,
+            "min_learning_rate": args.min_learning_rate if use_v2 else None,
         }
         training_summary = {
             "epochs_requested": args.epochs, "epochs_completed": len(result.history),
         }
         logger.info("DeepCluster completed %d/%d epochs", len(result.history), args.epochs)
-        # 用纯张量保存 sklearn 推理参数，避免加载 checkpoint 时依赖 pickle 对象。
-        torch.save({"model_type": model_type,
+        # 用纯张量保存聚类推理参数；v2 直接使用 L2 投影，不进行 PCA 白化。
+        pca_state = None if use_v2 else {
+            "mean": torch.from_numpy(result.pca.mean_),
+            "components": torch.from_numpy(result.pca.components_),
+            "explained_variance": torch.from_numpy(result.pca.explained_variance_),
+            "whiten": True,
+        }
+        torch.save({"model_type": model_type, "algorithm": algorithm,
+                    "feature_transform": feature_transform,
                     "input_mode": args.input_mode, "in_channels": model.in_channels,
                     "colormap": "jet" if args.input_mode == "rgb" else None,
                     "model_state_dict": result.model.state_dict(), "latent_dim": model.latent_dim,
+                    "projection_hidden_dim": model.projection_hidden_dim if use_v2 else None,
                     "input_size": 256, "clip_range": (-5.0, 5.0), "scale_divisor": 5.0,
                     "dataset_fingerprint": fingerprint, "fingerprint_payload": fingerprint_payload,
-                    "pca": {"mean": torch.from_numpy(result.pca.mean_),
-                            "components": torch.from_numpy(result.pca.components_),
-                            "explained_variance": torch.from_numpy(result.pca.explained_variance_),
-                            "whiten": True},
+                    "pca": pca_state,
                     "cluster_centers": torch.from_numpy(result.kmeans.cluster_centers_),
                     "parameters": parameters, "training_summary": training_summary},
                    work_dir / "deepcluster.pt")
@@ -124,6 +160,7 @@ def main():
             seed=args.seed,
         )
         report = {"analysis_mode": "deepcluster", "model_type": model_type,
+                  "algorithm": algorithm, "feature_transform": feature_transform,
                   "sample_count": len(samples),
                   "dataset_fingerprint": fingerprint, "fingerprint_payload": fingerprint_payload,
                   "parameters": parameters,

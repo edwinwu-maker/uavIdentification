@@ -70,7 +70,7 @@ class StftCNN(nn.Module):
 
 
 class StftResNet18(nn.Module):
-    """小卷积入口、16 倍下采样与 GroupNorm，不包含聚类分类头。"""
+    """小卷积入口、GroupNorm 与 DeepCluster-v2 的 MLP/L2 投影。"""
 
     def __init__(self, latent_dim: int = 128, in_channels: int = 1) -> None:
         super().__init__()
@@ -78,6 +78,7 @@ class StftResNet18(nn.Module):
             raise ValueError("in_channels must be 1 or 3")
         self.latent_dim = latent_dim
         self.in_channels = in_channels
+        self.projection_hidden_dim = 512
         self.backbone = resnet18(
             weights=None, num_classes=latent_dim, norm_layer=partial(nn.GroupNorm, 8),
         )
@@ -87,13 +88,18 @@ class StftResNet18(nn.Module):
         # 替换后的卷积不经过 torchvision 构造时的初始化，需单独初始化。
         nn.init.kaiming_normal_(self.backbone.conv1.weight, mode="fan_out", nonlinearity="relu")
         self.backbone.maxpool = nn.Identity()
-        # 256×256 输入的末层为 512×16×16；保留时频粗分区，再投影为有符号特征。
+        # 256×256 输入的末层为 512×16×16；保留时频粗分区，再做两层投影。
         self.backbone.avgpool = nn.AdaptiveAvgPool2d((2, 2))
-        self.backbone.fc = nn.Linear(512 * 2 * 2, latent_dim)
+        self.backbone.fc = nn.Sequential(
+            nn.Linear(512 * 2 * 2, self.projection_hidden_dim),
+            nn.BatchNorm1d(self.projection_hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(self.projection_hidden_dim, latent_dim),
+        )
 
     def encode(self, inputs: torch.Tensor) -> torch.Tensor:
-        """输入 (B, in_channels, 256, 256)，返回 (B, latent_dim) 特征。"""
-        return self.backbone(inputs)
+        """返回单位范数投影；训练时拼接双视图，确保 BN 至少看到两个样本。"""
+        return nn.functional.normalize(self.backbone(inputs), dim=1, p=2)
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         return self.encode(inputs)

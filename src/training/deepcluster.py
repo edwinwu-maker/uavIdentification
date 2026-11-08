@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
@@ -16,12 +17,15 @@ from tqdm import tqdm
 
 from src.models import StftCNN, StftResNet18
 
+if TYPE_CHECKING:
+    from src.training.deepcluster_v2 import SphericalKMeans
+
 
 @dataclass
 class DeepClusterResult:
     model: StftCNN | StftResNet18
-    pca: PCA
-    kmeans: KMeans
+    pca: PCA | None
+    kmeans: KMeans | SphericalKMeans
     embeddings: np.ndarray
     features: np.ndarray
     assignments: np.ndarray
