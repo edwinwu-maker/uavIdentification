@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
@@ -15,17 +14,14 @@ from sklearn.metrics import normalized_mutual_info_score
 from torch.utils.data import DataLoader, SequentialSampler, WeightedRandomSampler
 from tqdm import tqdm
 
-from src.models import StftCNN, StftResNet18
-
-if TYPE_CHECKING:
-    from src.training.deepcluster_v2 import SphericalKMeans
+from src.models import StftCNN
 
 
 @dataclass
 class DeepClusterResult:
-    model: StftCNN | StftResNet18
-    pca: PCA | None
-    kmeans: KMeans | SphericalKMeans
+    model: StftCNN
+    pca: PCA
+    kmeans: KMeans
     embeddings: np.ndarray
     features: np.ndarray
     assignments: np.ndarray
@@ -35,7 +31,7 @@ class DeepClusterResult:
 
 @torch.inference_mode()
 def encode_dataset(
-    model: StftCNN | StftResNet18,
+    model: StftCNN,
     loader: DataLoader,
     *,
     device: torch.device,
@@ -109,7 +105,7 @@ def fit_deepcluster_features(
 
 
 def train_deepcluster(
-    model: StftCNN | StftResNet18,
+    model: StftCNN,
     inference_loader: DataLoader,
     *,
     device: torch.device,

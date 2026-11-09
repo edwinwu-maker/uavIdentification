@@ -70,7 +70,7 @@ python <script-or-command>
 │   │   └── snr_accuracy.py           # 不同 SNR 条件下的准确率评估工具
 │   ├── models/
 │   │   ├── __init__.py               # 统一导出三个模型类
-│   │   └── networks.py               # 分类 ResNet-18、轻量 CNN 与聚类 ResNet-18
+│   │   └── networks.py               # 分类 ResNet-18 与聚类轻量 CNN
 │   ├── preprocess/
 │   │   ├── h5_precompute.py          # STFT/CPP .h5 预计算通用流程
 │   │   ├── random_snr_awgn.py        # 随机 SNR 加性高斯白噪声增强
@@ -190,17 +190,13 @@ H5 生成的 STFT 图片默认保存到 H5 目录旁的 `stft_png/`，CPP/FAM �
 
 CNN 首层随模式使用 1 或 3 个输入通道。`deepcluster.pt` 记录 `input_mode`、`in_channels` 和 `colormap`，`training_report.json` 的 `parameters.input_mode` 记录本次选择；重建模型时按 checkpoint 的 `in_channels` 初始化。两种模式的权重不能直接互换。对照实验使用独立工作目录，并可通过 `--reuse-review-dir` 固定审核样本。
 
-骨干由 `--backbone cnn|resnet18` 选择，默认 `cnn` 为轻量五层 CNN：通道依次为 `32,64,128,256,256`，每层采用 `3×3 / stride=2 / padding=1` 无偏置卷积、BatchNorm2d 和 ReLU；空间尺寸依次为 `128,64,32,16,8`，末端经全局平均池化和 `256→128` 线性层输出特征。卷积采用 Kaiming normal（fan_in、ReLU）初始化，避免低幅值输入的首轮随机特征逐层衰减。BN 训练时更新运行统计，编码时使用 eval 模式及运行统计，不额外预热或校准。改进 ResNet-18 从随机权重开始，保留 `[2,2,2,2]` BasicBlock；入口为 `3×3 / stride=2` 卷积，移除 MaxPool，所有归一化均为 `GroupNorm(8, channels)`。256×256 输入经过总计16倍下采样得到 `512×16×16`，再通过 `2×2` 自适应平均池化保留粗略时频位置，展平后由 `2048→128` 线性层输出特征。特征末端没有额外激活或归一化，仍使用相同的 PCA、L2、KMeans 和逐轮重置分类头流程。
+DeepCluster 仅使用轻量 CNN，不再接受 `--backbone`、`--temperature`、`--warmup-epochs`、`--min-learning-rate`；旧命令中的 `--backbone cnn` 也需移除。历史 ResNet18 权重不提供加载兼容层。
 
-```bash
-~/Desktop/venv/bin/python scripts/train_stft_deepcluster.py \
-  --data-dir <原始clean-H5目录> --backbone resnet18 --batch-size 8 \
-  --work-dir outputs/stft_deepcluster_resnet18 --device mps
-```
+DeepCluster 使用轻量五层 CNN：通道依次为 `32,64,128,256,256`，每层采用 `3×3 / stride=2 / padding=1` 无偏置卷积、BatchNorm2d 和 ReLU；空间尺寸依次为 `128,64,32,16,8`，末端经全局平均池化和 `256→128` 线性层输出特征。卷积采用 Kaiming normal（fan_in、ReLU）初始化。BN 训练时更新运行统计，编码时使用 eval 模式及运行统计，不额外预热或校准。
 
-两种骨干均支持 `--input-mode grayscale|rgb`。checkpoint 和报告的 `model_type` 分别为 `stft_light_cnn`、`stft_resnet18`，`parameters.backbone` 记录选择。重建时根据 `model_type` 选择 `src.models.StftCNN` 或 `src.models.StftResNet18`，传入保存的 `latent_dim`、`in_channels` 后严格加载 `model_state_dict`，提取特征前调用 `eval()`；BN 运行均值、运行方差及批次计数随 state_dict 保存。旧 `model_type=stft_cnn` 权重与新的轻量 CNN 不兼容，不自动转换；请保留历史产物并使用独立工作目录训练新模型。
+checkpoint 和报告的 `model_type` 为 `stft_light_cnn`，`algorithm` 为 `deepcluster_v1`，`feature_transform` 为 `pca_whiten_l2`。重建时使用 `src.models.StftCNN`，传入保存的 `latent_dim`、`in_channels` 后严格加载 `model_state_dict`，提取特征前调用 `eval()`；BN 运行统计随 state_dict 保存。旧 `model_type=stft_cnn` 权重与轻量 CNN 不兼容，不自动转换；请保留历史产物并使用独立工作目录训练新模型。
 
-单通道改进 ResNet-18 约1143万参数、8.87 GMAC/样本，轻量 CNN 约101万参数、0.269 GMAC（256×256 输入，仅统计卷积和全连接）。实际耗时和显存需实测，可先使用较小批次。此改造无法恢复1024→256输入池化已经丢失的信息，也不预设聚类质量一定提升。对照时固定数据、输入模式、批次大小、seed、K、PCA维度、轮数和学习率，使用独立工作目录，并通过 `--reuse-review-dir` 复用相同盲审样本及逐样本审核；比较有效图传误删率、删除集合无效样本比例和隔离率。
+轻量 CNN 约101万参数、0.269 GMAC（256×256 输入，仅统计卷积和全连接）。对照实验固定数据、输入模式、批次大小、seed、K、PCA维度、轮数和学习率，使用独立工作目录，并通过 `--reuse-review-dir` 复用相同盲审样本及逐样本审核。
 
 审核工作目录中的 `cluster_review.csv`：填写 `decision=keep/drop/quarantine`；`sample_review.csv` 只填写 `manual_label` 和 `confirmed`，不再包含人工 `decision`。逐样本标签为 `video`（可确认的有效图传）、`other`（明确应剔除的其它信号）、`uncertain`（无法确认），分别自动映射为 `keep/drop/quarantine`。两种审核均需明确填写 `confirmed=true` 才生效。已确认逐样本标签不得为空；空标签表示尚未标注，不等同于 `uncertain`。逐样本决定优先；混合簇设 `mixed=true` 后整簇默认隔离，只允许逐样本覆盖。未确认的逐样本标签不覆盖整簇决定；没有有效整簇或逐样本决定时默认隔离。仅保留可确认的可用图传；纯背景、仅控制跳频、明确非目标通信可剔除；弱信号或混合信号仍可确认有效图传时标为 `video`，无法确认时标为 `uncertain` 并隔离。簇代表图仅辅助审核，距离近或抽样一致不证明整个簇有效。
 
@@ -224,11 +220,11 @@ CNN 首层随模式使用 1 或 3 个输入通道。`deepcluster.pt` 记录 `inp
 
 最多展示10,000条样本，超出时按实验 seed 均匀无放回抽样，小簇不保证覆盖。投影使用二维、`perplexity=min(30, 展示数量-1)`、自动学习率和1,000次迭代；PCA 初始化，单维特征改用随机初始化，常量特征使用零坐标并注明退化。同次实验的各图共享坐标范围；不同实验分别拟合，位置不可直接比较。t-SNE 只用于观察邻域与审核结果，不参与聚类或清洗判定。
 
-对照实验应使用相同数据和人工审核预算，比较单通道 CNN+DeepCluster+审核、RGB CNN+DeepCluster+审核及不同骨干。关注明确图传错误剔除率、隔离率、删除集合无效样本比例及逐类/逐文件覆盖；训练损失、NMI 和 t-SNE 不代替清洗验收。下游识别须固定原始文件划分与同一个测试集，不能清洗后重新随机划分。
+对照实验应使用相同数据和人工审核预算，比较单通道 CNN+DeepCluster+审核、RGB CNN+DeepCluster+审核。关注明确图传错误剔除率、隔离率、删除集合无效样本比例及逐类/逐文件覆盖；训练损失、NMI 和 t-SNE 不代替清洗验收。下游识别须固定原始文件划分与同一个测试集，不能清洗后重新随机划分。
 
 ### 训练模型
 
-STFT 与 CPP 统一使用单通道输入的 `DroneRFaResNet18`，保持对比实验的网络结构一致。三个模型均从 `src.models` 导入，实现在 `src/models/networks.py`；原三个模块路径已移除，已有脚本需更新导入，权重格式保持不变。
+STFT 与 CPP 统一使用单通道输入的 `DroneRFaResNet18`，保持对比实验的网络结构一致。两个模型均从 `src.models` 导入，实现在 `src/models/networks.py`；原独立模块路径已移除，已有脚本需更新导入，权重格式保持不变。
 
 ```bash
 python scripts/train.py --feature stft --data-dir ~/Desktop/dataset/DroneRFa_stft_awgn_random_16class_h5 \
