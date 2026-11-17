@@ -4,7 +4,7 @@
 
 无人机信号研究对象为 `T0010-T10000` 共 15 类，保留 `T0000` 背景类，训练和评估共 16 类。`T0001` 的时频图经人工鉴定为基于 WiFi 的射频信号，易与 WiFi 混淆，不作为研究对象；`T10001-T11000` 飞控器也不纳入研究。
 
-原始标签仍为 T 编码的二进制整数值，即 `0、2-16`，H5 和 split manifest 保留原始标签；模型内部连续映射为 `0-15`，混淆矩阵显示原始标签。原始文件选择、H5 加载、可视化、DEC 清洗和 SNR 评估均排除 `T0001`，无需额外指定 `--exclude-labels 1`。
+原始标签为 T 编码的二进制整数值，即 `0、2-16`，H5 和 split manifest 保留原始标签；模型内部连续映射为 `0-15`，混淆矩阵显示原始标签。原始文件选择、H5 加载、可视化、DeepCluster 清洗和 SNR 评估均排除 `T0001`，无需额外指定 `--exclude-labels 1`。
 
 `T0000` 的 `RF0` 和 `RF1` 分别生成独立单通道样本；其他文件按 `S` 编码选择通道：`S0000-S0111` 使用 `RF0`，`S1000-S1111` 使用 `RF1`。STFT 和 CPP/FAM 特征均为 `(N, 1, H, W)`，H5 通过逐样本 `/rf_channel` 数据集记录实际通道。
 
@@ -15,7 +15,7 @@
 
 默认数据路径：
 
-- Windows: `E:/dataSet/DroneRFa`
+- Windows: `F:/droneRFa`
 - macOS: `~/Desktop/dataset/droneRFa`
 - Linux: `/mnt/data/wurixin/DroneRFa`
 
@@ -69,7 +69,7 @@ python <script-or-command>
 │   ├── evaluation/
 │   │   └── snr_accuracy.py           # 不同 SNR 条件下的准确率评估工具
 │   ├── models/
-│   │   ├── __init__.py               # 统一导出三个模型类
+│   │   ├── __init__.py               # 统一导出两个模型类
 │   │   └── networks.py               # 分类 ResNet-18 与聚类轻量 CNN
 │   ├── preprocess/
 │   │   ├── h5_precompute.py          # STFT/CPP .h5 预计算通用流程
@@ -92,7 +92,6 @@ python <script-or-command>
 │       └── paths.py                  # 输出目录路径约定
 ├── docs/
 │   ├── TODO.md
-│   ├── random_snr_awgn_training_plan.md
 │   ├── Yan 等 - 2025 - TASE-Net A Novel Robust Deep-Learning Network for Open-Set Few-Shot UAV Recognition.pdf
 │   └── DroneRFa：用于侦测低空无人机的大规模无人机射频信号数据集.pdf
 └── outputs/
@@ -105,7 +104,7 @@ python <script-or-command>
 
 `outputs/` 是统一实验输出目录。日志默认写入 `outputs/logs/`，模型权重默认写入 `outputs/models/`，图片默认写入 `outputs/figures/`，指标和混淆矩阵数组默认写入 `outputs/metrics/`。
 
-仓库内代码默认使用 `src.*` 导入路径，不使用 `drone_rfa.*` 别名。FAM 相关实现位于 `src.preprocess`，绘图和 H5 导图工具位于 `src.utils`。
+仓库内代码使用 `src.*` 导入路径。FAM 相关实现位于 `src.preprocess`，绘图和 H5 导图工具位于 `src.utils`。
 
 ## 常用命令
 
@@ -149,8 +148,8 @@ python scripts/generate_raw_stft_png.py --data-dir ~/Desktop/dataset/droneRFa --
 python scripts/generate_raw_cpp_png.py --data-dir ~/Desktop/dataset/droneRFa --clean --device mps
 
 # 从预计算 H5 生成图片
-python scripts/generate_stft_png.py --h5-dir ~/Desktop/dataset/droneRFa/stft_h5
-python scripts/generate_cpp_png.py --h5-dir ~/Desktop/dataset/droneRFa/cpp_h5
+python scripts/generate_stft_png.py --h5-dir ~/Desktop/dataset/DroneRFa_stft_awgn_random_16class_h5
+python scripts/generate_cpp_png.py --h5-dir ~/Desktop/dataset/DroneRFa_cpp_awgn_random_16class_h5
 ```
 
 原始 IQ 直出的 STFT 图片默认保存到数据目录旁的 `DroneRFa_stft_snr_png/`，并按
@@ -165,7 +164,7 @@ python scripts/generate_cpp_png.py --h5-dir ~/Desktop/dataset/droneRFa/cpp_h5
 H5 生成的 STFT 图片默认保存到 H5 目录旁的 `stft_png/`，CPP/FAM 图片默认保存到 H5
 目录旁的 `cpp_png/`。
 
-新实验使用带 `16class` 的独立目录和文件名，不覆盖历史产物。原始标签及单通道格式正确的旧 17 类 H5 可显式指定为输入，加载时自动跳过 `T0001`；应重新生成 split manifest，旧 17 类 manifest 和模型权重不用于当前实验。旧 14 类 H5 的压缩标签及文件级 `rf_channel` 属性与当前格式不兼容。DeepCluster 实验使用独立 `work-dir` 保存训练与审核产物。
+实验使用带 `16class` 的独立目录和文件名，不覆盖已有产物。DeepCluster 实验使用独立 `work-dir` 保存训练与审核产物。
 
 ### DeepCluster 独立图传清洗
 
@@ -190,19 +189,17 @@ H5 生成的 STFT 图片默认保存到 H5 目录旁的 `stft_png/`，CPP/FAM �
 
 CNN 首层随模式使用 1 或 3 个输入通道。`deepcluster.pt` 记录 `input_mode`、`in_channels` 和 `colormap`，`training_report.json` 的 `parameters.input_mode` 记录本次选择；重建模型时按 checkpoint 的 `in_channels` 初始化。两种模式的权重不能直接互换。对照实验使用独立工作目录，并可通过 `--reuse-review-dir` 固定审核样本。
 
-DeepCluster 仅使用轻量 CNN，不再接受 `--backbone`、`--temperature`、`--warmup-epochs`、`--min-learning-rate`；旧命令中的 `--backbone cnn` 也需移除。历史 ResNet18 权重不提供加载兼容层。
-
 DeepCluster 使用轻量五层 CNN：通道依次为 `32,64,128,256,256`，每层采用 `3×3 / stride=2 / padding=1` 无偏置卷积、BatchNorm2d 和 ReLU；空间尺寸依次为 `128,64,32,16,8`，末端经全局平均池化和 `256→128` 线性层输出特征。卷积采用 Kaiming normal（fan_in、ReLU）初始化。BN 训练时更新运行统计，编码时使用 eval 模式及运行统计，不额外预热或校准。
 
-checkpoint 和报告的 `model_type` 为 `stft_light_cnn`，`algorithm` 为 `deepcluster_v1`，`feature_transform` 为 `pca_whiten_l2`。重建时使用 `src.models.StftCNN`，传入保存的 `latent_dim`、`in_channels` 后严格加载 `model_state_dict`，提取特征前调用 `eval()`；BN 运行统计随 state_dict 保存。旧 `model_type=stft_cnn` 权重与轻量 CNN 不兼容，不自动转换；请保留历史产物并使用独立工作目录训练新模型。
+checkpoint 和报告的 `model_type` 为 `stft_light_cnn`，`algorithm` 为 `deepcluster_v1`，`feature_transform` 为 `pca_whiten_l2`。重建时使用 `src.models.StftCNN`，传入保存的 `latent_dim`、`in_channels` 后严格加载 `model_state_dict`，提取特征前调用 `eval()`；BN 运行统计随 state_dict 保存。
 
 轻量 CNN 约101万参数、0.269 GMAC（256×256 输入，仅统计卷积和全连接）。对照实验固定数据、输入模式、批次大小、seed、K、PCA维度、轮数和学习率，使用独立工作目录，并通过 `--reuse-review-dir` 复用相同盲审样本及逐样本审核。
 
-审核工作目录中的 `cluster_review.csv`：填写 `decision=keep/drop/quarantine`；`sample_review.csv` 只填写 `manual_label` 和 `confirmed`，不再包含人工 `decision`。逐样本标签为 `video`（可确认的有效图传）、`other`（明确应剔除的其它信号）、`uncertain`（无法确认），分别自动映射为 `keep/drop/quarantine`。两种审核均需明确填写 `confirmed=true` 才生效。已确认逐样本标签不得为空；空标签表示尚未标注，不等同于 `uncertain`。逐样本决定优先；混合簇设 `mixed=true` 后整簇默认隔离，只允许逐样本覆盖。未确认的逐样本标签不覆盖整簇决定；没有有效整簇或逐样本决定时默认隔离。仅保留可确认的可用图传；纯背景、仅控制跳频、明确非目标通信可剔除；弱信号或混合信号仍可确认有效图传时标为 `video`，无法确认时标为 `uncertain` 并隔离。簇代表图仅辅助审核，距离近或抽样一致不证明整个簇有效。
+审核工作目录中的 `cluster_review.csv`：填写 `decision=keep/drop/quarantine`；`sample_review.csv` 只填写 `manual_label` 和 `confirmed`。逐样本标签为 `video`（可确认的有效图传）、`other`（明确应剔除的其它信号）、`uncertain`（无法确认），分别自动映射为 `keep/drop/quarantine`。两种审核均需明确填写 `confirmed=true` 才生效。已确认逐样本标签不得为空；空标签表示尚未标注，不等同于 `uncertain`。逐样本决定优先；混合簇设 `mixed=true` 后整簇默认隔离，只允许逐样本覆盖。未确认的逐样本标签不覆盖整簇决定；没有有效整簇或逐样本决定时默认隔离。仅保留可确认的可用图传；纯背景、仅控制跳频、明确非目标通信可剔除；弱信号或混合信号仍可确认有效图传时标为 `video`，无法确认时标为 `uncertain` 并隔离。簇代表图仅辅助审核，距离近或抽样一致不证明整个簇有效。
 
 `audit.csv` 是与开发审核分离的固定盲审样本，`manual_label` 使用 `video/other/uncertain`；应在处置决定冻结后填写，仅用于评估，不参与清洗决定。原始高分辨率审核图用于检查池化可能掩盖的细窄信号。重跑保留同身份、同输入指纹的样本审核；簇编号不具有跨运行语义，簇级处置需要重新确认。
 
-仅接受新审核格式：旧六类标签需人工转换为三类，旧 `sample_review.csv` 需移除 `decision` 列；读取或复用旧格式记录会报错，不自动转换。盲审中，`other` 用于 `nonvideo_drop_recall`；`drop_precision` 只计算已删除的 `video/other`，`uncertain` 仅进入标签/处置分布和总体隔离率，空标签不计入已标注数。
+盲审中，`other` 用于 `nonvideo_drop_recall`；`drop_precision` 只计算已删除的 `video/other`，`uncertain` 仅进入标签/处置分布和总体隔离率，空标签不计入已标注数。
 
 不同方法使用独立 `work-dir`，添加 `--reuse-review-dir <参考实验目录>` 复用同一盲审样本和已有逐样本审核；要求输入指纹一致。这样可固定审核集，而非仅依赖相同随机种子。各方法的簇处置仍需重新确认。
 
@@ -216,7 +213,7 @@ checkpoint 和报告的 `model_type` 为 `stft_light_cnn`，`algorithm` 为 `dee
 
 训练结束后自动生成 `deepcluster_tsne_clusters.png`（簇编号）和 `deepcluster_tsne_original_labels.png`（原始 T 类别）。投影使用最终参与 KMeans 的 PCA 白化＋L2 特征，单通道与 RGB 模式采用相同流程。`deepcluster_tsne.csv` 保存坐标与完整样本身份，`training_report.json` 的 `tsne` 记录参数及抽样数量。
 
-审核导出时复用同一坐标，在输出目录生成 `deepcluster_tsne_decisions.png`，按 `keep/drop/quarantine` 着色；T0000 不参与投影。旧目录缺少坐标时仍可导出 H5，报告注明未生成处置图。坐标与当前分配表身份不匹配时拒绝导出。
+审核导出时复用同一坐标，在输出目录生成 `deepcluster_tsne_decisions.png`，按 `keep/drop/quarantine` 着色；T0000 不参与投影。工作目录缺少坐标时仍可导出 H5，报告注明未生成处置图。坐标与当前分配表身份不匹配时拒绝导出。
 
 最多展示10,000条样本，超出时按实验 seed 均匀无放回抽样，小簇不保证覆盖。投影使用二维、`perplexity=min(30, 展示数量-1)`、自动学习率和1,000次迭代；PCA 初始化，单维特征改用随机初始化，常量特征使用零坐标并注明退化。同次实验的各图共享坐标范围；不同实验分别拟合，位置不可直接比较。t-SNE 只用于观察邻域与审核结果，不参与聚类或清洗判定。
 
@@ -224,7 +221,7 @@ checkpoint 和报告的 `model_type` 为 `stft_light_cnn`，`algorithm` 为 `dee
 
 ### 训练模型
 
-STFT 与 CPP 统一使用单通道输入的 `DroneRFaResNet18`，保持对比实验的网络结构一致。两个模型均从 `src.models` 导入，实现在 `src/models/networks.py`；原独立模块路径已移除，已有脚本需更新导入，权重格式保持不变。
+STFT 与 CPP 统一使用单通道输入的 `DroneRFaResNet18`，保持对比实验的网络结构一致。该模型类从 `src.models` 导入，实现在 `src/models/networks.py`。
 
 ```bash
 python scripts/train.py --feature stft --data-dir ~/Desktop/dataset/DroneRFa_stft_awgn_random_16class_h5 \
@@ -255,7 +252,7 @@ python scripts/evaluate.py \
 
 ## 可选类别屏蔽实验
 
-在固定排除 `T0001` 的基础上，可通过 `--exclude-labels` 额外排除原始标签。标签现在与 T 编码的二进制值一致，例如 `T1101` 和 `T1110` 对应 `--exclude-labels 13 14`。程序会在模型内部重映射为连续标签，混淆矩阵坐标仍显示原始标签。
+在固定排除 `T0001` 的基础上，可通过 `--exclude-labels` 额外排除原始标签。标签与 T 编码的二进制值一致，例如 `T1101` 和 `T1110` 对应 `--exclude-labels 13 14`。程序会在模型内部重映射为连续标签，混淆矩阵坐标仍显示原始标签。
 
 ```bash
 # STFT：训练与常规评估
