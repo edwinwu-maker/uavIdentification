@@ -61,10 +61,10 @@ def compute_dataset_fingerprint(
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest(), payload
 
-def save_stft_review_image(stft: np.ndarray, review_id: str, output_path: Path) -> None:
+def save_stft_review_image(stft: np.ndarray, display_id: str, output_path: Path) -> None:
     """将单个 STFT 样本保存为仅显示审核编号的盲审 PNG，始终释放 Figure。
 
-    输入：二维 STFT 数组 stft（np.ndarray）、审核编号 review_id（str）、目标路径 output_path（Path）。
+    输入：二维 STFT 数组 stft（np.ndarray）、显示编号 display_id（str）、目标路径 output_path（Path）。
     输出：返回 None；将转置后的 STFT 写入指定 PNG 文件。
     """
     plt = import_pyplot(show=False)
@@ -78,7 +78,7 @@ def save_stft_review_image(stft: np.ndarray, review_id: str, output_path: Path) 
             vmin=-3.0,
             vmax=3.0,
         )
-        ax.set_title(review_id)
+        ax.set_title(display_id)
         ax.set_xlabel("Frequency bin")
         ax.set_ylabel("Time bin")
         fig.colorbar(image, ax=ax, label="Normalized power (z-score)")
@@ -212,24 +212,29 @@ def write_deepcluster_review(
         samples, labels, result.distances, identities, old_samples, old_audit,
         seed=seed, audit_per_class=audit_per_class)
 
-    review_fields = ("review_id", "image_path", "review_role", *assignments[0], "manual_label")
+    review_fields = ("display_id", "review_id", "image_path", "review_role", *assignments[0], "manual_label")
     development_rows, audit_rows = [], []
     image_dir = work_dir / "deepcluster_review_images"
     image_dir.mkdir(parents=True, exist_ok=True)
     with ExitStack() as stack:
         handles = {}
-        for index, role in [*selections, *((index, "audit") for index in audit_indices)]:
+        # 短编号仅用于本轮审核，跨轮复用仍按来源身份匹配。
+        for number, (index, role) in enumerate(
+            [*selections, *((index, "audit") for index in audit_indices)], start=1,
+        ):
             assignment = assignments[index]
             key = source_identity_to_key(assignment)
             review_id = "D" + hashlib.sha256(json.dumps(key).encode("utf-8")).hexdigest()[:16]
-            image_path = Path("deepcluster_review_images") / f"{review_id}.png"
+            display_id = f"S{number:06d}"
+            image_path = Path("deepcluster_review_images") / f"{display_id}_{review_id}.png"
             sample = samples[index]
             if sample.path not in handles:
                 handles[sample.path] = stack.enter_context(h5py.File(sample.path, "r"))
             save_stft_review_image(handles[sample.path]["stft"][sample.row_idx, 0],
-                                       review_id, work_dir / image_path)
+                                       display_id, work_dir / image_path)
             previous = (old_audit if role == "audit" else old_samples).get(key, {})
-            row = {"review_id": review_id, "image_path": image_path.as_posix(), "review_role": role,
+            row = {"display_id": display_id, "review_id": review_id,
+                   "image_path": image_path.as_posix(), "review_role": role,
                    **assignment, "manual_label": previous.get("manual_label", "")}
             if role == "audit":
                 audit_rows.append(row)
