@@ -42,7 +42,7 @@ def encode_dataset(
         (len(loader.dataset), model.latent_dim), device=device, dtype=torch.float32,
     )
     for inputs, indices in tqdm(loader, desc="Encoding STFT", leave=False):
-        latent = model.encode(inputs.to(device, non_blocking=True))
+        latent = model(inputs.to(device, non_blocking=True))
         indices = indices.to(device=device, dtype=torch.long, non_blocking=True)
         embeddings.index_copy_(0, indices, latent.to(dtype=torch.float32))
     # 一次性回传，避免逐批同步。
@@ -172,7 +172,7 @@ def train_deepcluster(
             labels = targets[indices.to(device="cpu", dtype=torch.long)].to(device, non_blocking=True)
             optimizer.zero_grad(set_to_none=True)
             head_optimizer.zero_grad(set_to_none=True)
-            loss = F.cross_entropy(head(model.encode(inputs)), labels)
+            loss = F.cross_entropy(head(model(inputs)), labels)
             if not torch.isfinite(loss):
                 raise ValueError("DeepCluster training produced non-finite loss")
             loss.backward()

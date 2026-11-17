@@ -71,6 +71,7 @@ def main():
         raise ValueError("pca-dim must be within 1..64")
     if not set(args.labels).issubset(set(range(2, 17))):
         raise ValueError("labels must be original UAV labels within 2..16")
+    
     set_random_seed(args.seed)
     device = setup_device(args.device, logger)
     samples = [sample for sample in scan_clean_stft_h5(args.data_dir) if sample.label in args.labels]
@@ -81,6 +82,7 @@ def main():
     work_dir = Path(args.work_dir).expanduser()
     work_dir.mkdir(parents=True, exist_ok=True)
     dataset = CleanStftClusteringDataset(samples, input_mode=args.input_mode)
+
     try:
         loader_kwargs = {"batch_size": args.batch_size, "num_workers": args.num_workers,
                          "pin_memory": device.type == "cuda"}
@@ -90,23 +92,32 @@ def main():
         algorithm = "deepcluster_v1"
         feature_transform = "pca_whiten_l2"
         model = StftCNN(in_channels=3 if args.input_mode == "rgb" else 1)
+
         logger.info("DeepCluster backbone: %s", model_type)
+
+        # 交替聚类与伪标签训练，返回最终模型、特征、聚类结果及训练历史。
         result = train_deepcluster(
             model, inference_loader, device=device, epochs=args.epochs,
             n_clusters=args.n_clusters, pca_dim=args.pca_dim,
             learning_rate=args.learning_rate, seed=args.seed, logger=logger,
         )
+
         logger.info("Writing new clustering results; all cluster decisions will reset to unconfirmed quarantine")
+
+        # 生成复核与盲审材料，复用已有样本审核并重置整簇处置确认。
         review = write_deepcluster_review(work_dir, samples, result, fingerprint=fingerprint,
                                          seed=args.seed, audit_per_class=args.audit_per_class,
                                          reuse_review_dir=args.reuse_review_dir)
+        
         parameters = vars(args) | {
             "reuse_review_dir": str(args.reuse_review_dir) if args.reuse_review_dir else None,
         }
         training_summary = {
             "epochs_requested": args.epochs, "epochs_completed": len(result.history),
         }
+
         logger.info("DeepCluster completed %d/%d epochs", len(result.history), args.epochs)
+        
         # 用纯张量保存 PCA 白化和聚类推理参数。
         pca_state = {
             "mean": torch.from_numpy(result.pca.mean_),
@@ -114,6 +125,7 @@ def main():
             "explained_variance": torch.from_numpy(result.pca.explained_variance_),
             "whiten": True,
         }
+        # 保存模型权重、预处理配置、PCA 参数及聚类中心，供后续恢复与推理。
         torch.save({"model_type": model_type, "algorithm": algorithm,
                     "feature_transform": feature_transform,
                     "input_mode": args.input_mode, "in_channels": model.in_channels,
@@ -125,10 +137,12 @@ def main():
                     "cluster_centers": torch.from_numpy(result.kmeans.cluster_centers_),
                     "parameters": parameters, "training_summary": training_summary},
                    work_dir / "deepcluster.pt")
+        # 基于最终聚类特征和样本归属生成 t-SNE 可视化。
         tsne = write_deepcluster_tsne(
             work_dir, result.features, read_csv_records(work_dir / "deepcluster_assignments.csv"),
             seed=args.seed,
         )
+        # 汇总训练配置、数据指纹、训练历史及审核与可视化统计。
         report = {"analysis_mode": "deepcluster", "model_type": model_type,
                   "algorithm": algorithm, "feature_transform": feature_transform,
                   "sample_count": len(samples),
@@ -136,8 +150,10 @@ def main():
                   "parameters": parameters,
                   "training_summary": training_summary,
                   "history": result.history, "review": review, "tsne": tsne}
+        # 将汇总报告写入 JSON 文件，供后续追溯与分析。
         with (work_dir / "training_report.json").open("w", encoding="utf-8") as destination:
             json.dump(report, destination, ensure_ascii=False, indent=2, allow_nan=False)
+        
         logger.info("DeepCluster checkpoint and review materials saved to %s", work_dir)
     finally:
         dataset.close()
