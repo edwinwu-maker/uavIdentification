@@ -21,10 +21,12 @@ class DroneRFaResNet18(nn.Module):
     def __init__(self, num_classes: int = NUM_CLASSES):
         super().__init__()
         self.model = resnet18(weights=None)
+
         # Replace first conv: 3-channel RGB → single-channel feature
         self.model.conv1 = nn.Conv2d(
             1, 64, kernel_size=7, stride=2, padding=3, bias=False
         )
+        
         # 按当前研究类别数设置分类层。
         in_features = self.model.fc.in_features
         self.model.fc = nn.Linear(in_features, num_classes)
@@ -43,6 +45,7 @@ class StftCNN(nn.Module):
             raise ValueError("in_channels must be 1 or 3")
         self.latent_dim = latent_dim
         self.in_channels = in_channels
+
         channels = (in_channels, 32, 64, 128, 256, 256)
         # 堆叠五层步长为 2 的 Conv-BN-ReLU，逐级下采样并提取时频特征。
         self.encoder_conv = nn.Sequential(*(
@@ -55,9 +58,11 @@ class StftCNN(nn.Module):
             # channels[1:] -> (32, 64, 128, 256, 256)
             for in_channels, out_channels in zip(channels[:-1], channels[1:])
         ))
+
         # 256×256 输入经五次下采样得到 256×8×8，全局汇聚后投影为有符号特征。
-        self.encoder_pool = nn.AdaptiveAvgPool2d(1)
-        self.encoder_fc = nn.Linear(256, latent_dim)
+        self.encoder_pool = nn.AdaptiveAvgPool2d(1)     # (B, 256, 8, 8) -> (B, 256, 1, 1)
+        self.encoder_fc = nn.Linear(256, latent_dim)    # (B, 256) -> (B, latent_dim)
+
         # 给 CNN 的五个卷积层设置训练前的初始权重
         for module in self.encoder_conv.modules():
             if isinstance(module, nn.Conv2d):

@@ -19,14 +19,16 @@ from src.models import StftCNN
 
 @dataclass
 class DeepClusterResult:
-    model: StftCNN
-    pca: PCA
-    kmeans: KMeans
-    embeddings: np.ndarray
-    features: np.ndarray
-    assignments: np.ndarray
-    distances: np.ndarray
-    history: list[dict]
+    """保存训练后的编码器、特征变换、聚类结果及训练历史。"""
+
+    model: StftCNN            # 训练后的 CNN 编码器
+    pca: PCA                  # 拟合后的 PCA 白化变换
+    kmeans: KMeans            # 拟合后的 KMeans 聚类器
+    embeddings: np.ndarray    # 原始 CNN 特征，形状 (N, latent_dim)
+    features: np.ndarray      # 白化并 L2 归一化的聚类特征，形状 (N, D)
+    assignments: np.ndarray   # 各样本所属簇编号，形状 (N,)
+    distances: np.ndarray     # 到所属簇中心的欧氏距离，形状 (N,)
+    history: list[dict]       # 各轮训练损失与聚类统计
 
 
 @torch.inference_mode()
@@ -38,44 +40,56 @@ def encode_dataset(
 ) -> np.ndarray:
     """提取 CNN 特征，按完整数据集的全局索引写回；调用后保持 eval 模式。"""
     model.eval()
+
+    # 预分配矩阵 (样本数, 特征维度)
     embeddings = torch.empty(
         (len(loader.dataset), model.latent_dim), device=device, dtype=torch.float32,
     )
+
+    # input(B, C, 256, 256), indices(B)
     for inputs, indices in tqdm(loader, desc="Encoding STFT", leave=False):
         latent = model(inputs.to(device, non_blocking=True))
         indices = indices.to(device=device, dtype=torch.long, non_blocking=True)
         embeddings.index_copy_(0, indices, latent.to(dtype=torch.float32))
+
     # 一次性回传，避免逐批同步。
     return embeddings.cpu().numpy()
 
 
-def fit_deepcluster_features(
+def _fit_pca_whitening(
     embeddings: np.ndarray,
     *,
-    n_clusters: int = 32,
     pca_dim: int = 64,
     seed: int = 42,
-) -> tuple[PCA, KMeans, np.ndarray, np.ndarray, np.ndarray]:
-    """拟合 PCA 白化、L2 归一化与 KMeans；距离为每个样本到所属中心的欧氏距离。"""
+) -> tuple[PCA, np.ndarray]:
+    """校验特征并拟合 PCA，返回裁剪后的 PCA 和未做 L2 归一化的白化特征。"""
+
+    # 统一为 float32，确保输入是无 NaN/Inf 的二维特征矩阵。
     embeddings = np.asarray(embeddings, dtype=np.float32)
     if embeddings.ndim != 2 or not np.isfinite(embeddings).all():
         raise ValueError("DeepCluster embeddings must be a finite two-dimensional array")
+
+    # PCA 至少需要两个样本；校验维数范围并拒绝空特征。
     sample_count, feature_dim = embeddings.shape
-    if not 2 <= n_clusters <= sample_count:
-        raise ValueError("DeepCluster requires 2 <= n_clusters <= sample count")
+    if sample_count < 2:
+        raise ValueError("DeepCluster PCA requires at least two samples")
     if not 1 <= pca_dim <= 64 or feature_dim == 0:
         raise ValueError("DeepCluster requires 1 <= pca_dim <= 64 and non-empty features")
+
+    # 按特征尺度设定方差阈值，检测特征塌缩或变化过小。
     scale = max(float(np.mean(np.square(embeddings, dtype=np.float64))), 1.0)
     if np.var(embeddings.astype(np.float64), axis=0).max() <= np.finfo(np.float32).eps * scale:
         raise ValueError("DeepCluster embeddings have collapsed or have negligible variance")
 
+    # 按样本数和特征维数限制 PCA 白化维数，检查主成分方差是否有效。
     pca = PCA(
         n_components=min(pca_dim, sample_count - 1, feature_dim),
         whiten=True,
         svd_solver="full",
         random_state=seed,
     ).fit(embeddings)
-    variances = pca.explained_variance_
+
+    variances = pca.explained_variance_ # variances：各主成分的方差，按从大到小排列。
     if not np.isfinite(variances).all() or variances[0] <= np.finfo(np.float32).eps * scale:
         raise ValueError("DeepCluster embeddings have collapsed or have negligible variance")
 
@@ -87,20 +101,41 @@ def fit_deepcluster_features(
     pca.singular_values_ = pca.singular_values_[:effective_dim]
     pca.n_components_ = effective_dim
     pca.n_components = effective_dim
+
     features = pca.transform(embeddings).astype(np.float32, copy=False)
+    return pca, features
+
+
+def fit_deepcluster_features(
+    embeddings: np.ndarray,
+    *,
+    n_clusters: int = 32,
+    pca_dim: int = 64,
+    seed: int = 42,
+) -> tuple[PCA, KMeans, np.ndarray, np.ndarray, np.ndarray]:
+    """拟合 PCA 白化、L2 归一化与 KMeans；距离为每个样本到所属中心的欧氏距离。"""
+    pca, features = _fit_pca_whitening(embeddings, pca_dim=pca_dim, seed=seed)
+    if not 2 <= n_clusters <= len(features):
+        raise ValueError("DeepCluster requires 2 <= n_clusters <= sample count")
+
+    # 检查白化特征的非有限值及近零范数，再逐样本做 L2 归一化。
     norms = np.linalg.norm(features, axis=1)
     if not np.isfinite(features).all() or np.any(norms <= 1e-12):
         raise ValueError("DeepCluster whitening produced non-finite or zero-norm features")
     features /= norms[:, None]
 
+    # 拟合 KMeans 并生成簇标签，检查是否存在空簇。
     kmeans = KMeans(n_clusters=n_clusters, n_init=10, random_state=seed)
     assignments = kmeans.fit_predict(features).astype(np.int64)
     counts = np.bincount(assignments, minlength=n_clusters)
     if np.any(counts == 0):
         raise ValueError("DeepCluster produced empty clusters; reduce n_clusters or inspect feature collapse")
+
+    # 计算样本到所属簇中心的欧氏距离，确保结果无 NaN/Inf。
     distances = np.linalg.norm(features - kmeans.cluster_centers_[assignments], axis=1)
     if not np.isfinite(distances).all():
         raise ValueError("DeepCluster produced non-finite centroid distances")
+    
     return pca, kmeans, features, assignments, distances
 
 
@@ -127,6 +162,7 @@ def train_deepcluster(
         raise ValueError("DeepCluster inference loader requires batch_size and drop_last=False")
     if not isinstance(inference_loader.sampler, SequentialSampler) or len(inference_loader.sampler) != len(inference_loader.dataset):
         raise ValueError("DeepCluster inference loader requires a complete SequentialSampler")
+    
     model.to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
     history: list[dict] = []
