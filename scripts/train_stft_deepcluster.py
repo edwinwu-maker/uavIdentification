@@ -1,7 +1,8 @@
-"""随机初始化训练 STFT DeepCluster；使用轻量 CNN 与 PCA 白化聚类。
+"""随机初始化训练 STFT DeepCluster；使用轻量 CNN 与可选 PCA 白化聚类。
 
 Usage:
   ~/Desktop/venv/bin/python scripts/train_stft_deepcluster.py --data-dir /path/to/clean_stft_h5
+  ~/Desktop/venv/bin/python scripts/train_stft_deepcluster.py --data-dir /path/to/clean_stft_h5 --no-pca
   python scripts/train_stft_deepcluster.py --data-dir ... --device cuda:0 --work-dir outputs/stft_deepcluster
   python scripts/train_stft_deepcluster.py --data-dir ... --labels 4 6 8 --n-clusters 16 --pca-dim 32
   ~/Desktop/venv/bin/python scripts/train_stft_deepcluster.py --data-dir ... --input-mode rgb --work-dir outputs/stft_deepcluster_rgb
@@ -48,7 +49,9 @@ def parse_args():
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--n-clusters", type=int, default=32)
-    parser.add_argument("--pca-dim", type=int, default=64, help="PCA dimension")
+    parser.add_argument("--no-pca", dest="use_pca", action="store_false",
+                        help="Skip PCA centering, reduction and whitening; keep L2 normalization")
+    parser.add_argument("--pca-dim", type=int, default=64, help="PCA dimension (ignored with --no-pca)")
     parser.add_argument("--learning-rate", type=float, default=1e-4)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--audit-per-class", type=int, default=30)
@@ -67,7 +70,7 @@ def main():
         raise ValueError("num-workers must be non-negative and learning-rate must be positive")
     if args.n_clusters < 2:
         raise ValueError("n-clusters must be >= 2")
-    if not 1 <= args.pca_dim <= 64:
+    if args.use_pca and not 1 <= args.pca_dim <= 64:
         raise ValueError("pca-dim must be within 1..64")
     if not set(args.labels).issubset(set(range(2, 17))):
         raise ValueError("labels must be original UAV labels within 2..16")
@@ -90,7 +93,7 @@ def main():
         # 每次从随机 CNN 编码器开始。
         model_type = "stft_light_cnn"
         algorithm = "deepcluster_v1"
-        feature_transform = "pca_whiten_l2"
+        feature_transform = "pca_whiten_l2" if args.use_pca else "l2"
         model = StftCNN(in_channels=3 if args.input_mode == "rgb" else 1)
 
         logger.info("DeepCluster backbone: %s", model_type)
@@ -98,7 +101,7 @@ def main():
         # 交替聚类与伪标签训练，返回最终模型、特征、聚类结果及训练历史。
         result = train_deepcluster(
             model, inference_loader, device=device, epochs=args.epochs,
-            n_clusters=args.n_clusters, pca_dim=args.pca_dim,
+            n_clusters=args.n_clusters, use_pca=args.use_pca, pca_dim=args.pca_dim,
             learning_rate=args.learning_rate, seed=args.seed, logger=logger,
         )
 
@@ -119,7 +122,7 @@ def main():
         logger.info("DeepCluster completed %d/%d epochs", len(result.history), args.epochs)
         
         # 用纯张量保存 PCA 白化和聚类推理参数。
-        pca_state = {
+        pca_state = None if result.pca is None else {
             "mean": torch.from_numpy(result.pca.mean_),
             "components": torch.from_numpy(result.pca.components_),
             "explained_variance": torch.from_numpy(result.pca.explained_variance_),

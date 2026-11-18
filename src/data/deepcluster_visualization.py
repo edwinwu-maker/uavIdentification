@@ -13,7 +13,7 @@ from src.utils.files import write_csv
 from src.utils.plot import import_pyplot
 
 MAX_SAMPLES = 10000
-FEATURE_SPACE = "PCA-whitened and L2-normalized encoder features"
+FEATURE_SPACE = "L2-normalized clustering features"
 IDENTITY_FIELDS = ("sample_index", *SOURCE_IDENTITY_FIELDS, "cluster_id")
 
 
@@ -78,7 +78,7 @@ def _plot(path, rows, key, title, total_count):
 
 
 def write_deepcluster_tsne(work_dir, features, assignment_rows, *, seed=42):
-    """投影最终白化且归一化的特征；features 第 i 行对应 assignment_rows[i]，仅用于展示。"""
+    """投影最终聚类特征；features 第 i 行对应 assignment_rows[i]，仅用于展示。"""
     features = np.asarray(features)
     if features.ndim != 2 or features.shape[0] != len(assignment_rows) or not features.size:
         raise ValueError("DeepCluster features must be non-empty (N, D) and aligned with assignments")
