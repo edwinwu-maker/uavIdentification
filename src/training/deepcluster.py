@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from logging import Logger
 
 import numpy as np
 import torch
@@ -32,7 +33,7 @@ class DeepClusterResult:
 
 
 @torch.inference_mode()
-def _encode_dataset(
+def _extract_embeddings(
     model: StftCNN,
     loader: DataLoader,
     *,
@@ -149,6 +150,90 @@ def _fit_l2_kmeans(
     return kmeans, features, assignments, distances
 
 
+def _fit_embedding_clusters(
+    embeddings: np.ndarray,
+    *,
+    n_clusters: int,
+    use_pca: bool,
+    pca_dim: int,
+    seed: int,
+) -> tuple[PCA | None, KMeans, np.ndarray, np.ndarray, np.ndarray]:
+    pca, clustering_features = None, embeddings
+    if use_pca:     # PCA 白化
+        pca, clustering_features = _fit_pca_whitening(
+            embeddings, pca_dim=pca_dim, seed=seed,
+        )
+    # L2/KMeans 聚类
+    kmeans, features, assignments, distances = _fit_l2_kmeans(
+        clustering_features, n_clusters=n_clusters, seed=seed,
+    )
+
+    return pca, kmeans, features, assignments, distances
+
+
+def _train_deepcluster_epoch(
+    model: StftCNN,
+    inference_loader: DataLoader,
+    assignments: np.ndarray,
+    cluster_counts: np.ndarray,
+    encoder_optimizer: torch.optim.Optimizer,
+    *,
+    device: torch.device,
+    learning_rate: float,
+    epoch: int,
+    epoch_seed: int,
+) -> float:
+    """按簇均衡采样并训练一轮，返回按实际抽取样本数加权的平均损失。"""
+    targets = torch.from_numpy(assignments)
+    # 簇间总权重相同；每轮有放回地抽取 N 次，允许小簇样本重复出现。
+    sampling_generator = torch.Generator().manual_seed(epoch_seed)
+    sampler = WeightedRandomSampler(
+        torch.from_numpy(1.0 / cluster_counts[assignments]), len(inference_loader.dataset),
+        replacement=True, generator=sampling_generator,
+    )
+    train_loader = DataLoader(
+        inference_loader.dataset,
+        batch_size=inference_loader.batch_size,
+        sampler=sampler,
+        num_workers=inference_loader.num_workers,
+        pin_memory=inference_loader.pin_memory,
+        collate_fn=inference_loader.collate_fn,
+        worker_init_fn=inference_loader.worker_init_fn,
+    )
+
+    head = nn.Linear(model.latent_dim, len(cluster_counts))     # 分类头
+    head_generator = torch.Generator().manual_seed(epoch_seed)  # 分类头生成器
+    # 轮间簇编号没有固定语义，因此每轮重建分类头及其优化器。
+    with torch.no_grad():
+        head.weight.normal_(0, 0.01, generator=head_generator)
+        head.bias.zero_()
+    
+    head.to(device)
+    head_optimizer = torch.optim.AdamW(head.parameters(), lr=learning_rate, weight_decay=1e-4)
+    model.train()
+    loss_sum = torch.zeros((), device=device, dtype=torch.float32)
+    trained_count = 0
+
+    for inputs, indices in tqdm(train_loader, desc=f"DeepCluster epoch {epoch}", leave=False):
+        inputs = inputs.to(device, non_blocking=True)
+        # 全局索引先在 CPU 上查伪标签，再将当前批次标签移到训练设备。
+        labels = targets[indices.to(device="cpu", dtype=torch.long)].to(device, non_blocking=True)
+        encoder_optimizer.zero_grad(set_to_none=True)
+        head_optimizer.zero_grad(set_to_none=True)
+        loss = F.cross_entropy(head(model(inputs)), labels)
+        if not torch.isfinite(loss):
+            raise ValueError("DeepCluster training produced non-finite loss")
+        
+        loss.backward()
+        encoder_optimizer.step()
+        head_optimizer.step()
+
+        # 在设备端累计，只在一轮结束时同步平均损失。
+        loss_sum.add_(loss.detach() * inputs.shape[0])
+        trained_count += inputs.shape[0]
+    return (loss_sum / trained_count).item()
+
+
 def train_deepcluster(
     model: StftCNN,
     inference_loader: DataLoader,
@@ -160,110 +245,76 @@ def train_deepcluster(
     pca_dim: int = 64,
     learning_rate: float = 1e-4,
     seed: int = 42,
-    logger=None,
+    logger: Logger | None = None,
 ) -> DeepClusterResult:
-    """原地训练随机初始化的 CNN，返回最终权重对应的特征和聚类。
-
-    inference_loader 须使用 SequentialSampler，数据集返回 (STFT, 全局索引) 并使用确定性预处理。
-    每轮用全部样本聚类，按簇均衡抽取 N 次训练，不使用重建预训练。
-    use_pca=False 时直接对原始 CNN 特征做 L2 归一化，忽略 pca_dim。
-    """
+    
     if epochs <= 0 or not np.isfinite(learning_rate) or learning_rate <= 0:
         raise ValueError("DeepCluster epochs and learning_rate must be positive")
     if inference_loader.batch_size is None or inference_loader.drop_last:
         raise ValueError("DeepCluster inference loader requires batch_size and drop_last=False")
-    if not isinstance(inference_loader.sampler, SequentialSampler) or len(inference_loader.sampler) != len(inference_loader.dataset):
+    if (
+        not isinstance(inference_loader.sampler, SequentialSampler)
+        or len(inference_loader.sampler) != len(inference_loader.dataset)
+    ):
         raise ValueError("DeepCluster inference loader requires a complete SequentialSampler")
-    
+
     model.to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
+    encoder_optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
     history: list[dict] = []
-    previous_assignments = None
+    previous_assignments: np.ndarray | None = None
     sample_count = len(inference_loader.dataset)
 
     for epoch in range(1, epochs + 1):
-        embeddings = _encode_dataset(model, inference_loader, device=device)
-        pca, clustering_features = None, embeddings
-        if use_pca:
-            pca, clustering_features = _fit_pca_whitening(
-                embeddings, pca_dim=pca_dim, seed=seed + epoch - 1,
-            )
-        kmeans, features, assignments, _ = _fit_l2_kmeans(
-            clustering_features, n_clusters=n_clusters, seed=seed + epoch - 1,
-        )
-        counts = np.bincount(assignments, minlength=n_clusters)
-        targets = torch.from_numpy(assignments)
-        # 簇内样本等权、簇间总权重相同；每轮抽 N 次，允许重复以覆盖小簇。
-        generator = torch.Generator().manual_seed(seed + epoch)
-        sampler = WeightedRandomSampler(
-            torch.from_numpy(1.0 / counts[assignments]), sample_count,
-            replacement=True, generator=generator,
-        )
-        train_loader = DataLoader(
-            inference_loader.dataset,
-            batch_size=inference_loader.batch_size,
-            sampler=sampler,
-            num_workers=inference_loader.num_workers,
-            pin_memory=inference_loader.pin_memory,
-            collate_fn=inference_loader.collate_fn,
-            worker_init_fn=inference_loader.worker_init_fn,
+        cluster_seed = seed + epoch - 1
+
+        embeddings = _extract_embeddings(model, inference_loader, device=device)
+        pca, kmeans, _, assignments, _ = _fit_embedding_clusters(
+            embeddings, n_clusters=n_clusters, use_pca=use_pca,
+            pca_dim=pca_dim, seed=cluster_seed,
         )
 
-        # 本轮簇编号不继承上轮语义，重新初始化分类头及其优化器。
-        head = nn.Linear(model.latent_dim, n_clusters)
-        head_generator = torch.Generator().manual_seed(seed + epoch)
-        with torch.no_grad():
-            head.weight.normal_(0, 0.01, generator=head_generator)
-            head.bias.zero_()
-        head.to(device)
-        head_optimizer = torch.optim.AdamW(head.parameters(), lr=learning_rate, weight_decay=1e-4)
-        model.train()
-        loss_sum = torch.zeros((), device=device, dtype=torch.float32)
-        trained_count = 0
-        for inputs, indices in tqdm(train_loader, desc=f"DeepCluster epoch {epoch}", leave=False):
-            inputs = inputs.to(device, non_blocking=True)
-            labels = targets[indices.to(device="cpu", dtype=torch.long)].to(device, non_blocking=True)
-            optimizer.zero_grad(set_to_none=True)
-            head_optimizer.zero_grad(set_to_none=True)
-            loss = F.cross_entropy(head(model(inputs)), labels)
-            if not torch.isfinite(loss):
-                raise ValueError("DeepCluster training produced non-finite loss")
-            loss.backward()
-            optimizer.step()
-            head_optimizer.step()
-            loss_sum.add_(loss.detach() * inputs.shape[0])
-            trained_count += inputs.shape[0]
+        cluster_counts = np.bincount(assignments, minlength=n_clusters)
+        epoch_seed = seed + epoch
+        epoch_loss = _train_deepcluster_epoch(
+            model, inference_loader, assignments, cluster_counts, encoder_optimizer,
+            device=device, learning_rate=learning_rate, epoch=epoch, epoch_seed=epoch_seed,
+        )
 
-        epoch_loss = (loss_sum / trained_count).item()
-        row = {
+        epoch_metrics = {
             "epoch": epoch,
             "loss": epoch_loss,
             "pca_components": pca.n_components_ if pca is not None else None,
             "inertia": float(kmeans.inertia_),
-            "cluster_counts": counts.tolist(),
-            "largest_cluster_fraction": float(counts.max() / sample_count),
+            "cluster_counts": cluster_counts.tolist(),
+            "largest_cluster_fraction": float(cluster_counts.max() / sample_count),
             "feature_std_mean": float(embeddings.std(axis=0).mean()),
             "reassignment_nmi": None if previous_assignments is None else float(
                 normalized_mutual_info_score(previous_assignments, assignments)
             ),
         }
-        history.append(row)
+        history.append(epoch_metrics)
         previous_assignments = assignments
         if logger is not None:
             logger.info(
                 "DeepCluster epoch %d | loss: %.6f | largest_cluster: %.3f | NMI: %s",
-                epoch, epoch_loss, row["largest_cluster_fraction"], row["reassignment_nmi"],
+                epoch, epoch_loss,
+                epoch_metrics["largest_cluster_fraction"], epoch_metrics["reassignment_nmi"],
             )
 
     # 最后一轮更新后重新提取和拟合，避免导出前一轮权重对应的旧伪标签。
-    embeddings = _encode_dataset(model, inference_loader, device=device)
-    pca, clustering_features = None, embeddings
-    if use_pca:
-        pca, clustering_features = _fit_pca_whitening(
-            embeddings, pca_dim=pca_dim, seed=seed + epochs,
-        )
-    kmeans, features, assignments, distances = _fit_l2_kmeans(
-        clustering_features, n_clusters=n_clusters, seed=seed + epochs,
+    embeddings = _extract_embeddings(model, inference_loader, device=device)
+    pca, kmeans, features, assignments, distances = _fit_embedding_clusters(
+        embeddings, n_clusters=n_clusters, use_pca=use_pca, pca_dim=pca_dim, seed=seed + epochs,
     )
+
     model.zero_grad(set_to_none=True)
-    return DeepClusterResult(model, pca, kmeans, embeddings, features, assignments, distances, history)
+    return DeepClusterResult(
+        model=model,
+        pca=pca,
+        kmeans=kmeans,
+        embeddings=embeddings,
+        features=features,
+        assignments=assignments,
+        distances=distances,
+        history=history,
+    )
