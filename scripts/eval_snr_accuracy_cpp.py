@@ -41,7 +41,8 @@ from src.evaluation.snr_accuracy import (
     save_prediction_diagnostics,
 )
 from src.models import DroneRFaResNet18
-from src.preprocess.cpp import compute_cpp, normalize_cpp
+from src.preprocess.cpp import compute_cpp
+from src.preprocess.normalization import normalize_log_zscore
 from src.training.model_io import load_model
 from src.utils.cli import log_current_command
 from src.utils.device import default_device
@@ -212,7 +213,7 @@ def main() -> None:
                             fam_nfft=args.fam_nfft,
                             fam_hop=args.fam_hop,
                         )
-                        cpp_batch.append(normalize_cpp(cpp))
+                        cpp_batch.append(normalize_log_zscore(cpp))
                         labels.append(mapping.to_model(record.label))
 
                     # 堆叠为 (B, 1, H, W)，在 inference_mode 下完成分类。

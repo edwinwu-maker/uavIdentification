@@ -39,9 +39,9 @@ from src.preprocess.cpp import (
     DEFAULT_SEGMENT_SAMPLES,
     SUPPORTED_FAM_MERGE_MODES,
     compute_cpp,
-    normalize_cpp,
 )
 from src.preprocess.random_snr_awgn import add_random_snr_awgn_with_snr
+from src.preprocess.normalization import normalize_log_zscore
 from src.utils.cli import log_current_command
 from src.utils.device import default_device
 from src.utils.logger import logger
@@ -145,7 +145,7 @@ def process_one_mat(
                         pair_chunk_size=pair_chunk_size, fam_nfft=fam_nfft, fam_hop=fam_hop,
                     )
                     # 归一化后保留 (1, H, W) 的单通道 CPP，沿用计算返回的坐标轴。
-                    cpp_sample = normalize_cpp(cpp).detach().cpu().numpy()
+                    cpp_sample = normalize_log_zscore(cpp).detach().cpu().numpy()
                     save_path = build_raw_sample_png_path(
                         save_root, filename=filename, sample_idx=sample_idx,
                         rf_channel=rf_channel, snr_db=snr_db,

@@ -76,7 +76,7 @@ python <script-or-command>
 │   │   ├── random_snr_awgn.py        # 随机 SNR 加性高斯白噪声增强
 │   │   ├── stft.py                   # STFT 频谱图特征生成
 │   │   ├── cpp.py                    # 单通道 CPP/FAM 网格生成
-│   │   └── fam_torch.py              # PyTorch FAM/SCF 计算与默认坐标范围，支持 CPU/CUDA/MPS
+│   │   └── fam.py                    # PyTorch FAM/SCF 计算与默认坐标范围，支持 CPU/CUDA/MPS
 │   ├── training/
 │   │   ├── model_io.py               # 模型权重保存与加载
 │   │   ├── evaluator.py              # 验证/测试循环

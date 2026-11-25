@@ -5,29 +5,11 @@ from __future__ import annotations
 import numpy as np
 import torch
 
-from src.preprocess.fam_torch import FAM_ALPHA_RANGE, FAM_F_RANGE, fam_grid_torch
+from src.preprocess.fam import FAM_ALPHA_RANGE, FAM_F_RANGE, fam_grid_torch
 from src.utils.samples import iter_padded_segments
 
 SUPPORTED_FAM_MERGE_MODES = ("mean", "max")
 DEFAULT_SEGMENT_SAMPLES = 262144
-
-
-def normalize_cpp(
-    cpp: torch.Tensor,
-    *,
-    eps: float = 1e-6,
-) -> torch.Tensor:
-    """对单个 CPP 样本执行 log-zscore-sample 归一化，输入形状为 (C, H, W)。"""
-
-    if not isinstance(cpp, torch.Tensor):
-        raise TypeError("cpp must be a torch.Tensor")
-
-    cpp = cpp.to(dtype=torch.float32)
-    logged = torch.log1p(cpp)
-    std, mean = torch.std_mean(logged, dim=(1, 2), keepdim=True, unbiased=False)
-    centered = logged - mean
-    denominator = torch.where(std > eps, std, torch.ones_like(std))
-    return torch.where(std > eps, centered / denominator, torch.zeros_like(centered))
 
 
 def compute_segmented_fam_grid(
@@ -79,7 +61,6 @@ def compute_segmented_fam_grid(
             f_bins=f_bins,
             alpha_bins=alpha_bins,
             window="hann",
-            keep_principal_domain=True,
             device=device,
             dtype=torch.complex64,
             pair_chunk_size=pair_chunk_size,

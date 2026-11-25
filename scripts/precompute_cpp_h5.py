@@ -33,11 +33,11 @@ from src.data.drone_rfa_io import count_iq_samples, parse_label, read_iq_samples
 from src.preprocess.cpp import (
     compute_cpp,
     DEFAULT_SEGMENT_SAMPLES,
-    normalize_cpp,
     SUPPORTED_FAM_MERGE_MODES,
 )
 from src.preprocess.h5_precompute import run_precompute_batch
 from src.preprocess.random_snr_awgn import add_random_snr_awgn_with_snr
+from src.preprocess.normalization import normalize_log_zscore
 from src.utils.cli import log_current_command
 from src.utils.device import default_device
 from src.utils.files import get_filename_with_suffix
@@ -258,7 +258,9 @@ def process_one_mat(
                         output_idx = (
                             channel_offset + sample_idx * variants_per_sample + variant_idx
                         )
-                        h5f["cpp"][output_idx] = normalize_cpp(cpp).detach().cpu().numpy()
+                        h5f["cpp"][output_idx] = (
+                            normalize_log_zscore(cpp).detach().cpu().numpy()
+                        )
                         h5f["labels"][output_idx] = label
                         h5f["is_clean"][output_idx] = is_clean
                         h5f["snr_db"][output_idx] = snr_value
