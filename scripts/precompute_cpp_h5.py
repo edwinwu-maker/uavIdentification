@@ -44,7 +44,7 @@ from src.utils.files import get_filename_with_suffix
 from src.utils.logger import logger
 from src.utils.paths import default_raw_data_dir
 
-SAMPLE_LENGTH = 1_000_000
+SAMPLE_LENGTH = 10_000_000
 F_BINS = 257
 ALPHA_BINS = 257
 SUPPORTED_NOISE_PROFILES = ("random", "mixed-3x")

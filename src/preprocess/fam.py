@@ -12,7 +12,7 @@ from src.utils.dtype import get_real_dtype
 
 
 # 声明模块的公开接口，IDE 和静态检查工具依此识别公开 API。
-__all__ = ["FAM_F_RANGE", "FAM_ALPHA_RANGE", "fam_grid_torch"]
+__all__ = ["FAM_F_RANGE", "FAM_ALPHA_RANGE", "compute_fam_grid"]
 
 # FAM/SCF 网格默认的归一化频率 f 与循环频率 alpha 范围。
 FAM_F_RANGE: Final[tuple[float, float]] = (-0.5, 0.5)
@@ -199,7 +199,7 @@ def _iter_fam_point_batches(
         yield f[mask], alpha[mask], z[mask]
 
 
-def fam_grid_torch(
+def compute_fam_grid(
     x: torch.Tensor,
     *,
     nfft: int,
@@ -233,8 +233,11 @@ def fam_grid_torch(
     resolved_device = resolve_device(device)
     real_dtype = get_real_dtype(dtype)
     grid_size = alpha_bins * f_bins
-    image_sum = torch.zeros(grid_size, device=resolved_device, dtype=real_dtype)
-    image_count = torch.zeros(grid_size, device=resolved_device, dtype=real_dtype)
+
+    # 累计每个网格 bin 的 SCF 幅值总和及落点数量。
+    bin_magnitude_sum = torch.zeros(grid_size, device=resolved_device, dtype=real_dtype)
+    bin_point_count = torch.zeros(grid_size, device=resolved_device, dtype=real_dtype)
+
     f_min, f_max = f_range
     alpha_min, alpha_max = alpha_range
     x_tensor = x.to(device=resolved_device, dtype=dtype)
@@ -254,20 +257,32 @@ def fam_grid_torch(
         a_idx = torch.floor(
             (alpha - alpha_min) / (alpha_max - alpha_min) * (alpha_bins - 1)
         ).to(torch.long)
+
+        # 过滤网格索引越界的点，当前批次无有效点时直接跳过。
         mask = (f_idx >= 0) & (f_idx < f_bins) & (a_idx >= 0) & (a_idx < alpha_bins)
         if not torch.any(mask):
             continue
 
+        # 将有效二维网格坐标线性化为一维 bin 索引。
         flat_idx = (a_idx[mask] * f_bins + f_idx[mask]).reshape(-1)
+        # 提取有效 SCF 值的幅值并转换为目标实数类型。
         mag = torch.abs(value[mask]).to(real_dtype).reshape(-1)
-        image_sum.scatter_add_(0, flat_idx, mag)
-        image_count.scatter_add_(0, flat_idx, torch.ones_like(mag))
+        # 按 bin 累加 SCF 幅值。
+        bin_magnitude_sum.scatter_add_(0, flat_idx, mag)
+        # 按 bin 累加落点数量。
+        bin_point_count.scatter_add_(0, flat_idx, torch.ones_like(mag))
 
-    image = torch.zeros_like(image_sum)
-    count_mask = image_count > 0
-    image[count_mask] = image_sum[count_mask] / image_count[count_mask]
-    image = image.reshape(alpha_bins, f_bins)
+    # 初始化展平的 SCF 幅值网格，空 bin 保持为零。
+    scf_magnitude_grid = torch.zeros_like(bin_magnitude_sum)
+    # 标记至少包含一个 FAM 点的非空 bin。
+    count_mask = bin_point_count > 0
+    # 计算非空 bin 的平均 SCF 幅值，避免除零。
+    scf_magnitude_grid[count_mask] = (
+        bin_magnitude_sum[count_mask] / bin_point_count[count_mask]
+    )
+    # 恢复为 (alpha, f) 二维网格。
+    scf_magnitude_grid = scf_magnitude_grid.reshape(alpha_bins, f_bins)
 
     f_axis = np.linspace(f_range[0], f_range[1], f_bins)
     alpha_axis = np.linspace(alpha_range[0], alpha_range[1], alpha_bins)
-    return image, f_axis, alpha_axis
+    return scf_magnitude_grid, f_axis, alpha_axis
