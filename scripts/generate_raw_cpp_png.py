@@ -23,7 +23,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 import h5py
-import numpy as np
 import torch
 from tqdm import tqdm
 
@@ -46,32 +45,13 @@ from src.utils.cli import log_current_command
 from src.utils.device import default_device
 from src.utils.logger import logger
 from src.utils.paths import build_raw_sample_png_path, default_raw_data_dir
-from src.utils.plot import plot_cpp_sample
+from src.utils.plot import CppSamplePlotter
 
 SAMPLE_LENGTH = 1_000_000
 F_BINS = 257
 ALPHA_BINS = 257
 FAM_NFFT = 256
 FAM_HOP = 256
-
-
-def plot_single_channel_cpp(
-    cpp_sample: np.ndarray,
-    f_axis: np.ndarray,
-    alpha_axis: np.ndarray,
-    save_path: Path,
-    *,
-    sample_idx: int,
-    signal_code: str,
-    rf_channel: int,
-    label: int,
-    snr_db: float | None,
-) -> None:
-    """构造样本及加噪条件标题，使用共享工具保存归一化 CPP/FAM。"""
-
-    condition = "Clean" if snr_db is None else f"SNR {snr_db:g} dB"
-    title = f"{signal_code} / RF{rf_channel} CPP — Sample {sample_idx} — {condition} (label={label})"
-    plot_cpp_sample(cpp_sample, f_axis, alpha_axis, save_path, title=title)
 
 
 def process_one_mat(
@@ -109,51 +89,58 @@ def process_one_mat(
 
     logger.info("Processing: %s (%s -> %s)", filename, signal_code, rf_channels)
     total_samples = 0
-    # 句柄覆盖整文件的所有通道和条件，异常退出也会关闭。
-    with h5py.File(mat_path, "r") as src:
-        for rf_channel in rf_channels:
-            # 样本上限分别作用于每个所选通道。
-            num_samples = count_iq_samples(
-                src, rf_channel=rf_channel, sample_length=sample_length,
-                max_samples=max_samples_per_file,
-            )
-            total_samples += num_samples
-            for sample_idx in tqdm(
-                range(num_samples), total=num_samples,
-                desc=f"  {filename} RF{rf_channel}", leave=False,
-            ):
-                iq = read_iq_samples(
+    # 单文件内采样长度与 FAM 参数固定，f_axis/alpha_axis 不变，复用同一画布导出所有样本。
+    plotter: CppSamplePlotter | None = None
+    try:
+        # 句柄覆盖整文件的所有通道和条件，异常退出也会关闭。
+        with h5py.File(mat_path, "r") as src:
+            for rf_channel in rf_channels:
+                # 样本上限分别作用于每个所选通道。
+                num_samples = count_iq_samples(
                     src, rf_channel=rf_channel, sample_length=sample_length,
-                    start_sample_idx=sample_idx, end_sample_idx=sample_idx + 1,
+                    max_samples=max_samples_per_file,
                 )
-                iq_tensor = torch.as_tensor(iq, dtype=torch.complex64, device=device)
+                total_samples += num_samples
+                for sample_idx in tqdm(
+                    range(num_samples), total=num_samples,
+                    desc=f"  {filename} RF{rf_channel}", leave=False,
+                ):
+                    iq = read_iq_samples(
+                        src, rf_channel=rf_channel, sample_length=sample_length,
+                        start_sample_idx=sample_idx, end_sample_idx=sample_idx + 1,
+                    )
+                    iq_tensor = torch.as_tensor(iq, dtype=torch.complex64, device=device)
 
-                for snr_db in conditions:
-                    variant_iq = iq_tensor
-                    if snr_db is not None:
-                        # 噪声身份包含文件、RF 通道和样本索引，保留该身份以复现结果。
-                        variant_iq, _ = add_random_snr_awgn_with_snr(
-                            iq_tensor, file_id=f"{filename}:RF{rf_channel}",
-                            start_idx=sample_idx, snr_min=snr_db, snr_max=snr_db,
-                            noise_seed=noise_seed, device=device,
+                    for snr_db in conditions:
+                        variant_iq = iq_tensor
+                        if snr_db is not None:
+                            # 噪声身份包含文件、RF 通道和样本索引，保留该身份以复现结果。
+                            variant_iq, _ = add_random_snr_awgn_with_snr(
+                                iq_tensor, file_id=f"{filename}:RF{rf_channel}",
+                                start_idx=sample_idx, snr_min=snr_db, snr_max=snr_db,
+                                noise_seed=noise_seed, device=device,
+                            )
+                        # 单样本 IQ (1, 1, L) 取为一维信号，供分段 FAM 计算。
+                        cpp, f_axis, alpha_axis = compute_cpp(
+                            variant_iq[0, 0, :], segment_samples=segment_samples,
+                            segment_hop_samples=segment_hop_samples, fam_merge=fam_merge,
+                            f_bins=f_bins, alpha_bins=alpha_bins, device=device,
+                            pair_chunk_size=pair_chunk_size, fam_nfft=fam_nfft, fam_hop=fam_hop,
                         )
-                    # 单样本 IQ (1, 1, L) 取为一维信号，供分段 FAM 计算。
-                    cpp, f_axis, alpha_axis = compute_cpp(
-                        variant_iq[0, 0, :], segment_samples=segment_samples,
-                        segment_hop_samples=segment_hop_samples, fam_merge=fam_merge,
-                        f_bins=f_bins, alpha_bins=alpha_bins, device=device,
-                        pair_chunk_size=pair_chunk_size, fam_nfft=fam_nfft, fam_hop=fam_hop,
-                    )
-                    # 归一化后保留 (1, H, W) 的单通道 CPP，沿用计算返回的坐标轴。
-                    cpp_sample = normalize_log_zscore(cpp).detach().cpu().numpy()
-                    save_path = build_raw_sample_png_path(
-                        save_root, filename=filename, sample_idx=sample_idx,
-                        rf_channel=rf_channel, snr_db=snr_db,
-                    )
-                    plot_single_channel_cpp(
-                        cpp_sample, f_axis, alpha_axis, save_path, sample_idx=sample_idx,
-                        signal_code=signal_code, rf_channel=rf_channel, label=label, snr_db=snr_db,
-                    )
+                        # 归一化后保留 (1, H, W) 的单通道 CPP，沿用计算返回的坐标轴。
+                        cpp_sample = normalize_log_zscore(cpp).detach().cpu().numpy()
+                        save_path = build_raw_sample_png_path(
+                            save_root, filename=filename, sample_idx=sample_idx,
+                            rf_channel=rf_channel, snr_db=snr_db,
+                        )
+                        if plotter is None:
+                            plotter = CppSamplePlotter(f_axis, alpha_axis)
+                        condition = "Clean" if snr_db is None else f"SNR {snr_db:g} dB"
+                        title = f"{signal_code} / RF{rf_channel} CPP — Sample {sample_idx} — {condition} (label={label})"
+                        plotter.save(cpp_sample, save_path, title=title)
+    finally:
+        if plotter is not None:
+            plotter.close()
     logger.info("Done: %s -> %d samples x %d conditions", filename, total_samples, len(conditions))
     return total_samples
 

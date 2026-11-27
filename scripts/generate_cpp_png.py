@@ -20,7 +20,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 import h5py
-import numpy as np
 import tqdm
 
 from src.data.drone_rfa_io import EXCLUDED_CLASS_CODES
@@ -32,24 +31,8 @@ from src.utils.h5topng import (
     validate_h5_samples,
 )
 from src.utils.logger import logger
-from src.utils.plot import plot_cpp_sample
+from src.utils.plot import CppSamplePlotter
 from src.utils.samples import limited_samples
-
-
-def plot_single_channel_cpp(
-    cpp_sample: np.ndarray,
-    f_axis: np.ndarray,
-    alpha_axis: np.ndarray,
-    save_path: str,
-    sample_idx: int,
-    rf_channel: int,
-    label: int | None = None,
-) -> None:
-    """将形状为 (1, H, W) 的归一化 CPP/FAM 保存为单通道特征图。"""
-    title = f"RF{rf_channel} CPP - Sample {sample_idx}"
-    if label is not None:
-        title += f" (label={label})"
-    plot_cpp_sample(cpp_sample, f_axis, alpha_axis, save_path, title=title)
 
 
 def process_one_h5(
@@ -73,16 +56,18 @@ def process_one_h5(
         rf_channels = h5f["rf_channel"]
         num_samples = limited_samples(cpp.shape[0], max_samples_per_file)
 
-        for i in tqdm.tqdm(range(num_samples), total=num_samples, desc=f"  {h5_name}"):
-            rf_channel = int(rf_channels[i])
-            save_path = build_sample_png_path(save_root, drone_code, name_no_extension, i, rf_channel)
-            # 逐行读取放在 try 外，读取错误向外传播，仅绘图失败时继续。
-            cpp_slice = cpp[i]
-            label = int(labels[i])
-            try:
-                plot_single_channel_cpp(cpp_slice, f_axis, alpha_axis, save_path, i, rf_channel, label)
-            except Exception as e:
-                logger.error("Sample %d: %s", i, e)
+        with CppSamplePlotter(f_axis, alpha_axis) as plotter:
+            for i in tqdm.tqdm(range(num_samples), total=num_samples, desc=f"  {h5_name}"):
+                rf_channel = int(rf_channels[i])
+                save_path = build_sample_png_path(save_root, drone_code, name_no_extension, i, rf_channel)
+                # 逐行读取放在 try 外，读取错误向外传播，仅绘图失败时继续。
+                cpp_slice = cpp[i]
+                label = int(labels[i])
+                try:
+                    title = f"RF{rf_channel} CPP - Sample {i} (label={label})"
+                    plotter.save(cpp_slice, save_path, title=title)
+                except Exception as e:
+                    logger.error("Sample %d: %s", i, e)
 
     logger.info("Done: %s", h5_name)
 

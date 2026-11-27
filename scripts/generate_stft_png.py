@@ -20,7 +20,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 import h5py
-import numpy as np
 import tqdm
 
 from src.data.drone_rfa_io import EXCLUDED_CLASS_CODES
@@ -32,42 +31,11 @@ from src.utils.h5topng import (
     validate_h5_samples,
 )
 from src.utils.logger import logger
-from src.utils.plot import plot_stft_sample, stft_plot_axes
+from src.utils.plot import StftSamplePlotter, stft_plot_axes
 from src.utils.samples import limited_samples
 
 FS = 100e6
 SAMPLE_LENGTH = 10_000_000
-
-
-def plot_single_channel(
-    stft_sample: np.ndarray,
-    save_path: str,
-    sample_idx: int,
-    rf_channel: int,
-    label: int | None = None,
-    *,
-    sample_length: int = SAMPLE_LENGTH,
-    n_fft: int = 2048,
-    hop_length: int = 1024,
-    source_time_bins: int | None = None,
-) -> None:
-    """将形状为 (1, H, W) 的 z-score STFT 保存为单通道频谱图。"""
-    # 从原始网格生成显示坐标；非整除时近似插值，单位换算由绘图工具完成。
-    n_freqs, n_times = stft_sample.shape[1], stft_sample.shape[2]
-    source_time_bins = source_time_bins or sample_length // hop_length + 1
-    freqs, times = stft_plot_axes(
-        sample_rate=FS,
-        n_fft=n_fft,
-        hop_length=hop_length,
-        source_time_bins=source_time_bins,
-        output_freq_bins=n_freqs,
-        output_time_bins=n_times,
-    )
-
-    title = f"RF{rf_channel} — Sample {sample_idx}"
-    if label is not None:
-        title += f" (label={label})"
-    plot_stft_sample(stft_sample, freqs, times, save_path, title=title)
 
 
 def process_one_h5(
@@ -87,27 +55,33 @@ def process_one_h5(
         stft = h5f["stft"]
         labels = h5f["labels"]
         rf_channels = h5f["rf_channel"]
-        # 缺省属性沿用预计算默认值；时间帧数缺省时由绘图函数推导。
-        stft_metadata: dict[str, int | None] = {
-            "sample_length": int(h5f.attrs.get("sample_length", SAMPLE_LENGTH)),
-            "n_fft": int(h5f.attrs.get("n_fft", 2048)),
-            "hop_length": int(h5f.attrs.get("hop_length", 1024)),
-            "source_time_bins": int(h5f.attrs.get("source_time_bins", 0)) or None,
-        }
+        # 缺省属性沿用预计算默认值；同一文件内坐标轴固定，循环外只计算一次。
+        sample_length = int(h5f.attrs.get("sample_length", SAMPLE_LENGTH))
+        n_fft = int(h5f.attrs.get("n_fft", 2048))
+        hop_length = int(h5f.attrs.get("hop_length", 1024))
+        source_time_bins = int(h5f.attrs.get("source_time_bins", 0)) or (sample_length // hop_length + 1)
+        freqs, times = stft_plot_axes(
+            sample_rate=FS,
+            n_fft=n_fft,
+            hop_length=hop_length,
+            source_time_bins=source_time_bins,
+            output_freq_bins=stft.shape[2],
+            output_time_bins=stft.shape[3],
+        )
         num_samples = limited_samples(stft.shape[0], max_samples_per_file)
 
-        for i in tqdm.tqdm(range(num_samples), total=num_samples, desc=f"  {h5_name}"):
-            rf_channel = int(rf_channels[i])
-            save_path = build_sample_png_path(save_root, drone_code, name_no_extension, i, rf_channel)
-            # 逐行读取放在 try 外，读取错误向外传播，仅绘图失败时继续。
-            stft_slice = stft[i]
-            label = int(labels[i])
-            try:
-                plot_single_channel(
-                    stft_slice, save_path, i, rf_channel, label, **stft_metadata
-                )
-            except Exception as e:
-                logger.error("Sample %d: %s", i, e)
+        with StftSamplePlotter(freqs, times) as plotter:
+            for i in tqdm.tqdm(range(num_samples), total=num_samples, desc=f"  {h5_name}"):
+                rf_channel = int(rf_channels[i])
+                save_path = build_sample_png_path(save_root, drone_code, name_no_extension, i, rf_channel)
+                # 逐行读取放在 try 外，读取错误向外传播，仅绘图失败时继续。
+                stft_slice = stft[i]
+                label = int(labels[i])
+                try:
+                    title = f"RF{rf_channel} — Sample {i} (label={label})"
+                    plotter.save(stft_slice, save_path, title=title)
+                except Exception as e:
+                    logger.error("Sample %d: %s", i, e)
 
     logger.info("Done: %s", h5_name)
 

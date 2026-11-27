@@ -23,7 +23,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 import h5py
-import numpy as np
 import torch
 from tqdm import tqdm
 
@@ -41,7 +40,7 @@ from src.utils.cli import log_current_command
 from src.utils.device import default_device
 from src.utils.logger import logger
 from src.utils.paths import build_raw_sample_png_path, default_raw_data_dir
-from src.utils.plot import plot_stft_sample, stft_plot_axes
+from src.utils.plot import StftSamplePlotter, stft_plot_axes
 
 FS = 100e6
 SAMPLE_LENGTH = 10_000_000
@@ -50,26 +49,6 @@ WIN_LENGTH = 2048
 HOP_LENGTH = 1024
 OUTPUT_FREQ_BINS = 1024
 OUTPUT_TIME_BINS = 1024
-
-
-def plot_single_channel(
-    stft_sample: np.ndarray,
-    save_path: Path,
-    *,
-    sample_idx: int,
-    signal_code: str,
-    rf_channel: int,
-    label: int,
-    snr_db: float | None,
-    freqs: np.ndarray,
-    times: np.ndarray,
-) -> None:
-    """构造样本及加噪条件标题，使用共享工具保存 z-score STFT。"""
-
-    condition = "Clean" if snr_db is None else f"SNR {snr_db:g} dB"
-    title = f"{signal_code} / RF{rf_channel} — Sample {sample_idx} — {condition} (label={label})"
-    plot_stft_sample(stft_sample, freqs, times, save_path, title=title)
-    logger.debug("Saved sample %d to %s", sample_idx, save_path)
 
 
 def process_one_mat(
@@ -108,8 +87,8 @@ def process_one_mat(
 
     logger.info("Processing: %s (%s -> %s)", filename, signal_code, rf_channels)
     total_samples = 0
-    # 句柄覆盖整文件的所有通道和条件，异常退出也会关闭。
-    with h5py.File(mat_path, "r") as src:
+    # 句柄与复用画布覆盖整文件的所有通道和条件，异常退出也会关闭。
+    with h5py.File(mat_path, "r") as src, StftSamplePlotter(freqs, times) as plotter:
         for rf_channel in rf_channels:
             # 样本上限分别作用于每个所选通道。
             num_samples = count_iq_samples(
@@ -150,11 +129,10 @@ def process_one_mat(
                             save_root, filename=filename, sample_idx=sample_idx,
                             rf_channel=rf_channel, snr_db=snr_db,
                         )
-                        plot_single_channel(
-                            stft_sample, save_path, sample_idx=sample_idx,
-                            signal_code=signal_code, rf_channel=rf_channel, label=label,
-                            snr_db=snr_db, freqs=freqs, times=times,
-                        )
+                        condition = "Clean" if snr_db is None else f"SNR {snr_db:g} dB"
+                        title = f"{signal_code} / RF{rf_channel} — Sample {sample_idx} — {condition} (label={label})"
+                        plotter.save(stft_sample, save_path, title=title)
+                        logger.debug("Saved sample %d to %s", sample_idx, save_path)
     logger.info("Done: %s -> %d samples x %d conditions", filename, total_samples, len(conditions))
     return total_samples
 

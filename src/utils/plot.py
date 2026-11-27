@@ -1,9 +1,6 @@
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
-
-from src.utils.logger import logger
 
 
 def pooled_axis(values: np.ndarray, output_bins: int) -> np.ndarray:
@@ -55,197 +52,291 @@ def import_pyplot(show: bool):
     return plt
 
 
-def plot_stft_sample(
-    stft_sample: np.ndarray,
-    freqs: np.ndarray,
-    times: np.ndarray,
-    save_path: str | Path,
-    *,
-    title: str,
-) -> None:
-    """保存单通道 z-score STFT，形状为 (1, H, W)，不再做归一化。
-
-    freqs、times 的长度分别为 H、W，单位为 Hz、秒，显示时换算为 MHz、ms。
-    标题由调用方提供；自动创建输出目录，绘图或保存异常向调用方传播。
-    """
-    plt = import_pyplot(False)
-    fig, ax = plt.subplots(1, 1, figsize=(14, 5), constrained_layout=True)
-    image = ax.pcolormesh(
-        freqs / 1e6, times * 1e3, stft_sample[0].T,
-        shading="auto", cmap="jet",
-    )
-    ax.set_title(title, fontsize=12)
-    ax.set_xlabel("Frequency (MHz)", fontsize=10)
-    ax.set_ylabel("Time (ms)", fontsize=10)
-    colorbar = fig.colorbar(image, ax=ax, shrink=0.92)
-    colorbar.set_label("Normalized Power (z-score)", fontsize=9)
-
-    Path(save_path).parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(save_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
+def _uniform_axis_bounds(axis: np.ndarray) -> tuple[float, float]:
+    """计算均匀中心坐标轴的外边界，使 imshow 像素中心与 pcolormesh 对齐。"""
+    start = float(axis[0])
+    end = float(axis[-1])
+    if len(axis) <= 1:
+        return start - 0.5, end + 0.5
+    half_step = (end - start) / (2 * (len(axis) - 1))
+    return start - half_step, end + half_step
 
 
-def plot_cpp_sample(
-    cpp_sample: np.ndarray,
-    f_axis: np.ndarray,
-    alpha_axis: np.ndarray,
-    save_path: str | Path,
-    *,
-    title: str,
-) -> None:
-    """保存形状为 (1, H, W) 的归一化 CPP/FAM，不再做归一化。
-
-    f_axis、alpha_axis 的长度分别为 W、H，单位均为 cycles/sample。
-    标题由调用方提供；自动创建输出目录，绘图或保存异常向调用方传播。
-    """
-    plt = import_pyplot(False)
-    fig, ax = plt.subplots(1, 1, figsize=(12, 5), constrained_layout=True)
-    image = ax.imshow(
-        cpp_sample[0],
-        origin="lower",
-        aspect="auto",
-        extent=[f_axis[0], f_axis[-1], alpha_axis[0], alpha_axis[-1]],
-        cmap="jet",
-    )
-    ax.set_title(title, fontsize=12)
-    ax.set_xlabel("f (cycles/sample)", fontsize=10)
-    ax.set_ylabel("alpha (cycles/sample)", fontsize=10)
-    colorbar = fig.colorbar(image, ax=ax, shrink=0.92)
-    colorbar.set_label("normalized |SCF|", fontsize=9)
-
-    Path(save_path).parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(save_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
+def _slice_iq(sig_iq: np.ndarray, sample_start: int, sample_limit: int) -> np.ndarray:
+    """将复数 IQ 展平并切片，要求起点非负、长度上限为正且切片非空。"""
+    if sample_start < 0 or sample_limit <= 0:
+        raise ValueError(
+            f"Invalid IQ slice range: sample_start={sample_start}, sample_limit={sample_limit}"
+        )
+    # reshape(-1) 在数组连续时返回视图，避免对长 IQ 信号做全量拷贝。
+    sig = np.asarray(sig_iq).reshape(-1)[sample_start : sample_start + sample_limit]
+    if sig.size == 0:
+        raise ValueError(
+            f"Empty IQ slice for sample_start={sample_start}, sample_limit={sample_limit}"
+        )
+    return sig
 
 
-def plot_iq_time_domain(
-    sig_iq: np.ndarray,
-    sample_start: int = 0,
-    sample_limit: int = 1000000,
-    *,
-    show: bool = True,
-    save_path: str | Path | None = None,
-):
-    """
-    输入：复数信号 sig_iq = I + 1j*Q
-    输出：3 张子图(I路, Q路, abs)
-    """
+class _ReusableFigurePlotter:
+    """复用单个 Matplotlib Figure 批量保存 PNG 的公共生命周期基类。"""
 
-    plt = import_pyplot(show)
+    def __init__(self, *, dpi: int = 150) -> None:
+        self._plt = import_pyplot(False)
+        self._dpi = dpi
+        self._created_dirs: set[Path] = set()
+        self._closed = False
+        self._fig = None
 
-    logger.debug("plot waveform in time domain")
-    sample_end = sample_start + sample_limit
-    sig = sig_iq.flatten()[sample_start:sample_end]
+    def _ensure_open(self) -> None:
+        if self._closed:
+            raise RuntimeError(f"{type(self).__name__} is already closed")
 
-    sig_i = np.real(sig)
-    sig_q = np.imag(sig)
-    sig_abs = np.abs(sig)
+    def _save_figure(self, save_path: str | Path) -> None:
+        parent = Path(save_path).parent
+        if parent not in self._created_dirs:
+            parent.mkdir(parents=True, exist_ok=True)
+            self._created_dirs.add(parent)
+        # compress_level=1 为无损快速 PNG 压缩，显著降低批量写盘编码耗时。
+        self._fig.savefig(save_path, dpi=self._dpi, pil_kwargs={"compress_level": 1})
 
-    fig, axes = plt.subplots(3, 1, figsize=(14, 10))
-    axes[0].plot(sig_i, linewidth=0.6, color="#1f77b4")
-    axes[0].set_title("I(real)", fontsize=14)
-    axes[0].set_ylabel("Amplitude", fontsize=12)
-    axes[0].grid(alpha=0.3)
+    def close(self) -> None:
+        """关闭复用的 Figure，释放绘图资源。"""
+        if not self._closed:
+            if self._fig is not None:
+                self._plt.close(self._fig)
+            self._closed = True
 
-    axes[1].plot(sig_q, linewidth=0.6, color="#ff7f0e")
-    axes[1].set_title("Q(imag)", fontsize=14)
-    axes[1].set_ylabel("Amplitude", fontsize=12)
-    axes[1].grid(alpha=0.3)
+    def __enter__(self):
+        return self
 
-    axes[2].plot(sig_abs, linewidth=0.6, color="#d62728")
-    axes[2].set_title("abs(I+jQ)", fontsize=14)
-    axes[2].set_ylabel("Amplitude", fontsize=12)
-    axes[2].set_xlabel("Sample Index", fontsize=12)
-    axes[2].grid(alpha=0.3)
-
-    fig.tight_layout()
-    if save_path is not None:
-        fig.savefig(save_path, dpi=300, bbox_inches="tight")
-        logger.info("Saved time-domain plot to '%s'", save_path)
-    if show:
-        plt.show()
-    plt.close(fig)
-    return fig
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.close()
 
 
-def plot_iq_frequency_domain(
-    sig_iq: np.ndarray,
-    sample_start: int = 0,
-    sample_limit: int = 1000000,
-    *,
-    show: bool = True,
-    save_path: str | Path | None = None,
-):
-    """
-    输入：复数信号 sig_iq = I + 1j*Q
-    输出：1 张子图(FFT abs)
+class _SingleChannelImagePlotter(_ReusableFigurePlotter):
+    """复用单个画布批量保存单通道二维特征图，避免重复建图与双重布局渲染。"""
+
+    def __init__(
+        self,
+        *,
+        figsize: tuple[float, float],
+        extent: list[float],
+        xlabel: str,
+        ylabel: str,
+        colorbar_label: str,
+        dpi: int = 150,
+        transpose: bool = False,
+        margins: tuple[float, float, float, float] = (0.07, 0.96, 0.92, 0.12),
+    ) -> None:
+        super().__init__(dpi=dpi)
+        self._transpose = transpose
+
+        left, right, top, bottom = margins
+        # 用固定边距替代 constrained_layout 与 bbox_inches="tight"，避免每帧双重布局渲染。
+        self._fig, self._ax = self._plt.subplots(1, 1, figsize=figsize)
+        self._fig.subplots_adjust(left=left, right=right, top=top, bottom=bottom)
+        self._image = self._ax.imshow(
+            np.zeros((2, 2), dtype=np.float32),
+            origin="lower",
+            aspect="auto",
+            extent=extent,
+            cmap="jet",
+        )
+        self._title = self._ax.set_title("", fontsize=12)
+        self._ax.set_xlabel(xlabel, fontsize=10)
+        self._ax.set_ylabel(ylabel, fontsize=10)
+        self._colorbar = self._fig.colorbar(self._image, ax=self._ax, shrink=0.92, pad=0.02)
+        self._colorbar.set_label(colorbar_label, fontsize=9)
+
+    def save(
+        self,
+        sample: np.ndarray,
+        save_path: str | Path,
+        *,
+        title: str,
+    ) -> None:
+        """更新数据、色阶与标题后保存 PNG；异常向调用方传播。"""
+        self._ensure_open()
+
+        data = sample[0].T if self._transpose else sample[0]
+        self._image.set_data(data)
+        # 每张图独立自适应色阶并同步刷新 colorbar 刻度，保持与单次绘图一致。
+        self._image.autoscale()
+        self._title.set_text(title)
+        self._save_figure(save_path)
+
+
+class StftSamplePlotter(_SingleChannelImagePlotter):
+    """复用单个画布批量保存 z-score STFT 频谱图。
+
+    freqs、times 须为均匀网格，单位分别为 Hz、秒，显示时换算为 MHz、ms；
+    输入样本形状为 (1, H, W)，不再做归一化。推荐配合 with 语句使用。
     """
 
-    plt = import_pyplot(show)
-
-    logger.info("plot spectrum in frequency domain")
-    sample_end = sample_start + sample_limit
-    sig = sig_iq.flatten()[sample_start:sample_end]
-    n = len(sig)
-    fft_sig = np.fft.fft(sig)
-    fft_sig = np.fft.fftshift(fft_sig)
-    freq = np.fft.fftshift(np.fft.fftfreq(n, 1.0))
-
-    mag = 20 * np.log10(np.abs(fft_sig) + 1e-10)
-
-    fig, ax = plt.subplots(figsize=(12, 5))
-    ax.plot(freq, mag, linewidth=0.7, color="#9400d3")
-    ax.set_title("I/Q frequency domain (FFT spectrum)")
-    ax.set_xlabel("Normalized frequency")
-    ax.set_ylabel("dB")
-    ax.grid(alpha=0.3)
-    fig.tight_layout()
-    if save_path is not None:
-        fig.savefig(save_path, dpi=300, bbox_inches="tight")
-        logger.info("Saved frequency-domain plot to '%s'", save_path)
-    if show:
-        plt.show()
-    plt.close(fig)
-    return fig
+    def __init__(
+        self,
+        freqs: np.ndarray,
+        times: np.ndarray,
+        *,
+        dpi: int = 150,
+    ) -> None:
+        x0, x1 = _uniform_axis_bounds(freqs / 1e6)
+        y0, y1 = _uniform_axis_bounds(times * 1e3)
+        super().__init__(
+            figsize=(14, 5),
+            extent=[x0, x1, y0, y1],
+            xlabel="Frequency (MHz)",
+            ylabel="Time (ms)",
+            colorbar_label="Normalized Power (z-score)",
+            dpi=dpi,
+            transpose=True,
+            margins=(0.06, 0.96, 0.92, 0.12),
+        )
 
 
-def plot_stft(
-    freqs: np.ndarray,
-    times: np.ndarray,
-    time_freq_matrix_dB: np.ndarray,
-    vmin: Optional[float] = None,
-    vmax: Optional[float] = None,
-    *,
-    show: bool = True,
-    save_path: Optional[str] = None,
-):
-    """
-    绘制时频矩阵（频谱图）。
+class CppSamplePlotter(_SingleChannelImagePlotter):
+    """复用单个画布批量保存归一化 CPP/FAM 特征图，减少重复建图与布局开销。
+
+    构造时固定 f_axis 与 alpha_axis（单位均为 cycles/sample）；
+    输入样本形状为 (1, H, W)，不再做归一化。推荐配合 with 语句使用。
     """
 
-    plt = import_pyplot(show)
+    def __init__(
+        self,
+        f_axis: np.ndarray,
+        alpha_axis: np.ndarray,
+        *,
+        dpi: int = 150,
+    ) -> None:
+        super().__init__(
+            figsize=(12, 5),
+            extent=[float(f_axis[0]), float(f_axis[-1]), float(alpha_axis[0]), float(alpha_axis[-1])],
+            xlabel="f (cycles/sample)",
+            ylabel="alpha (cycles/sample)",
+            colorbar_label="normalized |SCF|",
+            dpi=dpi,
+            transpose=False,
+        )
 
-    title = "stft (STFT)"
-    fig, ax = plt.subplots(figsize=(14, 6))
-    mesh = ax.pcolormesh(
-        freqs / 1e6,
-        times,
-        time_freq_matrix_dB,
-        shading="auto",
-        cmap="jet",
-        vmin=vmin,
-        vmax=vmax,
-    )
-    ax.set_title(title, fontsize=14)
-    ax.set_xlabel("Frequency (MHz)", fontsize=12)
-    ax.set_ylabel("Time (s)", fontsize=12)
-    cbar = fig.colorbar(mesh, ax=ax)
-    cbar.set_label("Power/Frequency (dB/Hz)", fontsize=11)
-    fig.tight_layout()
-    if save_path:
-        fig.savefig(save_path, dpi=300, bbox_inches="tight")
-        logger.info("Saved stft to '%s'", save_path)
-    if show:
-        plt.show()
-    plt.close(fig)
-    return fig
+
+class IqTimeDomainPlotter(_ReusableFigurePlotter):
+    """复用单个画布批量保存复数 IQ 信号的时域三联图（I 路、Q 路、幅值）。
+
+    输入为复数信号 sig_iq = I + 1j*Q，固定使用无界面 Agg 后端；推荐配合 with 语句使用。
+    """
+
+    def __init__(
+        self,
+        *,
+        dpi: int = 150,
+        sample_start: int = 0,
+        sample_limit: int = 1_000_000,
+    ) -> None:
+        super().__init__(dpi=dpi)
+        self._sample_start = sample_start
+        self._sample_limit = sample_limit
+        self._cached_x: np.ndarray | None = None
+
+        self._fig, self._axes = self._plt.subplots(3, 1, figsize=(14, 10))
+        self._fig.subplots_adjust(left=0.07, right=0.98, top=0.92, bottom=0.06, hspace=0.32)
+        self._suptitle = self._fig.suptitle("", fontsize=14, y=0.975)
+
+        specs = (
+            ("I(real)", "#1f77b4", None),
+            ("Q(imag)", "#ff7f0e", None),
+            ("abs(I+jQ)", "#d62728", "Sample Index"),
+        )
+        self._lines = []
+        for ax, (subtitle, color, xlabel) in zip(self._axes, specs):
+            (line,) = ax.plot([], [], linewidth=0.6, color=color)
+            ax.set_title(subtitle, fontsize=14)
+            ax.set_ylabel("Amplitude", fontsize=12)
+            if xlabel is not None:
+                ax.set_xlabel(xlabel, fontsize=12)
+            ax.grid(alpha=0.3)
+            self._lines.append(line)
+
+    def save(
+        self,
+        sig_iq: np.ndarray,
+        save_path: str | Path,
+        *,
+        title: str = "",
+        sample_start: int | None = None,
+        sample_limit: int | None = None,
+    ) -> None:
+        """切片复数 IQ 信号并更新三联时域图后保存 PNG；异常向调用方传播。"""
+        self._ensure_open()
+
+        start = self._sample_start if sample_start is None else sample_start
+        limit = self._sample_limit if sample_limit is None else sample_limit
+        sig = _slice_iq(sig_iq, start, limit)
+        n = sig.size
+        if self._cached_x is None or self._cached_x.size != n:
+            self._cached_x = np.arange(n)
+
+        series = (np.real(sig), np.imag(sig), np.abs(sig))
+        for ax, line, values in zip(self._axes, self._lines, series):
+            line.set_data(self._cached_x, values)
+            ax.relim()
+            ax.autoscale_view()
+
+        self._suptitle.set_text(title)
+        self._save_figure(save_path)
+
+
+class IqFrequencyDomainPlotter(_ReusableFigurePlotter):
+    """复用单个画布批量保存复数 IQ 信号的 FFT 频谱图。
+
+    输入为复数信号 sig_iq = I + 1j*Q，固定使用无界面 Agg 后端；推荐配合 with 语句使用。
+    """
+
+    DEFAULT_TITLE = "I/Q frequency domain (FFT spectrum)"
+
+    def __init__(
+        self,
+        *,
+        dpi: int = 150,
+        sample_start: int = 0,
+        sample_limit: int = 1_000_000,
+    ) -> None:
+        super().__init__(dpi=dpi)
+        self._sample_start = sample_start
+        self._sample_limit = sample_limit
+        self._cached_freq: np.ndarray | None = None
+
+        self._fig, self._ax = self._plt.subplots(1, 1, figsize=(12, 5))
+        self._fig.subplots_adjust(left=0.08, right=0.98, top=0.91, bottom=0.12)
+        (self._line,) = self._ax.plot([], [], linewidth=0.7, color="#9400d3")
+        self._title = self._ax.set_title(self.DEFAULT_TITLE, fontsize=12)
+        self._ax.set_xlabel("Normalized frequency", fontsize=10)
+        self._ax.set_ylabel("dB", fontsize=10)
+        self._ax.grid(alpha=0.3)
+
+    def save(
+        self,
+        sig_iq: np.ndarray,
+        save_path: str | Path,
+        *,
+        title: str | None = None,
+        sample_start: int | None = None,
+        sample_limit: int | None = None,
+    ) -> None:
+        """切片复数 IQ 信号，计算 FFT 幅度谱（dB）并保存 PNG；异常向调用方传播。"""
+        self._ensure_open()
+
+        start = self._sample_start if sample_start is None else sample_start
+        limit = self._sample_limit if sample_limit is None else sample_limit
+        sig = _slice_iq(sig_iq, start, limit)
+        n = sig.size
+        if self._cached_freq is None or self._cached_freq.size != n:
+            self._cached_freq = np.fft.fftshift(np.fft.fftfreq(n, 1.0))
+
+        fft_sig = np.fft.fftshift(np.fft.fft(sig))
+        mag = 20.0 * np.log10(np.abs(fft_sig) + 1e-10)
+
+        self._line.set_data(self._cached_freq, mag)
+        self._ax.relim()
+        self._ax.autoscale_view()
+        self._title.set_text(self.DEFAULT_TITLE if title is None else title)
+        self._save_figure(save_path)
