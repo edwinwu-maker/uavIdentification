@@ -57,15 +57,13 @@ python <script-or-command>
 ├── src/
 │   ├── data/
 │   │   ├── drone_rfa_io.py           # DroneRFa 原始 .mat 数据读取工具
-│   │   ├── h5_dataset.py             # STFT/CPP .h5 数据集通用加载基类
+│   │   ├── h5_dataset.py             # STFT/CPP .h5 数据集通用加载基类与 STFT/CPP 数据集类
 │   │   ├── splits.py                 # 数据集划分工具
-│   │   ├── stft_dataset.py           # 按样本索引懒加载 STFT .h5 数据
 │   │   ├── stft_clustering.py        # clean STFT 聚类索引与模型输入预处理
 │   │   ├── deepcluster_export.py     # DeepCluster 人工审核、盲审评估与导出
 │   │   ├── deepcluster_review.py     # 样本指纹与复核材料
 │   │   ├── deepcluster_constants.py  # 审核、导出与可视化共享常量
-│   │   ├── deepcluster_visualization.py # DeepCluster t-SNE 与处置图
-│   │   └── cpp_dataset.py            # 按样本索引懒加载 CPP/FAM .h5 数据
+│   │   └── deepcluster_visualization.py # DeepCluster t-SNE 与处置图
 │   ├── evaluation/
 │   │   └── snr_accuracy.py           # 不同 SNR 条件下的准确率评估工具
 │   ├── models/

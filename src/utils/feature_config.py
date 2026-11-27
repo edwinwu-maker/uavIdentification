@@ -6,8 +6,7 @@ from typing import Type
 
 from torch.utils.data import Dataset
 
-from src.data.cpp_dataset import CppDataset
-from src.data.stft_dataset import StftDataset
+from src.data.h5_dataset import CppDataset, StftDataset
 from src.utils.paths import default_raw_data_dir
 
 

@@ -105,3 +105,17 @@ class H5FeatureDataset(Dataset):
         for f in self.files.values():
             f.close()
         self.files.clear()
+
+
+class StftDataset(H5FeatureDataset):
+    """加载预计算 STFT .h5 特征目录，样本数据集键固定为 /stft。"""
+
+    def __init__(self, h5_dir: str) -> None:
+        super().__init__(h5_dir, feature_key="stft", dataset_name="Stft")
+
+
+class CppDataset(H5FeatureDataset):
+    """加载预计算 CPP/FAM .h5 特征目录，样本数据集键固定为 /cpp。"""
+
+    def __init__(self, h5_dir: str) -> None:
+        super().__init__(h5_dir, feature_key="cpp", dataset_name="CPP")
