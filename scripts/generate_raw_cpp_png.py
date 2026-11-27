@@ -35,12 +35,14 @@ from src.data.drone_rfa_io import (
     signal_code_from_filename,
 )
 from src.preprocess.cpp import (
+    DEFAULT_DYNAMIC_RANGE_DB,
     DEFAULT_SEGMENT_SAMPLES,
     SUPPORTED_FAM_MERGE_MODES,
+    build_principal_domain_mask,
     compute_cpp,
 )
 from src.preprocess.random_snr_awgn import add_random_snr_awgn_with_snr
-from src.preprocess.normalization import normalize_log_zscore
+from src.preprocess.normalization import normalize_zscore
 from src.utils.cli import log_current_command
 from src.utils.device import default_device
 from src.utils.logger import logger
@@ -66,6 +68,7 @@ def process_one_mat(
     fam_merge: str,
     fam_nfft: int,
     fam_hop: int,
+    dynamic_range_db: float = DEFAULT_DYNAMIC_RANGE_DB,
     f_bins: int,
     alpha_bins: int,
     device: str,
@@ -120,15 +123,28 @@ def process_one_mat(
                                 start_idx=sample_idx, snr_min=snr_db, snr_max=snr_db,
                                 noise_seed=noise_seed, device=device,
                             )
-                        # 单样本 IQ (1, 1, L) 取为一维信号，供分段 FAM 计算。
+                        # 单样本 IQ (1, 1, L) 取为一维信号，供分段 FAM 计算与 dB 压缩。
                         cpp, f_axis, alpha_axis = compute_cpp(
                             variant_iq[0, 0, :], segment_samples=segment_samples,
                             segment_hop_samples=segment_hop_samples, fam_merge=fam_merge,
                             f_bins=f_bins, alpha_bins=alpha_bins, device=device,
                             pair_chunk_size=pair_chunk_size, fam_nfft=fam_nfft, fam_hop=fam_hop,
+                            dynamic_range_db=dynamic_range_db,
                         )
-                        # 归一化后保留 (1, H, W) 的单通道 CPP，沿用计算返回的坐标轴。
-                        cpp_sample = normalize_log_zscore(cpp).detach().cpu().numpy()
+                        valid_mask = (
+                            build_principal_domain_mask(
+                                f_axis, alpha_axis, device=cpp.device
+                            )
+                            if f_axis is not None and alpha_axis is not None
+                            else None
+                        )
+                        # 主定义域内 z-score 标准化后保留 (1, H, W) 的单通道 CPP，沿用计算返回的坐标轴。
+                        cpp_sample = (
+                            normalize_zscore(cpp, valid_mask=valid_mask)
+                            .detach()
+                            .cpu()
+                            .numpy()
+                        )
                         save_path = build_raw_sample_png_path(
                             save_root, filename=filename, sample_idx=sample_idx,
                             rf_channel=rf_channel, snr_db=snr_db,
@@ -171,6 +187,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help="FAM FFT size")
     parser.add_argument("--fam-hop", type=int, default=FAM_HOP,
                         help="FAM hop size")
+    parser.add_argument("--dynamic-range-db", type=float, default=DEFAULT_DYNAMIC_RANGE_DB,
+                        help="Relative peak dB dynamic range for CPP amplitude compression")
     parser.add_argument("--f-bins", type=int, default=F_BINS,
                         help="Number of frequency bins in the CPP grid")
     parser.add_argument("--alpha-bins", type=int, default=ALPHA_BINS,
@@ -185,7 +203,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help="Process at most this many samples from each .mat file")
     parser.add_argument("--noise-seed", type=int, default=42,
                         help="Seed for deterministic AWGN")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.dynamic_range_db <= 0:
+        parser.error("--dynamic-range-db must be positive")
+    return args
 
 
 def main() -> None:
@@ -229,6 +250,7 @@ def main() -> None:
             fam_merge=args.fam_merge,
             fam_nfft=args.fam_nfft,
             fam_hop=args.fam_hop,
+            dynamic_range_db=args.dynamic_range_db,
             f_bins=args.f_bins,
             alpha_bins=args.alpha_bins,
             device=device,

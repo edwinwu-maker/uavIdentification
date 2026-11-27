@@ -31,13 +31,15 @@ from tqdm import tqdm
 
 from src.data.drone_rfa_io import count_iq_samples, parse_label, read_iq_samples, rf_channels_from_filename
 from src.preprocess.cpp import (
-    compute_cpp,
+    DEFAULT_DYNAMIC_RANGE_DB,
     DEFAULT_SEGMENT_SAMPLES,
     SUPPORTED_FAM_MERGE_MODES,
+    build_principal_domain_mask,
+    compute_cpp,
 )
 from src.preprocess.h5_precompute import run_precompute_batch
 from src.preprocess.random_snr_awgn import add_random_snr_awgn_with_snr
-from src.preprocess.normalization import normalize_log_zscore
+from src.preprocess.normalization import normalize_zscore
 from src.utils.cli import log_current_command
 from src.utils.device import default_device
 from src.utils.files import get_filename_with_suffix
@@ -72,6 +74,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help="FAM FFT size")
     parser.add_argument("--fam-hop", type=int, default=256,
                         help="FAM hop size")
+    parser.add_argument("--dynamic-range-db", type=float, default=DEFAULT_DYNAMIC_RANGE_DB,
+                        help="Relative peak dB dynamic range for CPP amplitude compression")
     parser.add_argument("--f-bins", type=int, default=F_BINS,
                         help="Number of frequency bins in the CPP grid")
     parser.add_argument("--alpha-bins", type=int, default=ALPHA_BINS,
@@ -109,6 +113,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     args = parser.parse_args(argv)
 
     # 转换前校验噪声范围与互斥选项，避免无效配置进入文件处理。
+    if args.dynamic_range_db <= 0:
+        parser.error("--dynamic-range-db must be positive")
     if args.snr_min > args.snr_max:
         parser.error("--snr-min must be <= --snr-max")
     if args.snr_low_min >= args.snr_low_max:
@@ -137,6 +143,7 @@ def process_one_mat(
     max_samples_per_file: int | None,
     fam_nfft: int = 256,
     fam_hop: int = 256,
+    dynamic_range_db: float = DEFAULT_DYNAMIC_RANGE_DB,
     noise_profile: str = "random",
     snr_min: float = -5.0,
     snr_max: float = 15.0,
@@ -192,6 +199,8 @@ def process_one_mat(
             h5f.create_dataset("rf_channel", shape=(num_samples,), dtype="i1")
             h5f.create_dataset("augmentation_variant", shape=(num_samples,), dtype="S16")
             h5f.attrs["noise_profile"] = "clean" if noise_profile == "clean" else noise_profile
+            h5f.attrs["dynamic_range_db"] = float(dynamic_range_db)
+            h5f.attrs["normalization"] = "db_principal_zscore"
 
             f_axis = np.linspace(-0.5, 0.5, f_bins, dtype=np.float32)
             alpha_axis = np.linspace(-1.0, 1.0, alpha_bins, dtype=np.float32)
@@ -240,7 +249,7 @@ def process_one_mat(
                             )
                             snr_value = float(sampled_snr[0].item())
 
-                        # 单通道 IQ 转为一维序列，CPP 按样本归一化后再写入 H5。
+                        # 单通道 IQ 转为一维序列，CPP 按样本做 dB 压缩与主定义域 z-score 后写入 H5。
                         signal = variant_iq[0, 0, :]
                         cpp, f_axis, alpha_axis = compute_cpp(
                             signal,
@@ -253,13 +262,24 @@ def process_one_mat(
                             pair_chunk_size=pair_chunk_size,
                             fam_nfft=fam_nfft,
                             fam_hop=fam_hop,
+                            dynamic_range_db=dynamic_range_db,
+                        )
+                        valid_mask = (
+                            build_principal_domain_mask(
+                                f_axis, alpha_axis, device=cpp.device
+                            )
+                            if f_axis is not None and alpha_axis is not None
+                            else None
                         )
                         # 按 RF 通道分组，组内以源样本、增强版本的顺序保存。
                         output_idx = (
                             channel_offset + sample_idx * variants_per_sample + variant_idx
                         )
                         h5f["cpp"][output_idx] = (
-                            normalize_log_zscore(cpp).detach().cpu().numpy()
+                            normalize_zscore(cpp, valid_mask=valid_mask)
+                            .detach()
+                            .cpu()
+                            .numpy()
                         )
                         h5f["labels"][output_idx] = label
                         h5f["is_clean"][output_idx] = is_clean
@@ -307,6 +327,7 @@ def main() -> None:
             "alpha_bins": args.alpha_bins,
             "fam_nfft": args.fam_nfft,
             "fam_hop": args.fam_hop,
+            "dynamic_range_db": args.dynamic_range_db,
             "device": args.device,
             "pair_chunk_size": args.pair_chunk_size,
             "max_samples_per_file": args.max_samples_per_file,

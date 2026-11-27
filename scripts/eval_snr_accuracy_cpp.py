@@ -41,8 +41,12 @@ from src.evaluation.snr_accuracy import (
     save_prediction_diagnostics,
 )
 from src.models import DroneRFaResNet18
-from src.preprocess.cpp import compute_cpp
-from src.preprocess.normalization import normalize_log_zscore
+from src.preprocess.cpp import (
+    DEFAULT_DYNAMIC_RANGE_DB,
+    build_principal_domain_mask,
+    compute_cpp,
+)
+from src.preprocess.normalization import normalize_zscore
 from src.training.model_io import load_model
 from src.utils.cli import log_current_command
 from src.utils.device import default_device
@@ -91,6 +95,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--pair-chunk-size", type=int, default=DEFAULT_PAIR_CHUNK_SIZE)
     parser.add_argument("--fam-nfft", type=int, default=256)
     parser.add_argument("--fam-hop", type=int, default=256)
+    parser.add_argument("--dynamic-range-db", type=float, default=DEFAULT_DYNAMIC_RANGE_DB,
+                        help="Relative peak dB dynamic range for CPP amplitude compression")
     parser.add_argument("--max-samples-per-file", type=int, default=None)
     parser.add_argument("--max-samples", type=int, default=None)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
@@ -103,6 +109,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--exclude-labels", type=int, nargs="*", default=None,
                         help="Original class labels excluded during training")
     args = parser.parse_args(argv)
+    if args.dynamic_range_db <= 0:
+        parser.error("--dynamic-range-db must be positive")
 
     # 仅为默认路径追加类别排除后缀，自定义输出命名保持原样。
     if args.exclude_labels:
@@ -199,9 +207,9 @@ def main() -> None:
                         )[0]
                         noisy_iq = add_awgn_for_snr(iq, snr_db, rng)
                         noisy_iq = torch.as_tensor(noisy_iq, dtype=torch.complex64, device=args.device)
-                        # 单通道 IQ (1, L) 转为 (L,)，计算并归一化 CPP。
+                        # 单通道 IQ (1, L) 转为 (L,)，计算 dB 压缩 CPP 并执行主定义域 z-score。
                         signal = noisy_iq[0]
-                        cpp, _, _ = compute_cpp(
+                        cpp, f_axis, alpha_axis = compute_cpp(
                             signal,
                             segment_samples=args.segment_samples,
                             segment_hop_samples=args.segment_hop_samples,
@@ -212,8 +220,16 @@ def main() -> None:
                             pair_chunk_size=args.pair_chunk_size,
                             fam_nfft=args.fam_nfft,
                             fam_hop=args.fam_hop,
+                            dynamic_range_db=args.dynamic_range_db,
                         )
-                        cpp_batch.append(normalize_log_zscore(cpp))
+                        valid_mask = (
+                            build_principal_domain_mask(
+                                f_axis, alpha_axis, device=cpp.device
+                            )
+                            if f_axis is not None and alpha_axis is not None
+                            else None
+                        )
+                        cpp_batch.append(normalize_zscore(cpp, valid_mask=valid_mask))
                         labels.append(mapping.to_model(record.label))
 
                     # 堆叠为 (B, 1, H, W)，在 inference_mode 下完成分类。
